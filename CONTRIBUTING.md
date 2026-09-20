@@ -1,6 +1,7 @@
 # 参与开发
-
-欢迎针对可复现问题提交 Issue 或 Pull Request。请先运行 `node --test Tests/*.test.cjs`；修改 Swift、附件或消息桥接时，还需在 macOS 运行 `bash test-native.sh` 和 `bash build.sh`。
+首先感谢我的两位同学：@zhyunran,@hs89n5km86-coder为本程序提供了思路，代码，后期优化等建议
+同时，感谢https://github.com/gediz/teams-web-chat-exporter，https://github.com/Maxim-Mazurok/teams-api，https://github.com/microsoftgraph提供了Microsoft TeamsAPI的代码和思路指导
+欢迎针对现有问题提交 Issue 或 Pull Request。请先运行 `node --test Tests/*.test.cjs`；修改 Swift、附件或消息桥接时，还需在 macOS 运行 `bash test-native.sh` 和 `bash build.sh`。
 
 请保留以下约束：
 
@@ -13,4 +14,4 @@
 
 问题报告建议包含：macOS 和浏览器版本、CampusDesk 版本、连接方式、期望/实际行为、已脱敏错误码，以及不依赖真实账号的最小复现。涉及安全或私人信息的问题不要直接公开提交，见 [SECURITY.md](SECURITY.md)。
 
-贡献内容按本项目 MIT 许可提供。请只提交你有权公开授权的内容。
+贡献内容按本项目 MIT 许可提供。请只提交你有权公开授权的内容。建议发送建议至xuanqiwang645@gmail.com
