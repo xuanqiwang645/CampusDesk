@@ -1,7 +1,8 @@
 # CampusDesk
 
-面向 macOS 的本地学习看板，整合希悦课表、ManageBac 课程信息，以及 Teams 消息和 English Corner（EC）附件文字。
+面向使用macOS的国际部学生，整合希悦课表、ManageBac 课程信息，以及 Microsoft Teams 消息。同时针对北京101中学国际部特有的English Corner（EC）活动表格作出特别适配。
 
+此乃超级无敌雷霆v0.4.1版本，由先前发布的0.1.0版本改进而来，经历0.2.0，0.2.1，0.2.2，0.2.3，0.3.0，0.4.0几次开发者和其他同学的深度内部测试及改进。已能有较好的使用体验。可谓是重磅更新！！！
 A local-first macOS study dashboard. An independent, unofficial project; not affiliated with Microsoft, Seiue, ManageBac, or any school.
 
 **当前版本：0.4.2 · MIT · 实验性软件。** 自动读取不等于完整读取；遇到权限、布局、限流或数量限制时保留已有结果，并显示未完成范围。不要把看板作为成绩、截止时间或 EC 安排的唯一依据，请以学校原平台为准。
