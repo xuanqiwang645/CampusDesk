@@ -1,6 +1,6 @@
 # CampusDesk
 
-面向使用M系列 mac 的国际部学生打造的集中查看希悦课表、ManageBac课程总评和GPA估算、待办与可识别的教师反馈。（-如果需要windows操作系统版本，移步到https://github.com/zhyunran/ManageBac-packer）
+面向使用M系列 mac 的国际部学生打造的集中查看希悦课表、ManageBac课程总评和GPA估算、待办与可识别的教师反馈。-如果需要windows操作系统版本，移步到https://github.com/zhyunran/ManageBac-packer
 
 **当前版本：0.4.2 · MIT · 实验性软件。** 自动读取不等于完整读取；遇到权限、布局、限流或数量限制时保留已有结果，并显示未完成范围。不要把看板作为成绩、截止时间或 EC 安排的唯一依据，请以学校原平台为准。
 
@@ -106,10 +106,6 @@ bash test-native.sh
 
 ## 特别声明：
 -我的同学@zhyunran，@hs89n5km86-coder 也为本软件提出了思路，代码和优化指导。在此特别鸣谢！
-
-
--如果需要windows操作系统版本，移步到https://github.com/zhyunran/ManageBac-packer
-
 
 -同时，本软件的Microsoft Teams接口受到了以下3位开发者的启发：https://github.com/gediz/teams-web-chat-exporter，https://github.com/Maxim-Mazurok/teams-api，https://github.com/microsoftgraph。在此特别鸣谢！
 
