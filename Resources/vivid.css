@@ -1,0 +1,44 @@
+/* Brighter study palette; small text remains readable against its background. */
+:root {
+  --paper: #edf5f0;
+  --card: #ffffff;
+  --nav: #e0eee7;
+  --ink: #203a37;
+  --muted: #53685b;
+  --line: #cbded2;
+  --teal: #216b58;
+  --teal-soft: #d8efe2;
+  --gold: #946218;
+  --orange: #a65428;
+  --danger: #9f3e30;
+}
+
+.topbar { background: #f7fbf8; }
+.nav-item { color: #3f6251; }
+.nav-item:hover { background: #d3e9dc; }
+.nav-item.active { background: #cbe6d7; color: #174e3c; }
+.sidebar-label,
+.breadcrumb,
+.page-subtitle,
+.task-meta,
+.card-kicker,
+.date-stamp,
+.settings-intro,
+.gpa-note,
+.section-foot,
+.source-header p,
+.browser-permission-guide { color: #53685b; }
+.card-title .icon { color: #2b6d50; }
+.card .view-link { color: #285e4b; }
+.button-primary:hover { background: #185b4a; }
+.task-row.done .task-copy h3 { color: #53685b; }
+.task-tag { color: #446452; border-color: #bed6c4; background: #edf7ef; }
+.info-note { color: #355f51; background: #e6f3ea; border-color: #bedbc8; }
+.teams-guide { background: #e2f1e6; border-color: #b9d6c2; }
+.teams-guide p,
+.teams-guide small,
+.feedback-text { color: #53685b; }
+button:focus-visible,
+a:focus-visible,
+input:focus-visible,
+select:focus-visible { outline-color: #347b63; }
