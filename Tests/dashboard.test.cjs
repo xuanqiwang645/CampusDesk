@@ -142,6 +142,46 @@ test('reminders exclude past/unknown deadlines and ticker never repeatedly sched
   assert.equal(app.sent.filter(item => item.action === 'syncReminders').length, count);
 });
 
+test('to-do deadline icons distinguish upcoming, overdue and unknown dates without claiming delivery', () => {
+  const app = harness({ hash: '#tasks' });
+  app.receive({ type: 'snapshot', snapshot: teamsSnapshot([
+    task(), task({ id: 'past', dueAt: '2026-09-19T00:01:00Z' }), task({ id: 'unknown', dueAt: null })
+  ]) });
+  const html = app.node('content').innerHTML;
+  assert.match(html, /class="task-due has-date"><svg class="task-due-icon"/);
+  assert.match(html, /class="task-due is-overdue"><svg class="task-due-icon"[^>]*>.*?<span>已逾期 · /);
+  assert.match(html, /class="task-due date-unknown"><span>未设置截止日期<\/span>/);
+  assert.equal(app.sent.filter(item => item.action === 'syncReminders').at(-1)?.items.length ?? 0, 0);
+  app.click({ page: 'settings' });
+  assert.match(app.node('content').innerHTML, /id="reminder-settings"[\s\S]*?Teams 作业提醒/);
+});
+
+test('reminder glyph dimensions and state colors remain legible', () => {
+  const stylesheet = fs.readFileSync(path.join(root, 'Resources/reminders.css'), 'utf8');
+  const html = fs.readFileSync(path.join(root, 'Resources/index.html'), 'utf8');
+  assert.match(html, /<link rel="stylesheet" href="reminders\.css">/);
+  const block = selector => {
+    const start = stylesheet.indexOf(selector + ' {');
+    assert.notEqual(start, -1, selector);
+    return stylesheet.slice(stylesheet.indexOf('{', start) + 1, stylesheet.indexOf('}', start));
+  };
+  assert.match(block('.nav-item[data-page="tasks"] .icon svg'), /width:\s*22px/);
+  assert.match(block('#reminder-settings .card-title .icon svg'), /width:\s*24px/);
+  const rgb = color => [...color.matchAll(/[0-9a-f]{2}/gi)].map(match => parseInt(match[0], 16) / 255);
+  const lightness = color => rgb(color).map(c => c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4)
+    .reduce((sum, channel, index) => sum + channel * [0.2126, 0.7152, 0.0722][index], 0);
+  const contrast = css => {
+    const foreground = /color:\s*(#[0-9a-f]{6})/i.exec(css)?.[1];
+    const background = /background:\s*(#[0-9a-f]{6})/i.exec(css)?.[1];
+    assert.ok(foreground && background, 'Both colors explicitly defined');
+    const a = lightness(foreground), b = lightness(background);
+    return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
+  };
+  for (const selector of ['.task-due.has-date', '.task-due.is-overdue', '#reminder-settings .card-title .icon', '.nav-item[data-page="tasks"].active .icon']) {
+    assert.ok(contrast(block(selector)) >= 4.5, selector + ' text/icon contrast');
+  }
+});
+
 test('second ticker updates isolated text and stable native countdown, crosses into class without false break', () => {
   const app = harness(); app.receive({ type: 'snapshot', snapshot: schedule() });
   assert.equal(app.node('class-clock-label').textContent, '课间剩余'); assert.equal(app.node('class-clock-time').textContent, '08:32');

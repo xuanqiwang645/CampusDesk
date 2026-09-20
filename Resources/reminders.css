@@ -1,0 +1,89 @@
+/* To-do and deadline cues: distinguish normal, overdue, and unknown dates. */
+.nav-item[data-page="tasks"] .icon {
+  width: 32px;
+  height: 32px;
+  flex: 0 0 32px;
+  justify-content: center;
+  border-radius: 9px;
+  background: #e2f0e9;
+  color: #2d5b4d;
+}
+.nav-item[data-page="tasks"] .icon svg {
+  width: 22px;
+  height: 22px;
+  stroke-width: 2.1;
+}
+.nav-item[data-page="tasks"].active .icon {
+  background: #2c6155;
+  color: #fffdf8;
+}
+.nav-item[data-page="tasks"] .nav-count {
+  min-width: 22px;
+  text-align: center;
+  background: #2c6155;
+  color: #fffdf8;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 3px 6px;
+}
+.nav-item[data-page="tasks"].active .nav-count { background: #204d43; }
+
+#reminder-settings .card-title .icon {
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  border-radius: 10px;
+  background: #e2f0e9;
+  color: #2d5b4d;
+}
+#reminder-settings .card-title .icon svg {
+  width: 24px;
+  height: 24px;
+  stroke-width: 2.1;
+}
+
+.task-due {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 27px;
+  border: 1px solid #cbd2c6;
+  border-radius: 7px;
+  padding: 3px 8px;
+  color: #515e56;
+  background: #eff1ec;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+.task-due.has-date {
+  color: #6b431f;
+  background: #f9efde;
+  border-color: #dec19a;
+}
+.task-due.is-overdue {
+  color: #872d1c;
+  background: #fff0ea;
+  border-color: #dda999;
+}
+.task-due .task-due-icon {
+  width: 16px;
+  height: 16px;
+  stroke-width: 2.2;
+}
+.task-row.done .task-due {
+  color: #515e56;
+  background: #eff1ec;
+  border-color: #cbd2c6;
+}
+
+@media (max-width: 580px) {
+  .nav-item[data-page="tasks"] .icon {
+    display: flex;
+    width: 27px;
+    height: 27px;
+    flex-basis: 27px;
+  }
+  .nav-item[data-page="tasks"] .icon svg { width: 19px; height: 19px; }
+}
