@@ -1,5 +1,5 @@
 /* CampusDesk ManageBac adapter. Read-only DOM; no cookies, network, or private app state.
-   Selectors verified against Beijing 101's rendered ManageBac task pages, 2026-09-18. */
+   Selectors target rendered ManageBac task pages; tests use invented school data. */
 (function (root) {
   'use strict';
   const clean = value => String(value || '').replace(/\s+/g, ' ').trim();

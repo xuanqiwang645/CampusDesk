@@ -22,8 +22,11 @@
   </div>
   <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
   <dialog id="task-dialog"><form id="task-form"><div class="dialog-heading"><h2>添加待办</h2><button class="icon-button" type="button" data-action="close-task" aria-label="关闭">×</button></div><p class="subtle">个人待办保存在这台 Mac，不会提交至学校系统。</p><label>要做什么<input id="task-title" name="title" required maxlength="180" placeholder="例如：整理今天的化学笔记" autocomplete="off"></label><label>截止时间（可选）<input id="task-due" name="due" type="datetime-local"></label><p class="field-hint">按北京时间记录。</p><div class="dialog-actions"><button type="button" class="button button-light" data-action="close-task">取消</button><button type="submit" class="button button-primary">添加待办</button></div></form></dialog>
+  <dialog id="detail-dialog" class="detail-dialog" aria-labelledby="detail-title"><div id="detail-content"></div></dialog>
+  <dialog id="teams-page-dialog" aria-labelledby="teams-page-heading"><form id="teams-page-form"><div class="dialog-heading"><h2 id="teams-page-heading">关注 Teams 页面</h2><button class="icon-button" type="button" data-action="close-teams-page" aria-label="关闭">×</button></div><p class="subtle">在 Chrome 或 Edge 登录 Teams 后，选择要关注页面的类型并保存。也可以手动复制频道或作业页网址。</p><input id="teams-page-id" type="hidden"><label for="teams-page-label">页面名称<input id="teams-page-label" required maxlength="120" placeholder="例如：English Corner" autocomplete="off"></label><label for="teams-page-url">Teams 页面网址<input id="teams-page-url" required type="url" placeholder="https://teams.microsoft.com/…" autocomplete="off"></label><label for="teams-page-kind">这里主要是什么内容<select id="teams-page-kind"><option value="auto">自动识别</option><option value="assignments">作业频道</option><option value="ec">English Corner（EC）</option></select></label><p class="field-hint">最多关注 20 个页面。同步时请让该页面在选定浏览器中保持打开；只读取已载入的文字。</p><div class="dialog-actions"><button type="button" class="button button-light" data-action="close-teams-page">取消</button><button type="submit" class="button button-primary">保存页面</button></div></form></dialog>
   <input id="import-file" type="file" accept="application/json,.json" hidden>
   <script src="core.js"></script>
+  <script src="graph.js"></script>
   <script src="dashboard.js"></script>
 </body>
 </html>

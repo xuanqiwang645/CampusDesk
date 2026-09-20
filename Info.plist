@@ -1,16 +1,45 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0"><dict>
-<key>CFBundleIdentifier</key><string>local.campusdesk.mac</string>
-<key>CFBundleName</key><string>CampusDesk</string>
-<key>CFBundleDisplayName</key><string>CampusDesk 学习看板</string>
-<key>CFBundleExecutable</key><string>CampusDesk</string>
-<key>CFBundlePackageType</key><string>APPL</string>
-<key>CFBundleShortVersionString</key><string>0.1.0</string>
-<key>CFBundleVersion</key><string>1</string>
-<key>LSMinimumSystemVersion</key><string>12.0</string>
-<key>NSHighResolutionCapable</key><true/>
-<key>NSPrincipalClass</key><string>NSApplication</string>
-<key>CFBundleIconFile</key><string>AppIcon</string>
-<key>CFBundleDevelopmentRegion</key><string>zh_CN</string>
-</dict></plist>
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>zh_CN</string>
+	<key>CFBundleDisplayName</key>
+	<string>CampusDesk 学习看板</string>
+	<key>CFBundleExecutable</key>
+	<string>CampusDesk</string>
+	<key>CFBundleIconFile</key>
+	<string>AppIcon</string>
+	<key>CFBundleIdentifier</key>
+	<string>local.campusdesk.mac</string>
+	<key>CFBundleName</key>
+	<string>CampusDesk</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>0.4.1</string>
+	<key>CFBundleVersion</key>
+	<string>7</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>12.0</string>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+	<key>NSPrincipalClass</key>
+	<string>NSApplication</string>
+	<key>NSAppleEventsUsageDescription</key>
+	<string>CampusDesk 需要经你允许控制 Chrome 或 Edge，只读发现学校账号可访问的 Teams 频道、聊天和附件，自动更新 EC 公告和学习看板。登录凭据留在浏览器，不发送消息或修改学校数据。</string>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>CampusDesk Microsoft sign-in</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>msauth.local.campusdesk.mac</string>
+			</array>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+		</dict>
+	</array>
+</dict>
+</plist>

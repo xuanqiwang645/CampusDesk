@@ -1,0 +1,49 @@
+CampusDesk Teams in-page bridge reference
+========================================
+
+The read-only Teams Chat Service message endpoint, backwardLink pagination,
+MSAL access-token cache/encryption format, local conversations index schema,
+and attachment property names were reviewed from:
+https://github.com/gediz/teams-web-chat-exporter
+Commit ca606d2a9edcf07403986f58588f62a6c50e8b56
+src/content/api-client.ts, src/content/api-converter.ts,
+src/content/teams-state.ts, src/content/share-resolver.ts,
+src/entrypoints/content.ts, src/utils/teams-urls.ts.
+
+CampusDesk uses its own smaller bridge, not the browser extension. It enforces
+current-account matching, exact scope matching, strict resource host/path
+checks, no redirects, GET-only data operations (plus the exact Teams authz
+service-discovery authentication exchange), bounded data and explicit partial
+results. No upstream scripts were executed and no extension is installed.
+These are internal Teams endpoints, not a guaranteed public Microsoft API.
+The local conversation index is not proof of exhaustive account discovery.
+
+Bridge limits: each attachment is capped at 12 MiB before base64 encoding;
+callers may request a smaller maxBytes. JSON service pages are capped at
+2,000,000 bytes; message results at 2,500,000 serialized characters; each job
+is limited to at most 40 pages, 2,000 records, and 60 seconds. Native callers
+must impose their own per-run attachment budget and bounded message framing.
+
+Upstream license:
+
+MIT License
+
+Copyright (c) 2026 Nazım Gediz Aydındoğmuş
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.

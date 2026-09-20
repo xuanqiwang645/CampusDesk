@@ -1,83 +1,105 @@
-# CampusDesk · Mac 学习看板
+# CampusDesk
 
-面向国际部高中学生，集中查看希悦课表、ManageBac 课程总评和 GPA 估算、待办与可识别的教师反馈。当前版本 0.1.0，为可本机编译的测试版。
+面向 macOS 的本地学习看板，整合希悦课表、ManageBac 课程信息，以及 Teams 消息和 English Corner（EC）附件文字。
 
-## 安装（macOS 12 或更新版本）
+A local-first macOS study dashboard. An independent, unofficial project; not affiliated with Microsoft, Seiue, ManageBac, or any school.
 
-1. 在 GitHub 仓库页面选择 **Code → Download ZIP** 并解压，或运行 `git clone https://github.com/xuanqiwang645/CampusDesk.git`。
-2. 打开 CampusDesk 源码文件夹，运行 `Install.command`。
-3. 如果提示缺少 Apple Command Line Tools，按系统提示安装，完成后再次运行 `Install.command`。不需要完整 Xcode 或付费开发者账号。
-4. 安装器会按本机芯片编译，将软件放进 `~/Applications/CampusDesk.app`，然后打开。Intel 和 Apple 芯片均通过本机架构编译，尚未进行两种架构真机验证。
+**当前版本：0.4.1 · MIT · 实验性软件。** 自动读取不等于完整读取；遇到权限、布局、限流或数量限制时保留已有结果，并显示未完成范围。不要把看板作为成绩、截止时间或 EC 安排的唯一依据，请以学校原平台为准。
 
-如果 `.command` 未作为可执行文件打开：打开“终端”，输入 `/bin/bash` 和一个空格，再把 `Install.command` 拖进终端，按回车。无需关闭系统安全保护，也不需要 sudo。只应运行你信任且可查看源码的安装器。
+## 当前能力与边界
 
-安装脚本会在本机编译并签名应用。若编译失败，请保留终端中的完整错误信息。仓库不包含已编译应用或个人数据。
+| 来源 | 已实现 | 仍需注意 |
+| --- | --- | --- |
+| 希悦 | 从已登录的学校页面读取课表，显示课程与倒计时 | 页面适配器依赖布局；需配置学校入口 |
+| ManageBac | 读取课程总评、任务、明确的教师反馈及原页入口 | 不把任务分数平均成总评，不猜官方 GPA；需配置学校入口 |
+| Teams 浏览器模式（默认） | 自动发现本浏览器已有的会话索引，读取部分频道/聊天消息，定时更新 | 依赖 Chrome/Edge 登录与授权、网页布局和内部接口；不保证发现账号的全部会话 |
+| English Corner | 优先同步 EC 消息，读取受支持附件文字，本地搜索和发布日期筛选 | 文字提取不是表格结构还原、个人名单匹配或活动改期识别 |
+| Microsoft Graph（可选） | 独立登录与只读同步适配器 | 需要自行注册应用及组织批准；正式作业、成绩、反馈仍需实际租户验收 |
 
-## 首次使用
+EC 自动附件读取支持 PDF、PNG/JPEG/GIF、TXT/CSV、DOCX、XLSX 的部分文字内容。PDF 混合图文页会尝试本机 Vision OCR，并记录逐页覆盖和置信信息。不支持所有格式、公式计算、旧式 Office 二进制文件或完整排版还原。
 
-1. 在应用中点“打开希悦”，在学校原网页完成登录。应用里的会话与 Safari 及 ChatGPT 浏览器不同，需要单独登录。
-2. 点“打开 ManageBac”，在学校原网页完成登录。学校提供“保持登录”选项时可按需选择；服务器仍可能要求重新登录。
-3. 返回看板，点“同步数据”。首次读取可能需一至几分钟；在同步结束前，GPA 覆盖课程数可能逐步增加。
-4. 在学校网页窗口中也可点“读取当前页到看板”，补充某个任务的反馈或重新读取课表。
+Teams 默认模式在 Teams 页面内使用当前账号会话访问内部服务，参考了 [teams-web-chat-exporter](https://github.com/gediz/teams-web-chat-exporter)。这不是稳定的公开 Microsoft API，也不绕过账号权限或学校策略。接口或页面升级可能让同步失效；请仅在获得相应使用许可时启用。
 
-关闭主窗口后软件继续留在菜单栏。点击菜单栏打开看板或刷新；选“退出”才完全结束。程序运行时默认每 15 分钟刷新，Mac 睡眠时不会刷新；唤醒后会再次尝试。软件没有自动设置开机启动。如需开机运行，可在 macOS 的“登录项”中手动加入 CampusDesk。
+## 从源码安装
 
-## 已实现
+需要 macOS 12 或更新版本、可用的 Apple Command Line Tools，以及 Chrome 或 Edge（使用默认 Teams 模式时）。构建不需要 Node.js、Python、npm 或付费开发者账号。当前按本机架构构建；已在 Apple Silicon 上验证编译，未完成 Intel 实机验收。
 
-| 功能 | 行为 |
-| --- | --- |
-| 今日课表 | 按北京时间和真实日期筛选，显示当前/下一节课、时间、教室、老师；支持按日期查看已缓存课表 |
-| 自习 | 沿用你的设置：在完整、有效、且当天确有课程的工作日周课表中，将缺失的已知节次标成自习；不会把周末或完整空白日判成全天自习 |
-| 课程成绩 | 读取 ManageBac 当前学期、明确标注的 Overall 课程总评；不把单次测验成绩当总评 |
-| GPA | 分开显示页面明确公布的 GPA 与本软件预估 GPA；默认用 90/80/70/60 对应 4/3/2/1，低于 60 为 0，各科等权，仅纳入已成功读取的有效课程总评 |
-| 待办 | 汇总可读取的任务；允许添加个人待办、在本机标记完成；这些操作不向学校提交作业或改变学校状态 |
-| 老师反馈 | 读取任务页明确标注的反馈区域，支持本机已读；没有识别到反馈时会说明，不能据此断言老师没有反馈 |
-| 缓存 | 本机保存最近读取内容，标注更新时间；断网、页面读取失败或登录失效保留旧数据 |
-| 备份 | 导入/导出 JSON；包含学习数据，不包含网站 Cookie 或密码 |
+1. 下载本仓库源码，或运行 `git clone https://github.com/xuanqiwang645/CampusDesk.git`。
+2. 按需配置下方学校地址；只使用 Teams 时可以保持为空。
+3. 退出正在运行的 CampusDesk，双击 `Install.command`，或在源码目录运行 `bash Install.command`。
+4. 安装到 `~/Applications/CampusDesk.app` 后打开应用。安装器不需要管理员密码；编译工具本身需已正确安装。
 
-## 数据范围与准确性
+安装器先构建、验证，再备份已有应用和 `~/Library/Application Support/CampusDesk` 中的数据后替换。备份路径会显示在终端。它不会清除浏览器登录，也不会代替你接受 Xcode 许可或修改系统开发工具选择。
 
-- 学校入口固定为 `https://yly.seiue.com/` 和 `https://beijing101.managebac.cn/`。
-- 自动同步只从已登录页面读取可见内容；不使用未经确认的私有 API，不读取密码，不绕过登录或验证码。登录 Cookie 由 macOS WebKit 网站数据存储管理，应用不自行提取 Cookie。
-- 希悦只读取页面实际呈现的一周。如果页面仍显示旧周，应在原网页点击 Today/今天，再“读取当前页到看板”。未读取的新周不会沿用旧周日期冒充当天课程。
-- 官方 GPA 必须来自页面明确标注的数据。目前检查的页面未显示官方 GPA；本软件的 4.0 估算不是经学校确认的换算规则，不包括学分、AP 加权、重修及累计高中 GPA。
-- 每轮最多读取 55 页，优先课程任务列表，再读列表中链接的任务详情。只读取当前显示的任务，未自动翻页；历史任务、附件、报告 PDF 和未显示的评语可能不在看板中。应使用“打开原页”查阅完整信息。
-- 任务卡若不包含完整年份或时区，保留学校原始截止时间文字，不猜测 ISO 时间或据此精确判逾期。
-- ManageBac 的 Completed 区域可能只是过去日期分组，不能据此视为已交作业；有明确已提交/评分证据时才采用对应状态。
-- 网站改版可能导致识别失败；届时需更新适配器，不能保证永久保持登录或永久自动同步。
-- 目前老师反馈适配尚未在含实际评语的页面验证；检查过的任务详情没有评语。该模块保留来源链接且不会生成评语。
+只构建、不安装：
 
-## 本机数据
+```sh
+bash build.sh
+# 可选：避免云同步文件夹重新附加扩展属性而影响本地签名
+CAMPUSDESK_BUILD_DIR="$(mktemp -d /private/tmp/CampusDesk-build.XXXXXX)" bash build.sh
+```
 
-设置、任务和学习快照位于 `~/Library/Application Support/CampusDesk/state.json`；上一版本保留为 `state.previous.json`。本机目录权限为仅当前用户访问；内容是普通 JSON，并非应用独立加密。建议沿用 Mac 的账号锁定及系统磁盘保护。
+默认产物是 `build/CampusDesk.app`，使用本机临时签名，**没有 Developer ID 公证**。请自行核对源码；不要全局关闭 Gatekeeper。本次发布提供源码，不提供已公证的安装包。
 
-没有分析统计、第三方云端数据库或 AI API 上传。学校网页自身正常运行仍会连接学校及其认证/静态资源服务。删除登录状态和删除学习缓存是不同操作。卸载应用不会自动删除缓存；需要时先导出备份，再在 Finder 中手动移除上述 CampusDesk 数据文件夹。
+### 学校入口
 
-## 验证情况
+公开源码不内置某位学生的学校入口。编译前编辑 `Resources/SchoolConfig.json`：
 
-- 已通过实际已登录页面核对希悦一周的日期、课时、教室和老师，以及 ManageBac 的课程 Overall 和任务链接。
-- 自动测试覆盖时区跨日、换周/跨年、GPA 边界与缺失分数、任务去重、登录失效保留缓存、导入校验及 URL 安全。
-- 安装脚本通过 Bash 语法检查；应用元数据通过 plist 解析。
-- macOS 编译和单元测试在本机验证；应用内登录、原生菜单栏和 WebKit 持久化会话仍需实际使用验证。
+```json
+{
+  "seiue": "https://YOUR-SCHOOL.seiue.com/",
+  "managebac": "https://YOUR-SCHOOL.managebac.cn/"
+}
+```
 
-开发者可在安装 Node.js 的环境运行：
+把占位地址替换为学校实际根地址；不用的服务保留空字符串。支持希悦 `*.seiue.com` 与 ManageBac `*.managebac.cn` / `*.managebac.com`，只接受 HTTPS 根地址，不接受凭据、查询参数、片段或非标准端口。提取仅允许配置的精确来源；配置后需重新编译。不同学校的页面布局可能仍需适配。**不要把自己的学校配置或学习数据提交到公共仓库。**
+
+### Teams 首次连接
+
+1. 在“连接与设置”选择 Chrome 或 Edge 和浏览器同步模式，允许读取 Teams。
+2. 在选定浏览器打开 Teams，并自行完成学校登录。
+3. 按 macOS 提示允许 CampusDesk 控制所选浏览器；可在“系统设置 → 隐私与安全性 → 自动化”核对。
+4. 在浏览器菜单启用 **Allow JavaScript from Apple Events**（Chrome 通常位于“显示 → 开发者”），然后在 CampusDesk 启动同步。
+
+这些权限由你手动确认。它们允许自动化调用浏览器，请仅授权可信的软件。不要向维护者提供账号密码、Cookie、令牌或带认证信息的链接。
+
+自动刷新要求 CampusDesk 运行、Mac 处于可运行状态、浏览器保持可用且会话未过期。关闭应用、睡眠、浏览器退出或重新登录要求都可能中断更新。遇到 `UNKNOWN_LAYOUT`、权限不足或部分同步，应查看未完成列表，不能视为“全部读取成功”。
+
+官方 Graph 方案是可选的独立连接方式，参见 [Microsoft-Teams-Setup.md](Microsoft-Teams-Setup.md)。默认浏览器模式不需要填写 Graph Client ID。
+
+## 数据与隐私
+
+- 学习缓存、同步状态和提取的附件文字保存在本机 `~/Library/Application Support/CampusDesk/`。这些内容可能包含学生、教师或同学的个人信息，不应公开分享。
+- 浏览器模式不把浏览器访问令牌导出给原生进程；可选 Graph 模式由原生客户端管理授权，令牌保存在 macOS 钥匙串，不在项目配置文件中。
+- 本项目没有配套的开发者收集服务器。读取会访问 Microsoft 或你配置的学校平台；不要把“本地缓存”理解成完全离线。
+- 没有发送 Teams 消息、提交作业或修改学校成绩的功能。
+- 导出的备份也含学习数据。上传 Issue 前，删除姓名、学校、账号 ID、消息正文、文件名、链接、会话标识和凭据。
+- 本次源码发布排除了本机缓存、构建产物、私人诊断脚本及真实成绩夹具。既有 Git 提交历史保持不变。
+
+## 限制与待办
+
+当前没有证实完整历史分页续传、索引外会话发现、独立回复链全覆盖，或正式教育数据的跨租户完整性。默认接口读取窗口为每会话最多 8 页、240 条消息及 45 秒；本地会话索引最多 500 项。EC 附件单个最多 12 MiB，每频道每轮最多 12 个新下载，整轮最多 40 个、48 MiB；PDF 最多 100 页，其中最多 12 页 OCR。超限/低置信度结果应保持部分状态。状态文件仍有 25 MiB 上限。
+
+429/503 限流会停止当前读取，并尊重服务端冷却时间；不通过更换读取方式规避限流。附件只有在重新核对 SharePoint 元数据且版本一致时才复用正文。后续重点是可验证的覆盖、存储拆分和学校适配，而不是声称“已经全自动读取全部内容”。本仓库是 macOS 项目，尚无 iOS 版本。
+
+## 开发与测试
+
+原生壳：Swift / AppKit / WKWebView。界面和适配器：本地 HTML、CSS、JavaScript。附件文字：PDFKit、Vision 与受限 Office ZIP/XML 解析。无 npm 或 SwiftPM 运行时依赖。
+
+JavaScript 回归测试需要支持 `node:test` 的 Node.js（建议 22 或更新版本）：
 
 ```sh
 node --test Tests/*.test.cjs
 ```
 
-安装和日常运行不需要 Node.js。
+macOS 原生附件和事件协议测试使用合成数据，不读取真实账号：
 
-## 源码
+```sh
+bash test-native.sh
+```
 
-- `Sources/main.swift`：Mac 原生窗口、菜单栏、持久化登录网页、后台读取、文件备份与安装内桥接。
-- `Resources/index.html`、`style.css`、`dashboard.js`：学习看板界面。
-- `Resources/core.js`：日期、GPA、缓存与导入校验。
-- `Resources/seiue.js`、`managebac.js`：只读页面适配器。
-- `build.sh`、`Install.command`：本机编译及安装。
+源码构建与单元测试通过不等于真实账号、全部浏览器版本或全部学校验收通过。提交前请阅读 [CONTRIBUTING.md](CONTRIBUTING.md)，安全报告见 [SECURITY.md](SECURITY.md)。
 
-参考：学校原页面是显示内容的来源；ManageBac 的课程成绩和报告入口说明见[官方学生成绩帮助](https://help.managebac.com/hc/en-us/articles/360018801952-Tracking-your-Academic-Progress-Task-Grades-Report-Cards)。
+## 许可
 
-## 许可与贡献
-
-本项目使用 [MIT 许可证](LICENSE)。欢迎提交问题和改进建议。CampusDesk 是独立项目，与学校、希悦及 ManageBac 均无官方关联。请勿在 Issue 或提交中上传账号、Cookie、成绩、课表、教师反馈或含有个人信息的截图。
+[MIT License](LICENSE)。相关第三方 MIT 声明及参考提交保留在 [Resources/THIRD_PARTY_TEAMS_API.txt](Resources/THIRD_PARTY_TEAMS_API.txt)。MIT 许可只覆盖本项目可授权的代码，不授予学校数据、第三方服务或商标的使用权。
