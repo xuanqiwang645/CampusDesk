@@ -101,3 +101,6 @@ bash test-native.sh
 ## 许可
 
 [MIT License](LICENSE)。相关第三方 MIT 声明及参考提交保留在 [Resources/THIRD_PARTY_TEAMS_API.txt](Resources/THIRD_PARTY_TEAMS_API.txt)。MIT 许可只覆盖本项目可授权的代码，不授予学校数据、第三方服务或商标的使用权。
+特别声明:
+ahsssodr chat xporte, t:/icon Main
+Mazurok/teams-api, https://github.com/microsoftgraph。在此特别鸣谢!
