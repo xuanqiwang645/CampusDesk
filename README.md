@@ -1,7 +1,6 @@
 # CampusDesk
 
-这是一个小更新，只针对APP颜色有少量代码调整
-A local-first macOS study dashboard. An independent, unofficial project; not affiliated with Microsoft, Seiue, ManageBac, or any school.
+面向使用M系列 mac 的国际部学生打造的集中查看希悦课表、ManageBac课程总评和GPA估算、待办与可识别的教师反馈。
 
 **当前版本：0.4.2 · MIT · 实验性软件。** 自动读取不等于完整读取；遇到权限、布局、限流或数量限制时保留已有结果，并显示未完成范围。不要把看板作为成绩、截止时间或 EC 安排的唯一依据，请以学校原平台为准。
 
