@@ -101,6 +101,9 @@ bash test-native.sh
 ## 许可
 
 [MIT License](LICENSE)。相关第三方 MIT 声明及参考提交保留在 [Resources/THIRD_PARTY_TEAMS_API.txt](Resources/THIRD_PARTY_TEAMS_API.txt)。MIT 许可只覆盖本项目可授权的代码，不授予学校数据、第三方服务或商标的使用权。
+
+
+
 特别声明：
 -我的同学@zhyunran，@hs89n5km86-coder 也为本软件提出了思路，代码和优化指导。在此特别鸣谢！
 -同时，本软件的Microsoft Teams接口受到了以下3位开发者的启发：https://github.com/gediz/teams-web-chat-exporter，https://github.com/Maxim-Mazurok/teams-api，https://github.com/microsoftgraph。在此特别鸣谢！
