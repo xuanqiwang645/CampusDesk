@@ -92,6 +92,19 @@ test('dashboard appearance setting switches between the preserved classic panel 
   assert.match(app.node('content').innerHTML, /今天，也有条不紊/);
 });
 
+test('estimated GPA is always presented with two decimal places', () => {
+  const app = harness();
+  app.receive({ type: 'snapshot', snapshot: { source: 'managebac', url: 'https://example-school.managebac.cn/academics', capturedAt: '2026-09-19T00:40:00Z', warnings: [], courses: [
+    { id: 'math', name: 'Math', percentage: 90, term: 'Current', isCurrentTerm: true, isCourseGrade: true },
+    { id: 'english', name: 'English', percentage: 80, term: 'Current', isCurrentTerm: true, isCourseGrade: true }
+  ], tasks: [], feedback: [], officialGPA: null } });
+  app.click({ page: 'settings' }); app.click({ action: 'dashboard-theme', theme: 'board' }); app.click({ page: 'overview' });
+  assert.match(app.node('content').innerHTML, /<strong>3\.50<\/strong>/);
+  app.click({ page: 'grades' });
+  assert.match(app.node('content').innerHTML, />3\.50</);
+  assert.match(app.node('content').innerHTML, />4\.00</);
+});
+
 test('boot migrates old local state, renders new pages, and browser source opening never claims connection', () => {
   const old = { version: 1, settings: {}, snapshots: { seiue: {}, managebac: {} }, manualTasks: [], taskChecks: {}, feedbackRead: {}, gradeHistory: [] };
   const app = harness({ native: false, saved: old });
