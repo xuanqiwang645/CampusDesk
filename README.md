@@ -10,7 +10,7 @@
 - [v0.4.2](releases/v0.4.2.md) — 待办与提醒的可见性改进。
 - [v0.4.1](releases/v0.4.1.md) — Teams、EC 与附件读取能力的公开源码版。
 
-完整下载包见 [GitHub Releases](https://github.com/xuanqiwang645/CampusDesk/releases)。
+##完整下载包见 [GitHub Releases](https://github.com/xuanqiwang645/CampusDesk/releases)。
 
 ## 当前能力与边界
 
