@@ -72,7 +72,7 @@ function schedule() { return { source: 'seiue', url: 'https://example-school.sei
 ] }; }
 
 test('dashboard appearance setting switches between the preserved classic panel and the card board', () => {
-  const app = harness(); app.receive({ type: 'snapshot', snapshot: teamsSnapshot([task()]) });
+  const app = harness(); app.receive({ type: 'snapshot', snapshot: teamsSnapshot([task()]) }); app.receive({ type: 'snapshot', snapshot: schedule() });
   assert.equal(app.node('app-shell').dataset.dashboardTheme, 'classic');
   assert.match(app.node('content').innerHTML, /今天，也有条不紊/);
   app.click({ page: 'settings' });
@@ -83,6 +83,7 @@ test('dashboard appearance setting switches between the preserved classic panel 
   app.click({ page: 'overview' });
   assert.match(app.node('content').innerHTML, /集中处理最重要的事/);
   assert.match(app.node('content').innerHTML, /board-task-grid/);
+  assert.match(app.node('class-clock-detail').textContent, /下节 English · 08:50–09:30/);
   app.click({ action: 'appearance-settings' });
   assert.match(app.node('content').innerHTML, /经典面板/);
   app.click({ action: 'dashboard-theme', theme: 'classic' });
@@ -205,7 +206,7 @@ test('reminder glyph dimensions and state colors remain legible', () => {
 test('second ticker updates isolated text and stable native countdown, crosses into class without false break', () => {
   const app = harness(); app.receive({ type: 'snapshot', snapshot: schedule() });
   assert.equal(app.node('class-clock-label').textContent, '课间剩余'); assert.equal(app.node('class-clock-time').textContent, '08:32');
-  assert.match(app.node('class-clock-detail').textContent, /English · 08:50 · 202/);
+  assert.match(app.node('class-clock-detail').textContent, /English · 08:50–09:30 · 202/);
   const writes = app.node('content').writes, countdowns = app.sent.filter(item => item.action === 'setMenuCountdown').length;
   assert.equal(app.last('setMenuCountdown').endsAt, '2026-09-19T08:50:00+08:00');
   app.tick(1000); assert.equal(app.node('class-clock-time').textContent, '08:31'); assert.equal(app.node('content').writes, writes);
