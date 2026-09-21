@@ -16,6 +16,7 @@
 - [v0.4.4](releases/v0.4.4.md) — 卡片看板、课程时间表头与两位小数 GPA 展示。
 - [v0.4.2](releases/v0.4.2.md) — 待办与提醒的可见性改进。
 - [v0.4.1](releases/v0.4.1.md) — Teams、EC 与附件读取能力的公开源码版。
+- [v0.1.0](releases/v0.4.1.md) — Managebac,希悦系统整合
 
 ##完整下载包见 [GitHub Releases](https://github.com/xuanqiwang645/CampusDesk/releases)。
 
