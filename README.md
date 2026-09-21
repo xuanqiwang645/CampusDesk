@@ -1,6 +1,11 @@
 # CampusDesk
 
-面向使用M系列 mac 的国际部学生打造的集中查看希悦课表、ManageBac课程总评和GPA估算、待办与可识别的教师反馈。同时，对北京101国际部特色活动English Corner（EC）有特别优化-如果需要windows操作系统版本，移步到https://github.com/zhyunran/ManageBac-packer
+面向使用M系列 mac 的国际部学生打造的集中查看希悦课表、ManageBac课程总评和GPA估算、待办与可识别的教师反馈。同时，对北京101国际部特色活动English Corner（EC）有特别优化
+
+
+-完整下载包见 [GitHub Releases](https://github.com/xuanqiwang645/CampusDesk/releases)。
+
+-如果需要windows操作系统版本，移步到https://github.com/zhyunran/ManageBac-packer
 
 如发现任何值得改进的地方，欢迎联系我！邮箱：xuanqiwang645@gmail.com
 
