@@ -26,6 +26,17 @@ test('Beijing day changes at 16:00 UTC and midnight uses 00:00', () => {
   assert.equal(Core.today('2026-09-18T16:00:00Z', 'America/Los_Angeles'), '2026-09-18');
 });
 
+test('dashboard theme keeps old exports on classic and accepts only explicit panel choices', () => {
+  const empty = Core.emptyState();
+  assert.equal(empty.settings.dashboardTheme, 'classic');
+  const legacy = JSON.parse(JSON.stringify(empty)); delete legacy.settings.dashboardTheme;
+  assert.equal(Core.validateState(legacy).settings.dashboardTheme, 'classic');
+  const board = Core.emptyState(); board.settings.dashboardTheme = 'board';
+  assert.equal(Core.validateState(board).settings.dashboardTheme, 'board');
+  const invalid = Core.emptyState(); invalid.settings.dashboardTheme = 'neon';
+  assert.throws(() => Core.validateState(invalid), /面板样式/);
+});
+
 test('schedule never relabels yesterday as today; class interval excludes exact end', () => {
   const state = Core.mergeSnapshot(Core.emptyState(), seiue());
   assert.equal(Core.getSchedule(state, '2026-09-19').length, 0);

@@ -204,7 +204,7 @@
     return { version: VERSION, settings: { timezone: 'Asia/Shanghai', refreshMinutes: 15, selfStudy: true,
       seiueURL: configuredSchools.seiue, managebacURL: configuredSchools.managebac, teamsPages: [], teamsNotifications: false,
       teamsBrowser: 'chrome', teamsBrowserAutomation: false, teamsMode: 'browser', teamsAutoDiscover: true, graphIncludeChats: true,
-      reminderMinutes: 30, teamsDueOverrides: {} }, snapshots: { seiue: {}, managebac: {}, teams: {} },
+      reminderMinutes: 30, teamsDueOverrides: {}, dashboardTheme: 'classic' }, snapshots: { seiue: {}, managebac: {}, teams: {} },
       manualTasks: [], taskChecks: {}, feedbackRead: {}, gradeHistory: [] };
   }
   function scheduleRow(row) {
@@ -475,6 +475,8 @@
     s.settings.graphIncludeChats = bool(settings.graphIncludeChats, true);
     s.settings.reminderMinutes = settings.reminderMinutes === undefined ? 30 : finite(settings.reminderMinutes, 0, 10080, false);
     if (!Number.isInteger(s.settings.reminderMinutes)) fail('提醒分钟数必须为整数');
+    s.settings.dashboardTheme = settings.dashboardTheme === undefined ? 'classic' : settings.dashboardTheme;
+    if (!['classic', 'board'].includes(s.settings.dashboardTheme)) fail('面板样式无效');
     if (settings.teamsDueOverrides !== undefined) {
       const overrides = record(settings.teamsDueOverrides, 'Teams 截止时间');
       if (Object.keys(overrides).length > MAX_ROWS) fail('手动截止时间过多');

@@ -71,6 +71,26 @@ function schedule() { return { source: 'seiue', url: 'https://example-school.sei
   { id: 'english', date: '2026-09-19', start: '08:50', end: '09:30', title: 'English', room: '202' }
 ] }; }
 
+test('dashboard appearance setting switches between the preserved classic panel and the card board', () => {
+  const app = harness(); app.receive({ type: 'snapshot', snapshot: teamsSnapshot([task()]) });
+  assert.equal(app.node('app-shell').dataset.dashboardTheme, 'classic');
+  assert.match(app.node('content').innerHTML, /今天，也有条不紊/);
+  app.click({ page: 'settings' });
+  assert.match(app.node('content').innerHTML, /面板样式/);
+  assert.match(app.node('content').innerHTML, /卡片看板/);
+  app.click({ action: 'dashboard-theme', theme: 'board' });
+  assert.equal(app.node('app-shell').dataset.dashboardTheme, 'board');
+  app.click({ page: 'overview' });
+  assert.match(app.node('content').innerHTML, /集中处理最重要的事/);
+  assert.match(app.node('content').innerHTML, /board-task-grid/);
+  app.click({ action: 'appearance-settings' });
+  assert.match(app.node('content').innerHTML, /经典面板/);
+  app.click({ action: 'dashboard-theme', theme: 'classic' });
+  assert.equal(app.node('app-shell').dataset.dashboardTheme, 'classic');
+  app.click({ page: 'overview' });
+  assert.match(app.node('content').innerHTML, /今天，也有条不紊/);
+});
+
 test('boot migrates old local state, renders new pages, and browser source opening never claims connection', () => {
   const old = { version: 1, settings: {}, snapshots: { seiue: {}, managebac: {} }, manualTasks: [], taskChecks: {}, feedbackRead: {}, gradeHistory: [] };
   const app = harness({ native: false, saved: old });
