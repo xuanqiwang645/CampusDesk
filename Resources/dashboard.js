@@ -373,10 +373,10 @@
   }
   function taskSourceSections(tasks, renderRows) {
     const sources = [['teams', 'Teams 作业'], ['managebac', 'ManageBac 作业'], ['manual', '个人待办']];
-    return sources.map(([source, title]) => {
+    return '<div class="task-source-grid">' + sources.map(([source, title]) => {
       const rows = tasks.filter(task => task.source === source);
       return rows.length ? '<section class="task-source-section task-source-' + source + '"><div class="task-source-heading"><div><p>作业来源</p><h2>' + esc(title) + '</h2></div><span>' + rows.length + ' 项</span></div><div class="task-source-subjects">' + taskSubjectGroups(rows, renderRows) + '</div></section>' : '';
-    }).join('');
+    }).join('') + '</div>';
   }
   function renderTasks() {
     const all = Core.getTasks(state), focused = new Set(state.settings.focusSubjects || []);
