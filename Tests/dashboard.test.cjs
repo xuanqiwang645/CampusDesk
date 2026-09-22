@@ -92,6 +92,25 @@ test('dashboard appearance setting switches between the preserved classic panel 
   assert.match(app.node('content').innerHTML, /今天，也有条不紊/);
 });
 
+test('interface language setting persists and translates the application chrome without translating school data', () => {
+  const app = harness();
+  app.receive({ type: 'snapshot', snapshot: teamsSnapshot([task({ title: 'Write in English', course: 'English' })]) });
+  app.click({ page: 'settings' });
+  assert.match(app.node('content').innerHTML, /id="app-language"/);
+  app.change('app-language', { value: 'en-US' });
+  assert.equal(app.last('saveState').state.settings.language, 'en-US');
+  assert.equal(app.node('breadcrumb-page').textContent, 'Connections & Settings');
+  assert.match(app.node('content').innerHTML, /Interface language/);
+  app.click({ page: 'tasks' });
+  assert.equal(app.node('breadcrumb-page').textContent, 'To-Do');
+  assert.match(app.node('content').innerHTML, /Teams assignments/);
+  assert.match(app.node('content').innerHTML, /Write in English/);
+  app.click({ page: 'settings' });
+  app.change('app-language', { value: 'zh-CN' });
+  assert.equal(app.last('saveState').state.settings.language, 'zh-CN');
+  assert.equal(app.node('breadcrumb-page').textContent, '连接与设置');
+});
+
 test('estimated GPA is always presented with two decimal places', () => {
   const app = harness();
   app.receive({ type: 'snapshot', snapshot: { source: 'managebac', url: 'https://example-school.managebac.cn/academics', capturedAt: '2026-09-19T00:40:00Z', warnings: [], courses: [

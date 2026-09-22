@@ -204,7 +204,7 @@
     return { version: VERSION, settings: { timezone: 'Asia/Shanghai', refreshMinutes: 15, selfStudy: true,
       seiueURL: configuredSchools.seiue, managebacURL: configuredSchools.managebac, teamsPages: [], teamsNotifications: false,
       teamsBrowser: 'chrome', teamsBrowserAutomation: false, teamsMode: 'browser', teamsAutoDiscover: true, graphIncludeChats: true,
-      reminderMinutes: 30, teamsDueOverrides: {}, dashboardTheme: 'classic', focusSubjects: [], focusTeamsChannels: [] }, snapshots: { seiue: {}, managebac: {}, teams: {} },
+      reminderMinutes: 30, teamsDueOverrides: {}, dashboardTheme: 'classic', language: 'zh-CN', focusSubjects: [], focusTeamsChannels: [] }, snapshots: { seiue: {}, managebac: {}, teams: {} },
       manualTasks: [], taskChecks: {}, feedbackRead: {}, gradeHistory: [] };
   }
   function scheduleRow(row) {
@@ -477,6 +477,8 @@
     if (!Number.isInteger(s.settings.reminderMinutes)) fail('提醒分钟数必须为整数');
     s.settings.dashboardTheme = settings.dashboardTheme === undefined ? 'classic' : settings.dashboardTheme;
     if (!['classic', 'board'].includes(s.settings.dashboardTheme)) fail('面板样式无效');
+    s.settings.language = settings.language === undefined ? 'zh-CN' : settings.language;
+    if (!['zh-CN', 'en-US'].includes(s.settings.language)) fail('界面语言无效');
     for (const [key, label] of [['focusSubjects', '特别关注学科'], ['focusTeamsChannels', '关注 Teams 频道']]) {
       const items = settings[key] === undefined ? [] : array(settings[key], label, 100).map(value => str(value, 300));
       if (items.some(value => !value)) fail(label + '不能为空');

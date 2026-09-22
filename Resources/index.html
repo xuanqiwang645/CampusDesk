@@ -13,13 +13,13 @@
 <body>
   <div id="app-shell" class="app-shell">
     <aside class="sidebar" aria-label="主导航">
-      <a class="brand" href="#overview"><span class="brand-mark" aria-hidden="true">c<span>·</span></span><span>CampusDesk<small>学习，一目了然</small></span></a>
-      <div class="sidebar-label">我的校园</div>
+      <a class="brand" href="#overview"><span class="brand-mark" aria-hidden="true">c<span>·</span></span><span>CampusDesk<small id="brand-tagline">学习，一目了然</small></span></a>
+      <div id="sidebar-label" class="sidebar-label">我的校园</div>
       <nav id="nav"></nav>
-      <div class="sidebar-bottom"><div class="desk-note"><span class="status-dot"></span> 北京时间 <span id="sidebar-clock">—</span><small>把今天留给重要的事。</small></div><button class="nav-item settings-nav" data-page="settings" type="button"><span class="icon" id="settings-icon"></span>连接与设置</button></div>
+      <div class="sidebar-bottom"><div class="desk-note"><span class="status-dot"></span> <span id="sidebar-clock-label">北京时间</span> <span id="sidebar-clock">—</span><small id="sidebar-note">把今天留给重要的事。</small></div><button class="nav-item settings-nav" data-page="settings" type="button"><span class="icon" id="settings-icon"></span><span id="settings-nav-label">连接与设置</span></button></div>
     </aside>
     <main id="main" tabindex="-1">
-      <header class="topbar"><span class="breadcrumb">我的校园 <span>/</span> <span id="breadcrumb-page">总览</span></span><div class="toolbar"><span id="global-status" class="subtle">尚未同步</span><button id="sync-button" class="button button-light" type="button"><span id="sync-icon"></span><span>同步数据</span></button></div></header>
+      <header class="topbar"><span class="breadcrumb"><span id="breadcrumb-home">我的校园</span> <span>/</span> <span id="breadcrumb-page">总览</span></span><div class="toolbar"><span id="global-status" class="subtle">尚未同步</span><button id="sync-button" class="button button-light" type="button"><span id="sync-icon"></span><span id="sync-label">同步数据</span></button></div></header>
       <div id="content" class="content"></div>
     </main>
   </div>
