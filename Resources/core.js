@@ -204,7 +204,8 @@
     return { version: VERSION, settings: { timezone: 'Asia/Shanghai', refreshMinutes: 15, selfStudy: true,
       seiueURL: configuredSchools.seiue, managebacURL: configuredSchools.managebac, teamsPages: [], teamsNotifications: false,
       teamsBrowser: 'chrome', teamsBrowserAutomation: false, teamsMode: 'browser', teamsAutoDiscover: true, graphIncludeChats: true,
-      reminderMinutes: 30, teamsDueOverrides: {}, dashboardTheme: 'classic', language: 'zh-CN', focusSubjects: [], focusTeamsChannels: [], customLessons: [] }, snapshots: { seiue: {}, managebac: {}, teams: {} },
+      reminderMinutes: 30, teamsDueOverrides: {}, dashboardTheme: 'classic', language: 'zh-CN', focusSubjects: [], focusTeamsChannels: [], customLessons: [],
+      scheduleHolidays: [], scheduleWeekAnchor: '', scheduleOverrides: [] }, snapshots: { seiue: {}, managebac: {}, teams: {} },
       manualTasks: [], taskChecks: {}, feedbackRead: {}, gradeHistory: [] };
   }
   function scheduleRow(row) {
@@ -224,6 +225,14 @@
     if (end <= start) fail('节次结束时间必须晚于开始时间');
     return { period, start, end };
   }
+  function dateList(value, name, limit) {
+    return [...new Set(array(value, name, limit || 366).map(dayKey))].sort();
+  }
+  function weekPattern(value) {
+    const pattern = str(value, 10, 'all').toLowerCase();
+    if (!['all', 'odd', 'even'].includes(pattern)) fail('单双周设置无效');
+    return pattern;
+  }
   function customLessonRow(row) {
     record(row, '自编课程');
     const title = str(row.title || row.subject, 300);
@@ -240,8 +249,30 @@
       end = String(Math.floor(total / 60)).padStart(2, '0') + ':' + String(total % 60).padStart(2, '0');
     }
     if (!period && !start) fail('自编课程需要节次或开始时间');
+    const skipDates = dateList(row.skipDates, '自编课程跳过日期', 366);
     return { id: id(row.id, 'custom-' + hash(title + date + period + start)), title, room: str(row.room, 200),
-      date, weekdays: [...new Set(weekdays)].sort((a, b) => a - b), period, start, end, byTime: bool(row.byTime, Boolean(start)) };
+      date, weekdays: [...new Set(weekdays)].sort((a, b) => a - b), weekPattern: weekPattern(row.weekPattern), skipDates,
+      period, start, end, byTime: bool(row.byTime, Boolean(start)), temporary: bool(row.temporary, Boolean(date)) };
+  }
+  function scheduleOverrideRow(row) {
+    record(row, '临时调课');
+    const date = dayKey(row.date), action = str(row.action, 20, 'replace').toLowerCase();
+    if (!['cancel', 'replace'].includes(action)) fail('临时调课动作无效');
+    const targetId = row.targetId === undefined || row.targetId === '' ? '' : id(row.targetId);
+    const targetPeriod = str(row.targetPeriod, 40);
+    const targetStart = row.targetStart === undefined || row.targetStart === '' ? '' : timeKey(row.targetStart);
+    const targetEnd = row.targetEnd === undefined || row.targetEnd === '' ? '' : timeKey(row.targetEnd);
+    if (action === 'cancel' && !targetId && !targetPeriod && !targetStart) fail('取消课程需要指定目标节次或时间');
+    const title = str(row.title, 300, '临时课程');
+    const start = row.start === undefined || row.start === '' ? '' : timeKey(row.start);
+    let end = row.end === undefined || row.end === '' ? '' : timeKey(row.end);
+    if (start && (!end || end <= start)) {
+      const total = Number(start.slice(0, 2)) * 60 + Number(start.slice(3)) + 45;
+      end = String(Math.floor((total % 1440) / 60)).padStart(2, '0') + ':' + String(total % 60).padStart(2, '0');
+    }
+    if (action === 'replace' && !start && !row.period) fail('临时调课需要新的节次或开始时间');
+    return { id: id(row.id, 'override-' + hash(date + action + targetPeriod + start + title)), date, action, targetId,
+      targetPeriod, targetStart, targetEnd, title, room: str(row.room, 200), period: str(row.period, 40), start, end };
   }
   function courseRow(row) {
     record(row, '成绩');
@@ -514,6 +545,9 @@
       s.settings[key] = items;
     }
     s.settings.customLessons = array(settings.customLessons, '自编课程', 500).map(customLessonRow);
+    s.settings.scheduleHolidays = dateList(settings.scheduleHolidays, '课表节假日', 366);
+    s.settings.scheduleWeekAnchor = settings.scheduleWeekAnchor === undefined || settings.scheduleWeekAnchor === '' ? '' : dayKey(settings.scheduleWeekAnchor);
+    s.settings.scheduleOverrides = array(settings.scheduleOverrides, '临时调课', 500).map(scheduleOverrideRow);
     if (settings.teamsDueOverrides !== undefined) {
       const overrides = record(settings.teamsDueOverrides, 'Teams 截止时间');
       if (Object.keys(overrides).length > MAX_ROWS) fail('手动截止时间过多');
@@ -569,9 +603,27 @@
     return inferred.sort((a, b) => a.start.localeCompare(b.start));
   }
   function weekdayKey(value) { return new Date(value + 'T12:00:00Z').getUTCDay(); }
+  function weekParity(key, anchor) {
+    if (!anchor) return 'all';
+    const start = new Date(anchor + 'T12:00:00Z'), current = new Date(key + 'T12:00:00Z');
+    const startMonday = (start.getUTCDay() + 6) % 7, currentMonday = (current.getUTCDay() + 6) % 7;
+    start.setUTCDate(start.getUTCDate() - startMonday); current.setUTCDate(current.getUTCDate() - currentMonday);
+    const weeks = Math.floor((current.valueOf() - start.valueOf()) / (7 * 86400000));
+    return ((weeks % 2) + 2) % 2 === 0 ? 'odd' : 'even';
+  }
+  function scheduleOverrideMatches(row, override) {
+    if (override.targetId && row.id === override.targetId) return true;
+    if (override.targetPeriod && String(row.period || '').toUpperCase() === override.targetPeriod.toUpperCase()) return true;
+    if (override.targetStart && row.start === override.targetStart && (!override.targetEnd || row.end === override.targetEnd)) return true;
+    return false;
+  }
   function customScheduleForDay(state, key) {
-    const periods = getSchedulePeriods(state), weekday = weekdayKey(key);
-    return (state.settings.customLessons || []).filter(item => item.date === key || (!item.date && item.weekdays.includes(weekday))).map(item => {
+    const periods = getSchedulePeriods(state), weekday = weekdayKey(key), holiday = (state.settings.scheduleHolidays || []).includes(key), parity = weekParity(key, state.settings.scheduleWeekAnchor);
+    return (state.settings.customLessons || []).filter(item => {
+      if (item.date === key) return true;
+      if (item.date || holiday || (item.skipDates || []).includes(key) || !item.weekdays.includes(weekday)) return false;
+      return item.weekPattern === 'all' || item.weekPattern === parity;
+    }).map(item => {
       const period = periods.find(candidate => candidate.period.toUpperCase() === item.period.toUpperCase());
       const start = item.start || (period && period.start) || '';
       let end = item.end || (period && period.end) || '';
@@ -580,8 +632,25 @@
         end = String(Math.floor(total / 60)).padStart(2, '0') + ':' + String(total % 60).padStart(2, '0');
       }
       return { id: item.id + '@' + key, date: key, start, end, title: item.title, room: item.room, teacher: '',
-        isSelfStudy: false, custom: true, period: item.period, byTime: item.byTime };
+        isSelfStudy: false, custom: true, period: item.period, byTime: item.byTime, temporary: item.temporary };
     });
+  }
+  function applyScheduleOverrides(rows, state, key, periods) {
+    const overrides = (state.settings.scheduleOverrides || []).filter(item => item.date === key);
+    if (!overrides.length) return rows;
+    const filtered = rows.filter(row => !overrides.some(item => item.action === 'cancel' || item.action === 'replace' ? scheduleOverrideMatches(row, item) : false));
+    const additions = overrides.filter(item => item.action === 'replace').map(item => {
+      const period = periods.find(candidate => String(candidate.period).toUpperCase() === String(item.period || item.targetPeriod).toUpperCase());
+      const start = item.start || (period && period.start) || item.targetStart || '';
+      let end = item.end || (period && period.end) || item.targetEnd || '';
+      if (start && !end) {
+        const total = Number(start.slice(0, 2)) * 60 + Number(start.slice(3)) + 45;
+        end = String(Math.floor((total % 1440) / 60)).padStart(2, '0') + ':' + String(total % 60).padStart(2, '0');
+      }
+      return { id: item.id + '@' + key, date: key, start, end, title: item.title, room: item.room, teacher: '',
+        isSelfStudy: false, custom: true, temporary: true, period: item.period || item.targetPeriod, byTime: Boolean(item.start) };
+    });
+    return filtered.concat(additions);
   }
   function schedulePeriodForRow(row, periods) {
     if (row.period) return row.period;
@@ -599,8 +668,10 @@
   function getSchedule(state, date, includeSelfStudy) {
     const key = typeof date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(date) ? dayKey(date) : today(date, state.settings.timezone);
     const periods = getSchedulePeriods(state), seen = new Set(), rows = [];
+    const holiday = (state.settings.scheduleHolidays || []).includes(key);
     // One slot gets the latest authoritative title, including a change to self-study.
     for (const s of entries(state, 'seiue')) {
+      if (holiday) break;
       for (const r of s.schedule || []) {
         if (r.date !== key) continue;
         const slot = r.date + '|' + r.start + '|' + r.end;
@@ -613,8 +684,9 @@
       if ((s.calendarDates || []).includes(key)) break;
     }
     rows.push(...customScheduleForDay(state, key));
+    const adjusted = applyScheduleOverrides(rows, state, key, periods);
     const order = new Map(periods.map((period, index) => [String(period.period).toUpperCase(), index]));
-    return rows.sort((a, b) => {
+    return adjusted.sort((a, b) => {
       const ap = order.has(String(a.period || '').toUpperCase()) ? order.get(String(a.period).toUpperCase()) : 999;
       const bp = order.has(String(b.period || '').toUpperCase()) ? order.get(String(b.period).toUpperCase()) : 999;
       return ap - bp || String(a.start || '99:99').localeCompare(String(b.start || '99:99')) || String(a.title || '').localeCompare(String(b.title || ''));

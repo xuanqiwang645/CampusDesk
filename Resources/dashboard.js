@@ -14,6 +14,9 @@
   let taskSubjectFilter = 'all';
   let customScheduleMode = 'period';
   let customScheduleDays = [];
+  let customScheduleKind = 'weekly';
+  let customSchedulePattern = 'all';
+  let customScheduleOneDate = '';
   let customScheduleDraft = { title: '', room: '', period: '', start: '', end: '' };
   let feedbackFilter = 'all';
   let teamsFilter = 'all';
@@ -74,12 +77,19 @@
     '距离下课': 'Class ends in', '课间剩余': 'Break remaining', '午间休息剩余': 'Lunch break remaining', '距离第一节课': 'First class starts in', '今日课程已结束': 'Classes are finished for today', '等待今日课表': 'Waiting for today\'s schedule', '课表缓存待更新 · ': 'Schedule cache needs updating · ', '基于已读取课表 · ': 'Based on captured schedule · ', '今日课程倒计时': 'Today\'s class countdown', '时间待定': 'Time TBD', '已读取课节均已结束，可以查看接下来的待办。': 'All captured classes have ended; you can review the next to-dos.', '同步希悦当天课表后，这里显示课间倒计时。': 'After syncing today\'s schedule, break countdowns appear here.',
     '正在读取学校页面…': 'Reading school pages…', '最近读取 ': 'Last read ', '尚未同步': 'Not synced', '界面语言已切换为 English。': 'Interface language changed to English.', 'Interface language changed to Simplified Chinese.': '界面语言已切换为简体中文。'
   });
+  const scheduleEnglish = Object.freeze({
+    '每周课程': 'Weekly class', '一次性课程': 'One-time class', '单双周': 'Week pattern', '每周': 'Every week', '单周': 'Odd weeks', '双周': 'Even weeks',
+    '单周/双周基准周（周一）': 'Anchor Monday for odd/even weeks', '节假日与临时调课': 'Holidays & temporary changes', '添加节假日': 'Add holiday', '临时调课日期': 'Adjustment date',
+    '取消当天课程': 'Cancel class', '替换当天课程': 'Replace class', '原课程节次': 'Original period', '新课程节次': 'New period', '保存临时调课': 'Save temporary change',
+    '成绩百分比分布': 'Percentage grade distribution', '暂无可绘制的百分制成绩。': 'No percentage grades are available for the chart.', '节假日': 'Holiday', '临时调课': 'Temporary change', '移除': 'Remove'
+  });
   function isEnglish() { return state.settings.language === 'en-US'; }
-  function t(value) { return isEnglish() && typeof value === 'string' ? (english[value] || value) : value; }
+  function t(value) { return isEnglish() && typeof value === 'string' ? (english[value] || scheduleEnglish[value] || value) : value; }
   function pageName(key) { return t(pageNames[key] || key); }
   function localizeMarkup(markup) {
     if (!isEnglish()) return markup;
-    return Object.keys(english).sort((a, b) => b.length - a.length).reduce((result, source) => result.split(source).join(english[source]), markup);
+    const labels = Object.assign({}, english, scheduleEnglish);
+    return Object.keys(labels).sort((a, b) => b.length - a.length).reduce((result, source) => result.split(source).join(labels[source]), markup);
   }
   function localizedHTML(renderMarkup) {
     markupEscapes = [];
@@ -87,7 +97,7 @@
       const output = localizeMarkup(renderMarkup());
       return output.replace(/\uE000(\d+)\uE001/g, (_, index) => {
         const value = markupEscapes[Number(index)] || '';
-        return isEnglish() && Object.prototype.hasOwnProperty.call(english, value) ? english[value] : value;
+        return isEnglish() && Object.prototype.hasOwnProperty.call(Object.assign({}, english, scheduleEnglish), value) ? (english[value] || scheduleEnglish[value]) : value;
       });
     } finally { markupEscapes = null; }
   }
@@ -297,17 +307,33 @@
     const hit = customBestPeriod(customScheduleDraft.start, customScheduleDraft.end);
     hint.textContent = hit ? '将归入 ' + hit.period + (hit.start ? ' · ' + hit.start + '–' + hit.end : '') : '未匹配节次，将按开始时间插入';
   }
+  function renderScheduleRules() {
+    const holidays = state.settings.scheduleHolidays || [], overrides = state.settings.scheduleOverrides || [];
+    const periods = customPeriods();
+    const holidayRows = holidays.map(date => '<span class="schedule-rule-chip">' + esc(date) + '<button type="button" data-action="remove-holiday" data-date="' + esc(date) + '" aria-label="' + esc(t('移除')) + '">×</button></span>').join('');
+    const overrideRows = overrides.map(item => '<div class="custom-lesson-row"><div><strong>' + esc(item.date + ' · ' + (item.action === 'cancel' ? t('取消当天课程') : item.title)) + '</strong><small>' + esc((item.targetPeriod || item.targetStart || '') + (item.period ? ' → ' + item.period : '') + (item.start ? ' · ' + item.start + (item.end ? '–' + item.end : '') : '') + (item.room ? ' · ' + item.room : '')) + '</small></div><button class="icon-button" type="button" data-action="remove-schedule-override" data-id="' + esc(item.id) + '" aria-label="' + esc(t('移除')) + '" title="' + esc(t('移除')) + '">' + icon('trash') + '</button></div>').join('');
+    return '<section class="card custom-schedule-card schedule-rules-card"><div class="card-header"><h2 class="card-title"><span class="icon">' + icon('settings') + '</span>' + t('节假日与临时调课') + '</h2></div><div class="custom-schedule-grid"><label><span>' + t('单周/双周基准周（周一）') + '</span><input id="schedule-week-anchor" type="date" value="' + esc(state.settings.scheduleWeekAnchor || '') + '"></label><label><span>' + t('添加节假日') + '</span><div class="inline-form"><input id="holiday-date" type="date"><button type="button" class="button button-light" data-action="add-holiday">' + t('添加节假日') + '</button></div></label></div>' + (holidayRows ? '<div class="schedule-rule-chips">' + holidayRows + '</div>' : '<p class="custom-schedule-note">尚未设置节假日；设置后当天常规课表和每周自编课程会隐藏。</p>') + '<form id="schedule-override-form" class="custom-schedule-form"><div class="custom-schedule-grid"><label><span>' + t('临时调课日期') + '</span><input id="override-date" type="date" required></label><label><span>操作</span><select id="override-action"><option value="replace">' + t('替换当天课程') + '</option><option value="cancel">' + t('取消当天课程') + '</option></select></label><label><span>' + t('原课程节次') + '</span><select id="override-target-period"><option value="">—</option>' + periods.map(item => '<option value="' + esc(item.period) + '">' + esc(item.period) + '</option>').join('') + '</select></label><label><span>' + t('新课程节次') + '</span><select id="override-period"><option value="">—</option>' + periods.map(item => '<option value="' + esc(item.period) + '">' + esc(item.period) + '</option>').join('') + '</select></label><label><span>' + t('课程名称') + '</span><input id="override-title" maxlength="300" placeholder="如：调课后的课程"></label><label><span>' + t('教室（可选）') + '</span><input id="override-room" maxlength="200"></label><label><span>' + t('开始时间') + '</span><input id="override-start" type="time"></label><label><span>' + t('结束时间') + '</span><input id="override-end" type="time"></label></div><button class="button button-light" type="submit">' + t('保存临时调课') + '</button></form>' + (overrideRows ? '<div class="custom-lesson-list"><div class="custom-schedule-label">' + t('临时调课') + ' ' + overrides.length + '</div>' + overrideRows + '</div>' : '') + '</section>';
+  }
   function renderCustomSchedule() {
     const periods = customPeriods(), days = [1, 2, 3, 4, 5, 6, 0], labels = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'];
-    const draft = customScheduleDraft, lessons = state.settings.customLessons || [];
-    const mode = customScheduleMode === 'time' ? 'time' : 'period';
+    const draft = customScheduleDraft, lessons = state.settings.customLessons || [], mode = customScheduleMode === 'time' ? 'time' : 'period';
     const rows = lessons.map((lesson, index) => {
       const when = lesson.date || (lesson.weekdays || []).map(day => ['周日', '周一', '周二', '周三', '周四', '周五', '周六'][day]).join('、');
+      const pattern = !lesson.date && lesson.weekPattern && lesson.weekPattern !== 'all' ? ' · ' + (lesson.weekPattern === 'odd' ? '单周' : '双周') : '';
       const period = lesson.period ? lesson.period + ' · ' : '';
-      return '<div class="custom-lesson-row"><div><strong>' + esc(period + (lesson.start || '') + (lesson.end ? '–' + lesson.end : '') + ' · ' + lesson.title) + '</strong><small>' + esc(when + (lesson.room ? ' · ' + lesson.room : '')) + '</small></div><button class="icon-button" type="button" data-action="delete-custom-lesson" data-index="' + index + '" aria-label="' + esc(t('删除自编课程')) + '" title="' + esc(t('删除自编课程')) + '">' + icon('trash') + '</button></div>';
+      return `<div class="custom-lesson-row"><div><strong>${esc(period + (lesson.start || '') + (lesson.end ? '–' + lesson.end : '') + ' · ' + lesson.title)}</strong><small>${esc(when + pattern + (lesson.room ? ' · ' + lesson.room : ''))}</small></div><button class="icon-button" type="button" data-action="delete-custom-lesson" data-index="${index}" aria-label="${esc(t('删除自编课程'))}" title="${esc(t('删除自编课程'))}">${icon('trash')}</button></div>`;
     }).join('');
+    const kind = customScheduleKind === 'once' ? 'once' : 'weekly';
+    /*
     return '<section class="card custom-schedule-card">' + cardHeader('schedule', '自编课表', '<span class="card-kicker">' + t('添加自编课程') + '</span>') +
-      '<form id="custom-schedule-form" class="custom-schedule-form"><div class="custom-schedule-grid"><label><span>' + t('课程名称') + '</span><input id="custom-title" type="text" maxlength="300" value="' + esc(draft.title) + '" placeholder="如：晨会、社团"></label><label><span>' + t('教室（可选）') + '</span><input id="custom-room" type="text" maxlength="200" value="' + esc(draft.room) + '" placeholder="如：操场"></label></div><div class="custom-schedule-label">' + t('选择星期') + '</div><div class="custom-days">' + days.map((day, index) => '<button type="button" class="custom-day ' + (customScheduleDays.includes(day) ? 'active' : '') + '" data-action="custom-day" data-day="' + day + '">' + t(labels[index]) + '</button>').join('') + '</div><div class="custom-mode-tabs"><button type="button" class="custom-mode ' + (mode === 'period' ? 'active' : '') + '" data-action="custom-mode" data-mode="period">' + t('按节次') + '</button><button type="button" class="custom-mode ' + (mode === 'time' ? 'active' : '') + '" data-action="custom-mode" data-mode="time">' + t('按时刻') + '</button></div><div class="custom-schedule-grid ' + (mode === 'time' ? 'is-time' : '') + '"><label class="custom-period-field"><span>' + t('第几节') + '</span><select id="custom-period">' + periods.map(item => '<option value="' + esc(item.period) + '"' + (item.period === draft.period ? ' selected' : '') + '>' + esc(item.period) + (item.start ? ' · ' + esc(item.start) + '–' + esc(item.end) : '') + '</option>').join('') + '</select></label><label><span>' + t('开始时间') + '</span><input id="custom-start" type="time" value="' + esc(draft.start) + '"></label><label><span>' + t('结束时间') + '</span><input id="custom-end" type="time" value="' + esc(draft.end) + '"></label></div><p id="custom-time-hint" class="custom-time-hint">' + esc(mode === 'period' ? '选择节次后自动带出时间' : '填入开始时间后会自动识别节次') + '</p><p class="custom-schedule-note">' + t('结束时间将自动补为开始时间后 45 分钟。') + ' ' + t('按时间填写时，会按重叠比例自动归入对应节次。') + '</p><button class="button button-primary" type="submit">' + icon('plus') + t('保存自编课程') + '</button></form>' + (rows ? '<div class="custom-lesson-list"><div class="custom-schedule-label">' + t('已添加') + ' ' + lessons.length + '</div>' + rows + '</div>' : '') + '</section>';
+      '<form id="custom-schedule-form" class="custom-schedule-form"><div class="custom-schedule-grid"><label><span>' + t('课程名称') + '</span><input id="custom-title" type="text" maxlength="300" value="' + esc(draft.title) + '" placeholder="如：晨会、社团"></label><label><span>' + t('教室（可选）') + '</span><input id="custom-room" type="text" maxlength="200" value="' + esc(draft.room) + '" placeholder="如：操场"></label></div><div class="custom-mode-tabs"><button type="button" class="custom-mode ' + (kind === 'weekly' ? 'active' : '') + '" data-action="custom-kind" data-kind="weekly">' + t('每周课程') + '</button><button type="button" class="custom-mode ' + (kind === 'once' ? 'active' : '') + '" data-action="custom-kind" data-kind="once">' + t('一次性课程') + '</button></div>' + (kind === 'weekly' ? '<div class="custom-schedule-label">' + t('选择星期') + '</div><div class="custom-days">' + days.map((day, index) => '<button type="button" class="custom-day ' + (customScheduleDays.includes(day) ? 'active' : '') + '" data-action="custom-day" data-day="' + day + '">' + t(labels[index]) + '</button>').join('') + '</div><label class="custom-inline-select"><span>' + t('单双周') + '</span><select id="custom-week-pattern"><option value="all"' + (customSchedulePattern === 'all' ? ' selected' : '') + '>' + t('每周') + '</option><option value="odd"' + (customSchedulePattern === 'odd' ? ' selected' : '') + '>' + t('单周') + '</option><option value="even"' + (customSchedulePattern === 'even' ? ' selected' : '') + '>' + t('双周') + '</option></select></label>' : '<label><span>上课日期</span><input id="custom-one-date" type="date" value="' + esc(customScheduleOneDate) + '"></label>') + '<div class="custom-mode-tabs"><button type="button" class="custom-mode ' + (mode === 'period' ? 'active' : '') + '" data-action="custom-mode" data-mode="period">' + t('按节次') + '</button><button type="button" class="custom-mode ' + (mode === 'time' ? 'active' : '') + '" data-action="custom-mode" data-mode="time">' + t('按时刻') + '</button></div><div class="custom-schedule-grid ' + (mode === 'time' ? 'is-time' : '') + '"><label class="custom-period-field"><span>' + t('第几节') + '</span><select id="custom-period">' + periods.map(item => '<option value="' + esc(item.period) + '"' + (item.period === draft.period ? ' selected' : '') + '>' + esc(item.period) + (item.start ? ' · ' + esc(item.start) + '–' + esc(item.end) : '') + '</option>').join('') + '</select></label><label><span>' + t('开始时间') + '</span><input id="custom-start" type="time" value="' + esc(draft.start) + '"></label><label><span>' + t('结束时间') + '</span><input id="custom-end" type="time" value="' + esc(draft.end) + '"></label></div><p id="custom-time-hint" class="custom-time-hint">' + esc(mode === 'period' ? '选择节次后自动带出时间' : '填入开始时间后会自动识别节次') + '</p><p class="custom-schedule-note">' + t('结束时间将自动补为开始时间后 45 分钟。') + ' ' + t('按时间填写时，会按重叠比例自动归入对应节次。')</p><button class="button button-primary" type="submit">' + icon('plus') + t('保存自编课程') + '</button></form>' + (rows ? '<div class="custom-lesson-list"><div class="custom-schedule-label">' + t('已添加') + ' ' + lessons.length + '</div>' + rows + '</div>' : '') + '</section>' + renderScheduleRules();
+    */
+    const weekdays = days.map((day, index) => `<button type="button" class="custom-day ${customScheduleDays.includes(day) ? 'active' : ''}" data-action="custom-day" data-day="${day}">${t(labels[index])}</button>`).join('');
+    const periodOptions = periods.map(item => `<option value="${esc(item.period)}"${item.period === draft.period ? ' selected' : ''}>${esc(item.period)}${item.start ? ' · ' + esc(item.start) + '–' + esc(item.end) : ''}</option>`).join('');
+    const scheduleKind = kind === 'weekly'
+      ? `<div class="custom-schedule-label">${t('选择星期')}</div><div class="custom-days">${weekdays}</div><label class="custom-inline-select"><span>${t('单双周')}</span><select id="custom-week-pattern"><option value="all"${customSchedulePattern === 'all' ? ' selected' : ''}>${t('每周')}</option><option value="odd"${customSchedulePattern === 'odd' ? ' selected' : ''}>${t('单周')}</option><option value="even"${customSchedulePattern === 'even' ? ' selected' : ''}>${t('双周')}</option></select></label>`
+      : `<label><span>上课日期</span><input id="custom-one-date" type="date" value="${esc(customScheduleOneDate)}"></label>`;
+    return `<section class="card custom-schedule-card">${cardHeader('schedule', '自编课表', '<span class="card-kicker">' + t('添加自编课程') + '</span>')}<form id="custom-schedule-form" class="custom-schedule-form"><div class="custom-schedule-grid"><label><span>${t('课程名称')}</span><input id="custom-title" type="text" maxlength="300" value="${esc(draft.title)}" placeholder="如：晨会、社团"></label><label><span>${t('教室（可选）')}</span><input id="custom-room" type="text" maxlength="200" value="${esc(draft.room)}" placeholder="如：操场"></label></div><div class="custom-mode-tabs"><button type="button" class="custom-mode ${kind === 'weekly' ? 'active' : ''}" data-action="custom-kind" data-kind="weekly">${t('每周课程')}</button><button type="button" class="custom-mode ${kind === 'once' ? 'active' : ''}" data-action="custom-kind" data-kind="once">${t('一次性课程')}</button></div>${scheduleKind}<div class="custom-mode-tabs"><button type="button" class="custom-mode ${mode === 'period' ? 'active' : ''}" data-action="custom-mode" data-mode="period">${t('按节次')}</button><button type="button" class="custom-mode ${mode === 'time' ? 'active' : ''}" data-action="custom-mode" data-mode="time">${t('按时刻')}</button></div><div class="custom-schedule-grid ${mode === 'time' ? 'is-time' : ''}"><label class="custom-period-field"><span>${t('第几节')}</span><select id="custom-period">${periodOptions}</select></label><label><span>${t('开始时间')}</span><input id="custom-start" type="time" value="${esc(draft.start)}"></label><label><span>${t('结束时间')}</span><input id="custom-end" type="time" value="${esc(draft.end)}"></label></div><p id="custom-time-hint" class="custom-time-hint">${mode === 'period' ? '选择节次后自动带出时间' : '填入开始时间后会自动识别节次'}</p><p class="custom-schedule-note">${t('结束时间将自动补为开始时间后 45 分钟。')} ${t('按时间填写时，会按重叠比例自动归入对应节次。')}</p><button class="button button-primary" type="submit">${icon('plus')}${t('保存自编课程')}</button></form>${rows ? '<div class="custom-lesson-list"><div class="custom-schedule-label">' + t('已添加') + ' ' + lessons.length + '</div>' + rows + '</div>' : ''}</section>${renderScheduleRules()}`;
   }
   function scheduleRows(rows, date) {
     const now = Core.clock(), today = Core.today();
@@ -329,6 +355,21 @@
     return { official: official, estimate: estimate, courses: courses };
   }
   function gpaValue(value, scale) { return '<div class="gpa-value">' + (value == null || !Number.isFinite(Number(value)) ? '—' : Number(value).toFixed(2)) + '<small>/ ' + esc(scale || '4.00') + '</small></div>'; }
+  function renderGradePie(courses) {
+    const bands = [
+      { label: '90–100%', color: '#4f8a70', test: value => value >= 90 },
+      { label: '80–89%', color: '#7098bc', test: value => value >= 80 && value < 90 },
+      { label: '70–79%', color: '#b79253', test: value => value >= 70 && value < 80 },
+      { label: '60–69%', color: '#c47768', test: value => value >= 60 && value < 70 },
+      { label: '<60%', color: '#8e879f', test: value => value < 60 }
+    ];
+    const eligible = courses.filter(course => course.percentage != null && Number.isFinite(Number(course.percentage)) && course.gpaEligible !== false);
+    if (!eligible.length) return '<section class="card grade-distribution"><div class="card-header"><h2 class="card-title"><span class="icon">' + icon('grades') + '</span>' + t('成绩百分比分布') + '</h2></div><p class="subtle">' + t('暂无可绘制的百分制成绩。') + '</p></section>';
+    const counts = bands.map(band => eligible.filter(course => band.test(Number(course.percentage))).length), total = eligible.length;
+    let cursor = 0;
+    const stops = counts.map((count, index) => { const start = cursor; cursor += count / total * 100; return bands[index].color + ' ' + start.toFixed(2) + '% ' + cursor.toFixed(2) + '%'; }).join(', ');
+    return '<section class="card grade-distribution"><div class="card-header"><h2 class="card-title"><span class="icon">' + icon('grades') + '</span>' + t('成绩百分比分布') + '</h2><span class="card-kicker">' + total + ' 门课程</span></div><div class="grade-pie-layout"><div class="grade-pie" style="background:conic-gradient(' + stops + ')" role="img" aria-label="' + esc(t('成绩百分比分布')) + '"></div><div class="grade-pie-legend">' + bands.map((band, index) => '<div class="grade-pie-legend-row"><span class="grade-pie-swatch" style="background:' + band.color + '"></span><span>' + band.label + '</span><strong>' + (counts[index] / total * 100).toFixed(1) + '%</strong><small>' + counts[index] + ' 门</small></div>').join('') + '</div></div><p class="gpa-note">按已读取的百分制课程总评统计；不改变上方数字 GPA 的计算方式。</p></section>';
+  }
   function taskDue(task) {
     if (!task.dueAt) return { label: task.dueLabel || '未设置截止日期', overdue: false };
     const time = new Date(task.dueAt).getTime();
@@ -514,7 +555,7 @@
     const gpa = getGpaView();
     return heading('看见积累，也看见进步。', '先确认成绩来自哪一门课、哪一个学期，再理解 GPA。', button(icon('link') + '打开成绩页面', 'open-source', 'data-source="managebac"')) +
       '<div class="grade-top"><section class="card">' + cardHeader('grades', '学校 GPA', '<span class="card-kicker">学校公布</span>') + gpaValue(gpa.official && gpa.official.value, gpa.official ? gpa.official.scale : '—') + '<p class="gpa-note">' + (gpa.official ? esc(gpa.official.label || '来自已读取的学校页面，以正式成绩单为准。') : '尚未读取到学校公布的 GPA。这里不会用参考值替代。') + '</p></section><section class="card">' + cardHeader('grades', '参考 GPA', '<span class="card-kicker">非官方 · 4.0 制</span>') + gpaValue(gpa.estimate.value, '4.00') + '<p class="gpa-note">根据 ' + esc(gpa.estimate.count || 0) + ' 门可用课程等权估算' + (gpa.estimate.excluded ? '，另有 ' + esc(gpa.estimate.excluded) + ' 门未计入' : '') + '。</p></section></div>' +
-      '<div class="info-note">参考换算：90–100 → 4.0；80–89.99 → 3.0；70–79.99 → 2.0；60–69.99 → 1.0；低于 60 → 0。仅使用能确认的当前学期课程总评，不把单次作业分数当总评；不含学分与 AP 加权，也不代表学校的换算规则。</div><section class="card">' + cardHeader('book', '课程成绩', '<span class="card-kicker">' + gpa.courses.length + ' 门已读取课程</span>') +
+      '<div class="info-note">参考换算：90–100 → 4.0；80–89.99 → 3.0；70–79.99 → 2.0；60–69.99 → 1.0；低于 60 → 0。仅使用能确认的当前学期课程总评，不把单次作业分数当总评；不含学分与 AP 加权，也不代表学校的换算规则。</div>' + renderGradePie(gpa.courses) + '<section class="card">' + cardHeader('book', '课程成绩', '<span class="card-kicker">' + gpa.courses.length + ' 门已读取课程</span>') +
       (gpa.courses.length ? '<div style="overflow-x:auto"><table class="grade-table"><thead><tr><th>课程</th><th>学期</th><th>百分制总评</th><th>参考绩点</th><th></th></tr></thead><tbody>' + gpa.courses.map(c => '<tr><td class="course-name">' + esc(c.name) + '</td><td>' + esc(c.term || '未确认') + '</td><td class="num">' + (c.percentage == null ? '—' : esc(Number(c.percentage).toFixed(1)) + '%') + (c.percentage == null ? '' : '<span class="grade-bar"><span style="width:' + Math.max(0, Math.min(100, Number(c.percentage) || 0)) + '%"></span></span>') + '</td><td class="num">' + (c.gpaEligible === false || c.percentage == null ? '未计入' : Core.estimateGPA([c]).value == null ? '未计入' : Number(Core.estimateGPA([c]).value).toFixed(2)) + '</td><td>' + (c.url ? '<button type="button" class="icon-button" data-action="open-source" data-source="managebac" data-url="' + esc(c.url) + '" aria-label="打开课程成绩">' + icon('link') + '</button>' : '') + '</td></tr>').join('') + '</tbody></table></div>' : empty('grades', '你的成绩，值得准确地记录', '登录 ManageBac 并打开当前学期成绩页面。读取到课程总评后，参考 GPA 会自动计算。', button('打开 ManageBac', 'open-source', 'data-source="managebac"'))) + sourceFooter('managebac') + '</section>' + renderHistory();
   }
   function renderHistory() {
@@ -922,6 +963,11 @@
       customScheduleDays = customScheduleDays.includes(day) ? customScheduleDays.filter(item => item !== day) : customScheduleDays.concat(day).sort((a, b) => a - b);
       render();
     }
+    else if (action === 'custom-kind') {
+      customCaptureDraft();
+      customScheduleKind = target.dataset.kind === 'once' ? 'once' : 'weekly';
+      render();
+    }
     else if (action === 'custom-mode') {
       customCaptureDraft();
       const mode = target.dataset.mode === 'time' ? 'time' : 'period';
@@ -940,6 +986,23 @@
       if (!Number.isInteger(index) || index < 0 || index >= lessons.length) return;
       state.settings.customLessons = lessons.slice(0, index).concat(lessons.slice(index + 1));
       persist(); render(); toast('已删除自编课程。');
+    }
+    else if (action === 'add-holiday') {
+      const input = document.getElementById('holiday-date'), value = input && input.value;
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(value || '')) { toast('请选择有效的节假日日期。'); return; }
+      const holidays = state.settings.scheduleHolidays || [];
+      if (!holidays.includes(value)) state.settings.scheduleHolidays = holidays.concat(value).sort();
+      persist(); render(); toast('节假日已加入课表规则。');
+    }
+    else if (action === 'remove-holiday') {
+      if (!window.confirm('移除这个节假日规则？当天课程会恢复显示。')) return;
+      state.settings.scheduleHolidays = (state.settings.scheduleHolidays || []).filter(date => date !== target.dataset.date);
+      persist(); render();
+    }
+    else if (action === 'remove-schedule-override') {
+      if (!window.confirm('移除这条临时调课规则？')) return;
+      state.settings.scheduleOverrides = (state.settings.scheduleOverrides || []).filter(item => item.id !== target.dataset.id);
+      persist(); render();
     }
     else if (action === 'export') { if (!send('exportData')) exportBrowser(); }
     else if (action === 'import') { if (!send('importData')) document.getElementById('import-file').click(); }
@@ -1010,14 +1073,37 @@
       customScheduleDraft.period = el.value;
       customSyncFromPeriod();
     }
+    else if (el.id === 'custom-week-pattern') customSchedulePattern = ['all', 'odd', 'even'].includes(el.value) ? el.value : 'all';
+    else if (el.id === 'custom-one-date') customScheduleOneDate = /^\d{4}-\d{2}-\d{2}$/.test(el.value) ? el.value : '';
+    else if (el.id === 'schedule-week-anchor') {
+      state.settings.scheduleWeekAnchor = /^\d{4}-\d{2}-\d{2}$/.test(el.value) ? el.value : '';
+      persist(); render(); toast('单双周基准周已保存。');
+    }
   });
   document.addEventListener('submit', event => {
-    if (!event.target || event.target.id !== 'custom-schedule-form') return;
+    if (!event.target) return;
+    if (event.target.id === 'schedule-override-form') {
+      event.preventDefault();
+      const date = document.getElementById('override-date').value, action = document.getElementById('override-action').value;
+      const targetPeriod = document.getElementById('override-target-period').value, period = document.getElementById('override-period').value;
+      const title = document.getElementById('override-title').value.trim() || '临时课程';
+      const start = document.getElementById('override-start').value, end = document.getElementById('override-end').value, room = document.getElementById('override-room').value.trim();
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) { toast('请选择有效的临时调课日期。'); return; }
+      if (action === 'cancel' && !targetPeriod) { toast('取消课程时请选择原课程节次。'); return; }
+      if (action === 'replace' && !period && !start) { toast('替换课程时请选择新节次或开始时间。'); return; }
+      const id = 'override-' + (window.crypto && window.crypto.randomUUID ? window.crypto.randomUUID() : Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8));
+      state.settings.scheduleOverrides = (state.settings.scheduleOverrides || []).concat({ id, date, action, targetPeriod, period, title, room, start, end });
+      persist(); render(); toast('临时调课已保存。');
+      return;
+    }
+    if (event.target.id !== 'custom-schedule-form') return;
     event.preventDefault();
     customCaptureDraft();
     const title = customScheduleDraft.title.trim();
     if (!title) { toast('请填写课程名称。'); return; }
-    if (!customScheduleDays.length) { toast(t('请选择至少一天')); return; }
+    if (customScheduleKind === 'weekly' && !customScheduleDays.length) { toast(t('请选择至少一天')); return; }
+    if (customScheduleKind === 'once' && !/^\d{4}-\d{2}-\d{2}$/.test(customScheduleOneDate)) { toast('请选择一次性课程日期。'); return; }
+    if (customScheduleKind === 'weekly' && customSchedulePattern !== 'all' && !state.settings.scheduleWeekAnchor) { toast('单双周课程需要先设置基准周（周一）。'); return; }
     let period = customScheduleDraft.period, start = customScheduleDraft.start, end = customScheduleDraft.end;
     if (customScheduleMode === 'period') {
       const times = customPeriodTimes(period);
@@ -1031,9 +1117,10 @@
       period = hit ? hit.period : '';
     }
     const id = 'custom-' + (window.crypto && window.crypto.randomUUID ? window.crypto.randomUUID() : Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10));
-    state.settings.customLessons = (state.settings.customLessons || []).concat({ id, title, room: customScheduleDraft.room.trim(), weekdays: customScheduleDays.slice().sort((a, b) => a - b), period, start, end, byTime: customScheduleMode === 'time' });
+    state.settings.customLessons = (state.settings.customLessons || []).concat({ id, title, room: customScheduleDraft.room.trim(), date: customScheduleKind === 'once' ? customScheduleOneDate : '', weekdays: customScheduleKind === 'weekly' ? customScheduleDays.slice().sort((a, b) => a - b) : [], weekPattern: customScheduleKind === 'weekly' ? customSchedulePattern : 'all', period, start, end, byTime: customScheduleMode === 'time', temporary: customScheduleKind === 'once' });
     persist();
     customScheduleDraft = { title: '', room: '', period: period || customScheduleDraft.period, start: '', end: '' };
+    customScheduleOneDate = '';
     render();
     toast('自编课程已添加。');
   });
