@@ -24,12 +24,17 @@ function contrast(foreground, background) {
   return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
 }
 
-test('the vivid theme loads after the to-do reminder icons', () => {
+test('the vivid theme and liquid-glass icon treatment load after the reminder icons', () => {
   const base = html.indexOf('href="style.css"');
   const reminders = html.indexOf('href="reminders.css"');
   const vivid = html.indexOf('href="vivid.css"');
-  assert.ok(base >= 0 && reminders > base && vivid > reminders);
+  const liquid = html.indexOf('href="liquid-glass.css"');
+  assert.ok(base >= 0 && reminders > base && vivid > reminders && liquid > vivid);
   assert.match(theme, /\.task-row\.done \.task-copy h3\s*\{\s*color:\s*#53685b/);
+  const glass = fs.readFileSync(path.join(resources, 'liquid-glass.css'), 'utf8');
+  assert.match(glass, /backdrop-filter:\s*blur\(13px\) saturate\(145%\)/);
+  assert.match(glass, /\.icon-button/);
+  assert.match(glass, /prefers-reduced-transparency/);
 });
 
 test('text, sidebar and primary button retain at least 4.5:1 contrast', () => {

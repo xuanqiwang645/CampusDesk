@@ -113,7 +113,7 @@ test('interface language setting persists and translates the application chrome 
   app.click({ action: 'dashboard-theme', theme: 'classic' });
   app.click({ page: 'overview' });
   assert.doesNotMatch(app.node('content').innerHTML, /[\u4e00-\u9fff]/);
-  for (const page of ['schedule', 'grades', 'tasks', 'feedback', 'teams', 'ec']) {
+  for (const page of ['schedule', 'grades', 'tasks', 'feedback', 'teams', 'ec', 'settings']) {
     app.click({ page });
     assert.doesNotMatch(app.node('content').innerHTML, /[\u4e00-\u9fff]/, 'English page contains Chinese text: ' + page);
   }
