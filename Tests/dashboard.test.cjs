@@ -107,6 +107,9 @@ test('estimated GPA is always presented with two decimal places', () => {
 
 test('tasks group by subject and Teams group by sender/channel with local focus controls', () => {
   const app = harness(); app.receive({ type: 'snapshot', snapshot: teamsSnapshot([task(), task({ id: 'math-work', title: 'Math work', course: 'Math' })]) }); app.receive({ type: 'snapshot', snapshot: { source: 'managebac', url: 'https://example-school.managebac.cn/tasks', capturedAt: '2026-09-19T00:42:00Z', warnings: [], courses: [], tasks: [{ id: 'biology-work', title: 'Biology work', course: 'Biology', dueAt: null, dueLabel: '', status: 'open', url: 'https://example-school.managebac.cn/tasks' }], feedback: [], officialGPA: null } });
+  assert.match(app.node('content').innerHTML, /Teams 作业/); assert.match(app.node('content').innerHTML, /ManageBac 作业/);
+  app.click({ page: 'settings' }); app.click({ action: 'dashboard-theme', theme: 'board' }); app.click({ page: 'overview' });
+  assert.match(app.node('content').innerHTML, /Teams 作业/); assert.match(app.node('content').innerHTML, /ManageBac 作业/);
   app.click({ page: 'tasks' });
   assert.match(app.node('content').innerHTML, /Teams 作业/); assert.match(app.node('content').innerHTML, /ManageBac 作业/); assert.match(app.node('content').innerHTML, /English/); assert.match(app.node('content').innerHTML, /Math/); assert.match(app.node('content').innerHTML, /Biology/);
   app.click({ action: 'toggle-focus-subject', value: 'English' });
