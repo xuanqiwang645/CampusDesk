@@ -24,7 +24,9 @@ campus_arch="$(uname -m)"
 case "$campus_arch" in arm64|x86_64) ;; *) echo "暂不支持此芯片架构：$campus_arch"; exit 1;; esac
 campus_build="${CAMPUSDESK_BUILD_DIR:-$campus_root/build}/CampusDesk.app"
 mkdir -p "$campus_build/Contents/MacOS" "$campus_build/Contents/Resources"
-/usr/bin/xcrun swiftc -swift-version 5 -O -target "$campus_arch-apple-macosx12.0" \
+# Keep compiler parallelism bounded so a local release build remains reliable
+# on Macs where Xcode and Teams are already using substantial memory.
+/usr/bin/xcrun swiftc -swift-version 5 -Osize -j 1 -target "$campus_arch-apple-macosx12.0" \
   -framework Cocoa -framework WebKit -framework UserNotifications -framework AuthenticationServices -framework Security -framework CryptoKit -framework PDFKit -framework Vision \
   "$campus_root"/Sources/*.swift -o "$campus_build/Contents/MacOS/CampusDesk"
 /usr/bin/ditto "$campus_root/Resources" "$campus_build/Contents/Resources"
