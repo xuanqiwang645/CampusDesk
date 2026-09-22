@@ -606,10 +606,11 @@
   }
   function ensureGpaValueOverlay(lib) {
     if (window.__campusGpaValueOverlay || !lib || typeof lib.registerOverlay !== 'function') return;
-    lib.registerOverlay({ name: 'campus-gpa-value-label', totalStep: 2, needDefaultPointFigure: false, needDefaultXAxisFigure: false, needDefaultYAxisFigure: false, mode: 'normal', createPointFigures: ({ coordinates, overlay }) => {
+    lib.registerOverlay({ name: 'campus-gpa-value-label', totalStep: 2, needDefaultPointFigure: false, needDefaultXAxisFigure: false, needDefaultYAxisFigure: false, mode: 'normal', createPointFigures: ({ coordinates, overlay, bounding }) => {
       const point = coordinates && coordinates[0], label = overlay && overlay.extendData && overlay.extendData.label;
       if (!point || !label) return [];
-      return [{ type: 'text', attrs: { x: point.x, y: point.y - 11, text: label, width: 38, height: 17, align: 'center', baseline: 'middle' }, styles: { style: 'stroke_fill', color: '#2e6650', size: 10, weight: 600, borderColor: '#d3e4d7', borderSize: 1, borderRadius: 4, backgroundColor: '#ffffff' } }];
+      const above = point.y - 11, labelY = above < 86 ? Math.min(point.y + 21, Math.max(96, (bounding && bounding.height || 500) - 20)) : above;
+      return [{ type: 'text', attrs: { x: point.x, y: labelY, text: label, width: 38, height: 17, align: 'center', baseline: 'middle' }, styles: { style: 'stroke_fill', color: '#2e6650', size: 10, weight: 600, borderColor: '#d3e4d7', borderSize: 1, borderRadius: 4, backgroundColor: '#ffffff' } }];
     } });
     window.__campusGpaValueOverlay = true;
   }
