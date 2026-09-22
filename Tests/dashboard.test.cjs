@@ -106,6 +106,18 @@ test('interface language setting persists and translates the application chrome 
   assert.match(app.node('content').innerHTML, /Teams assignments/);
   assert.match(app.node('content').innerHTML, /Write in English/);
   app.click({ page: 'settings' });
+  app.click({ action: 'dashboard-theme', theme: 'board' });
+  app.click({ page: 'overview' });
+  assert.match(app.node('content').innerHTML, /Today, make steady progress\./);
+  assert.doesNotMatch(app.node('content').innerHTML, /[\u4e00-\u9fff]/);
+  app.click({ action: 'dashboard-theme', theme: 'classic' });
+  app.click({ page: 'overview' });
+  assert.doesNotMatch(app.node('content').innerHTML, /[\u4e00-\u9fff]/);
+  for (const page of ['schedule', 'grades', 'tasks', 'feedback', 'teams', 'ec']) {
+    app.click({ page });
+    assert.doesNotMatch(app.node('content').innerHTML, /[\u4e00-\u9fff]/, 'English page contains Chinese text: ' + page);
+  }
+  app.click({ page: 'settings' });
   app.change('app-language', { value: 'zh-CN' });
   assert.equal(app.last('saveState').state.settings.language, 'zh-CN');
   assert.equal(app.node('breadcrumb-page').textContent, '连接与设置');

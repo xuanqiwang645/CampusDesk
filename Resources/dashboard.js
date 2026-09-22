@@ -29,10 +29,11 @@
   let toastTimer = null;
   let lastMenuTitle = '';
   let lastMenuCountdown = '';
+  let markupEscapes = null;
   const pageNames = { overview: '总览', schedule: '课程表', grades: '成绩与 GPA', tasks: '待办事项', feedback: '老师反馈', teams: 'Teams 消息', ec: 'English Corner', settings: '连接与设置' };
   // Only CampusDesk's own fixed labels are translated. School data stays exactly as received.
   const english = Object.freeze({
-    '总览': 'Overview', '课程表': 'Schedule', '成绩与 GPA': 'Grades & GPA', '待办事项': 'To-Do', '老师反馈': 'Teacher Feedback', 'Teams 消息': 'Teams Messages', '连接与设置': 'Connections & Settings',
+    '总览': 'Overview', '课程表': 'Schedule', '成绩与 GPA': 'Grades & GPA', '待办事项': 'To-Do', '老师反馈': 'Teacher Feedback', 'Teams 消息': 'Teams Messages', '连接与设置': 'Connections & Settings', '希悦': 'Seiue',
     '学习，一目了然': 'Study, in view', '我的校园': 'My Campus', '北京时间': 'Beijing time', '把今天留给重要的事。': 'Make today count.', '同步数据': 'Sync data', '尚未同步': 'Not synced',
     '界面语言': 'Interface language', '选择 CampusDesk 的界面语言。课程、作业、消息、附件和学校原文保持原样，不会被翻译。': 'Choose the CampusDesk interface language. Courses, assignments, messages, attachments, and school content stay exactly as received.', '简体中文': 'Simplified Chinese',
     '让它适合你的每一天。': 'Make it work for every day.', '学校系统各自登录；课表、任务和频道原文保存在本机。': 'Sign in to each school system separately; schedules, tasks, and channel content remain on this Mac.', '更改会立即应用到导航、页面标题、按钮与固定说明文字。': 'Changes apply immediately to navigation, page titles, buttons, and fixed help text.',
@@ -44,15 +45,23 @@
     'Teams 作业': 'Teams assignments', 'ManageBac 作业': 'ManageBac assignments', '个人待办': 'Personal to-dos', '作业来源': 'Assignment source', '学科': 'Subject', '特别关注': 'Favorite', '已关注': 'Following',
     '未完成': 'Open', '已逾期': 'Overdue', '已完成': 'Completed', '全部': 'All', '全部学科': 'All subjects', '全部频道': 'All channels', '全部消息': 'All messages', '作业消息': 'Assignment messages', '其他通知': 'Other notifications',
     '打开 Teams': 'Open Teams', '登录／打开 Teams': 'Sign in / Open Teams', '打开 ManageBac': 'Open ManageBac', '打开希悦课表': 'Open schedule', '查看要求': 'View requirements', '查看原文 ↗': 'View original ↗', '查看 Teams 原文 ↗': 'View Teams original ↗',
-    '前一天': 'Previous day', '后一天': 'Next day', '今天': 'Today', '取消': 'Cancel', '保存页面': 'Save page', '导出备份': 'Export backup', '导入备份': 'Import backup',
+    '前一天': 'Previous day', '后一天': 'Next day', '今天': 'Today', '保存页面': 'Save page', '导出备份': 'Export backup', '导入备份': 'Import backup',
     '为每一节课，留好位置。': 'Make room for every class.', '以北京时间展示课程。空白课节按你的设置显示为自习。': 'Classes use Beijing time. Open periods follow your self-study preference.',
     '看见积累，也看见进步。': 'See the progress you have made.', '先确认成绩来自哪一门课、哪一个学期，再理解 GPA。': 'Confirm the course and term before interpreting GPA.',
     '一件一件，慢慢完成。': 'One task at a time.', '先分 Teams 与 ManageBac，再在各自来源内按学科整理。': 'Teams and ManageBac are separated first, then grouped by subject.',
     '认真读懂，每一次反馈。': 'Read every piece of feedback carefully.', '把老师的建议带回下一次学习。': 'Bring each teacher suggestion into your next study session.',
     '频道里的重要信息，在这里。': 'Important channel updates, in one place.', '按发件人和频道整理；特别关注仅影响 CampusDesk 的优先展示。': 'Grouped by sender and channel; favorites only affect CampusDesk ordering.',
     'English Corner，记得赴约。': 'English Corner, don\'t miss it.', '搜索已读取原文和附件文字，核对最新安排。': 'Search captured posts and attachment text to confirm the latest plan.',
-    '现在没有待完成的事项': 'Nothing is due right now', '等待处理的任务': 'Tasks waiting for you', '优先回到原页面核对': 'Check the source page first', '有明确截止时间': 'With confirmed due dates', '仅本机勾选记录': 'Local completion records only', '等待成绩同步': 'Waiting for grade sync',
-    '集中处理最重要的事': 'Focus on what matters most', '今日提示': 'Today\'s note', '信息以原平台为准': 'The source platform is authoritative', '等待课表同步': 'Waiting for schedule sync', '节已读取课程': 'captured classes',
+    '现在没有待完成的事项': 'Nothing is due right now', '等待处理的任务': 'Tasks waiting for you', '优先回到原页面核对': 'Check the source page first', '有明确截止时间': 'With confirmed due dates', '仅本机勾选记录': 'Local completion records only', '等待成绩同步': 'Waiting for grade sync', '登录希悦并打开课表后，这里会显示当天课程。': 'Sign in to Seiue and open the schedule to see today\'s classes here.', '卡片只整理已经读取到的课程、成绩和作业；点击学校任务可查看原文要求。': 'Cards organize only captured schedules, grades, and assignments; open school tasks to read the original requirements.', '标为已完成：': 'Mark complete: ', '标为未完成：': 'Mark incomplete: ',
+    '集中处理最重要的事': 'Focus on what matters most', '今日提示': 'Today\'s note', '信息以原平台为准': 'The source platform is authoritative', '等待课表同步': 'Waiting for schedule sync', '节已读取课程': 'captured classes', '7 天内': 'Within 7 days', 'CAMPUSDESK · 学习看板': 'CAMPUSDESK · STUDY BOARD', '今天，稳稳推进。': 'Today, make steady progress.', '把今天的课程和待办排得清清楚楚。': 'Keep today\'s classes and to-dos clear and organized.',
+    '今天，也有条不紊。': 'Today, steady and organized.', '课程、成绩和待办，在这里从容安排。': 'Schedule, grades, and to-dos, organized in one place.', '完整课表': 'Full schedule', '先把你的课程表接进来': 'Connect your schedule first', '在应用中登录希悦并打开课程表，这里的每一天就有了安排。': 'Sign in to Seiue and open your schedule to plan each day here.', '打开希悦': 'Open Seiue', '成绩详情': 'Grade details', '非官方 · 等权参考': 'Unofficial · equally weighted', '门可用课程': ' available courses', '90 / 80 / 70 / 60 分 → 4 / 3 / 2 / 1，不含 AP 加权。': '90 / 80 / 70 / 60 points → 4 / 3 / 2 / 1. AP weighting is not included.', '不含 AP 加权。': 'AP weighting is not included.', '待办一览': 'To-do overview', '今日截止': 'Due today', '接下来要做': 'Up next', '完成勾选仅保存在本机': 'Completion checks stay on this Mac', '不代表已向学校提交': 'They do not submit work to school', '老师的反馈': 'Teacher feedback', '等待新的反馈': 'Waiting for new feedback', '同步后汇总已读取的老师评语。仅覆盖已读取页面。': 'Captured teacher feedback appears after sync; coverage is limited to pages read.', '个附件': ' attachment(s)', '打开学校任务': 'Open school task',
+    '课表日期': 'Schedule date', '自习仅补充学校页面中能确认时间的空白课节，不推测未读取的课表。': 'Self-study only fills confirmed open periods; it does not infer an unread schedule.', '勾选仅更新本机待办状态，不会提交作业、回复老师或修改 ManageBac / Teams。学科特别关注只保存在本机。': 'Checks only update local to-do status; they never submit work, reply to teachers, or modify ManageBac / Teams. Subject favorites stay on this Mac.',
+    '发件人未标明': 'Sender unknown', '收件人未标明': 'Recipient unknown', '频道未标明': 'Channel unknown', '作业消息': 'Assignment message', 'EC 通知': 'EC notice', '频道消息': 'Channel message', '发送者未标明': 'Sender unknown', '发布日期未确认': 'Publication date unconfirmed', 'English Corner 通知': 'English Corner notice', '本条消息未读取到文字，请打开原页面。': 'This message has no captured text; open the original page.', '查看未完成范围': 'View incomplete coverage',
+    'Teams 自动同步 · 0.4.0': 'Teams automatic sync · 0.4.0', '登录 Teams 后自动发现频道和聊天。': 'Sign in to Teams to automatically discover channels and chats.', '立即自动同步': 'Sync now', '优先读取 EC': 'Prioritize EC', '停止本轮': 'Stop this run', '连接设置': 'Connection settings', 'Teams 待完成作业': 'Teams open assignments', '自动发现账号可见页面，优先读取 EC；无需逐页关注。应用运行、Mac 唤醒且联网时按设置周期更新。学校要求重新验证时需要你登录。正式作业、成绩及全部历史尚未验证，不会当作已完整同步。': 'Automatically discovers pages visible to your account, prioritizing EC; no page-by-page following is needed. The app updates on schedule while running, awake, and online. Sign in again when the school asks. Assignments, grades, and full history are not yet verified as complete.', '查看未完成范围（': 'View incomplete coverage (', '范围（': 'coverage (', '正文尚未读取': 'Text not captured', '仅覆盖已加载消息': 'Only loaded messages are covered',
+    '先核对取消或变更通知，再查看对应日期的名单；旧名单不代表今天的安排。下面按通知的明确发布日期筛选，不推断活动日期或参与人员。附件提取文字可能不完整，未匹配到姓名不代表不在名单中，请核对原件。': 'Check cancellation or change notices first, then review the roster for the relevant date; an old roster does not represent today\'s plan. Results use explicit publication dates and do not infer event dates or attendees. Attachment extraction may be incomplete; a missing name is not proof of absence, so check the original.', '姓名或全文': 'Name or full text', '搜索通知和已解析附件': 'Search notices and parsed attachments', '通知发布日期': 'Notice publication date', '全部日期': 'All dates', '仅日期未确认': 'Date unconfirmed only', '清除筛选': 'Clear filters', '显示 ': 'Showing ', '条已读取通知': ' captured notices',
+    '全部反馈': 'All feedback', '这里汇总 ManageBac 评语和 Teams 已发布的作业反馈，覆盖范围取决于同步结果。尚未读取的课程、附件或历史内容请到学校原页面查看。已读标记仅保存在本机。': 'This page combines ManageBac comments and published Teams assignment feedback. Coverage depends on sync; check the school pages for unread courses, attachments, or history. Read markers stay on this Mac.', '等待老师的下一条建议': 'Waiting for the next teacher suggestion', '登录 ManageBac 并打开评语页，或连接 Teams 同步已发布的作业反馈。': 'Sign in to ManageBac and open comments, or connect Teams to sync published assignment feedback.',
+    '打开成绩页面': 'Open grades', '学校公布': 'Published by school', '非官方 · 4.0 制': 'Unofficial · 4.0 scale', '尚未读取到学校公布的 GPA。这里不会用参考值替代。': 'No published school GPA has been captured. The estimate will not replace it.', '根据': 'Based on ', '门已读取课程': ' captured courses', '等权估算。': ' courses, equally weighted.', '参考换算：90–100 → 4.0；80–89.99 → 3.0；70–79.99 → 2.0；60–69.99 → 1.0；低于 60 → 0。仅使用能确认的当前学期课程总评，不把单次作业分数当总评；不含学分与 AP 加权，也不代表学校的换算规则。': 'Reference conversion: 90–100 → 4.0; 80–89.99 → 3.0; 70–79.99 → 2.0; 60–69.99 → 1.0; below 60 → 0. Only confirmed current-term course grades are used; individual assignment scores are not treated as final grades. Credits and AP weighting are excluded, and this is not the school\'s official conversion.', '你的成绩，值得准确地记录': 'Your grades deserve an accurate record', '登录 ManageBac 并打开当前学期成绩页面。读取到课程总评后，参考 GPA 会自动计算。': 'Sign in to ManageBac and open the current-term grades page. Estimated GPA is calculated after course grades are captured.',
+    '距离下课': 'Class ends in', '课间剩余': 'Break remaining', '午间休息剩余': 'Lunch break remaining', '距离第一节课': 'First class starts in', '今日课程已结束': 'Classes are finished for today', '等待今日课表': 'Waiting for today\'s schedule', '课表缓存待更新 · ': 'Schedule cache needs updating · ', '基于已读取课表 · ': 'Based on captured schedule · ', '今日课程倒计时': 'Today\'s class countdown', '时间待定': 'Time TBD', '已读取课节均已结束，可以查看接下来的待办。': 'All captured classes have ended; you can review the next to-dos.', '同步希悦当天课表后，这里显示课间倒计时。': 'After syncing today\'s schedule, break countdowns appear here.',
     '正在读取学校页面…': 'Reading school pages…', '最近读取 ': 'Last read ', '尚未同步': 'Not synced', '界面语言已切换为 English。': 'Interface language changed to English.', 'Interface language changed to Simplified Chinese.': '界面语言已切换为简体中文。'
   });
   function isEnglish() { return state.settings.language === 'en-US'; }
@@ -61,6 +70,16 @@
   function localizeMarkup(markup) {
     if (!isEnglish()) return markup;
     return Object.keys(english).sort((a, b) => b.length - a.length).reduce((result, source) => result.split(source).join(english[source]), markup);
+  }
+  function localizedHTML(renderMarkup) {
+    markupEscapes = [];
+    try {
+      const output = localizeMarkup(renderMarkup());
+      return output.replace(/\uE000(\d+)\uE001/g, (_, index) => {
+        const value = markupEscapes[Number(index)] || '';
+        return isEnglish() && Object.prototype.hasOwnProperty.call(english, value) ? english[value] : value;
+      });
+    } finally { markupEscapes = null; }
   }
   const icons = {
     overview: '<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>',
@@ -86,14 +105,20 @@
     alert: '<path d="M12 3 2 21h20L12 3Z"/><path d="M12 9v5m0 3h.01"/>'
   };
   function icon(name, cls) { return '<svg class="' + (cls || '') + '" viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.45" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + (icons[name] || icons.book) + '</svg>'; }
-  function esc(value) { return String(value == null ? '' : value).replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch])); }
+  function esc(value) {
+    const safe = String(value == null ? '' : value).replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
+    if (!markupEscapes) return safe;
+    const token = '\uE000' + markupEscapes.length + '\uE001';
+    markupEscapes.push(safe);
+    return token;
+  }
   function fmtDate(value, opts) {
     if (!value) return '时间未标明';
     const d = new Date(value);
     if (!Number.isFinite(d.getTime())) return String(value);
     return new Intl.DateTimeFormat(isEnglish() ? 'en-US' : 'zh-CN', Object.assign({ timeZone: 'Asia/Shanghai', month: 'numeric', day: 'numeric' }, opts || {})).format(d);
   }
-  function lastUpdated(value) { return value ? fmtDate(value, { hour: '2-digit', minute: '2-digit', hour12: false }) : '尚未同步'; }
+  function lastUpdated(value) { return value ? fmtDate(value, { hour: '2-digit', minute: '2-digit', hour12: false }) : t('尚未同步'); }
   function dayLabel(value) { return fmtDate(value + 'T12:00:00+08:00', { weekday: 'long' }); }
   function button(label, action, extra, kind) { return '<button class="button ' + (kind || 'button-light') + '" type="button" data-action="' + esc(action) + '" ' + (extra || '') + '>' + t(label) + '</button>'; }
   function goLink(target, label) { return '<button type="button" class="view-link" data-page="' + target + '">' + t(label) + icon('arrow') + '</button>'; }
@@ -228,7 +253,8 @@
       // A deadline icon is not a claim that a macOS notification was scheduled.
       const dueBadge = '<span class="task-due ' + (due.overdue ? 'is-overdue' : hasKnownDue ? 'has-date' : 'date-unknown') + '">' +
         (hasKnownDue ? icon(due.overdue ? 'alert' : 'clock', 'task-due-icon') : '') + '<span>' + esc(dueText) + '</span></span>';
-      return '<div class="task-row ' + (task.completed ? 'done' : '') + '"><button class="check-button ' + (task.completed ? 'checked' : '') + '" type="button" data-action="toggle-task" data-id="' + esc(task.id) + '" aria-label="' + esc((task.completed ? '标为未完成：' : '标为已完成：') + task.title) + '" aria-pressed="' + Boolean(task.completed) + '">' + (task.completed ? icon('check') : '') + '</button><div class="task-copy"><h3>' + (local ? esc(task.title) : '<button class="task-title-button" type="button" data-action="task-detail" data-id="' + esc(task.id) + '">' + esc(task.title) + '</button>') + '</h3><div class="task-meta"><span>' + esc(task.course || (local ? '个人待办' : sourceName(source))) + '</span>' + dueBadge + '</div>' + (!local ? '<button class="text-action" type="button" data-action="task-detail" data-id="' + esc(task.id) + '">查看要求' + (task.attachments && task.attachments.length ? ' · ' + task.attachments.length + ' 个附件' : '') + ' ↗</button>' : '') + '</div><span class="task-tag ' + (local ? 'local' : source === 'teams' ? 'teams-tag' : '') + '">' + (local ? '个人' : source === 'teams' ? 'Teams' : 'MB') + '</span>' + (local ? '<button class="icon-button" data-action="delete-task" data-id="' + esc(task.id) + '" aria-label="删除个人待办" title="删除个人待办">' + icon('trash') + '</button>' : task.url ? '<button class="icon-button" data-action="open-source" data-source="' + source + '" data-url="' + esc(task.url) + '" aria-label="打开学校任务" title="打开学校任务">' + icon('link') + '</button>' : '') + '</div>';
+      const checkLabel = isEnglish() ? (task.completed ? 'Mark incomplete: ' : 'Mark complete: ') + task.title : (task.completed ? '标为未完成：' : '标为已完成：') + task.title;
+      return '<div class="task-row ' + (task.completed ? 'done' : '') + '"><button class="check-button ' + (task.completed ? 'checked' : '') + '" type="button" data-action="toggle-task" data-id="' + esc(task.id) + '" aria-label="' + esc(checkLabel) + '" aria-pressed="' + Boolean(task.completed) + '">' + (task.completed ? icon('check') : '') + '</button><div class="task-copy"><h3>' + (local ? esc(task.title) : '<button class="task-title-button" type="button" data-action="task-detail" data-id="' + esc(task.id) + '">' + esc(task.title) + '</button>') + '</h3><div class="task-meta"><span>' + esc(task.course || (local ? '个人待办' : sourceName(source))) + '</span>' + dueBadge + '</div>' + (!local ? '<button class="text-action" type="button" data-action="task-detail" data-id="' + esc(task.id) + '">' + t('查看要求') + (task.attachments && task.attachments.length ? ' · ' + task.attachments.length + t(' 个附件') : '') + ' ↗</button>' : '') + '</div><span class="task-tag ' + (local ? 'local' : source === 'teams' ? 'teams-tag' : '') + '">' + (local ? '个人' : source === 'teams' ? 'Teams' : 'MB') + '</span>' + (local ? '<button class="icon-button" data-action="delete-task" data-id="' + esc(task.id) + '" aria-label="删除个人待办" title="删除个人待办">' + icon('trash') + '</button>' : task.url ? '<button class="icon-button" data-action="open-source" data-source="' + source + '" data-url="' + esc(task.url) + '" aria-label="' + esc(t('打开学校任务')) + '" title="' + esc(t('打开学校任务')) + '">' + icon('link') + '</button>' : '') + '</div>';
     }).join('') + '</div>';
   }
   function feedbackRows(items, limit) {
@@ -238,14 +264,14 @@
     const labels = { class: '距离下课', break: '课间剩余', lunch: '午间休息剩余', before: '距离第一节课', after: '今日课程已结束', empty: '等待今日课表' };
     const next = clock.next;
     return {
-      label: labels[clock.phase] || labels.empty,
+      label: t(labels[clock.phase] || labels.empty),
       time: clock.phase === 'empty' || clock.phase === 'after' ? '—' : clock.remainingLabel,
-      detail: clock.phase === 'class' && clock.current ? '当前 ' + clock.current.title + ' · ' + (clock.current.start || '时间待定') + '–' + (clock.current.end || '时间待定') + (next ? ' ｜下节 ' + next.title + ' · ' + (next.start || '时间待定') + '–' + (next.end || '时间待定') : '') + (clock.current.room ? ' · ' + clock.current.room : '') : next ? '下节 ' + next.title + ' · ' + (next.start || '时间待定') + '–' + (next.end || '时间待定') + (next.room ? ' · ' + next.room : '') : clock.phase === 'after' ? '已读取课节均已结束，可以查看接下来的待办。' : '同步希悦当天课表后，这里显示课间倒计时。'
+      detail: clock.phase === 'class' && clock.current ? (isEnglish() ? 'Current: ' : '当前 ') + clock.current.title + ' · ' + (clock.current.start || t('时间待定')) + '–' + (clock.current.end || t('时间待定')) + (next ? (isEnglish() ? ' | Next: ' : ' ｜下节 ') + next.title + ' · ' + (next.start || t('时间待定')) + '–' + (next.end || t('时间待定')) : '') + (clock.current.room ? ' · ' + clock.current.room : '') : next ? (isEnglish() ? 'Next: ' : '下节 ') + next.title + ' · ' + (next.start || t('时间待定')) + '–' + (next.end || t('时间待定')) + (next.room ? ' · ' + next.room : '') : clock.phase === 'after' ? t('已读取课节均已结束，可以查看接下来的待办。') : t('同步希悦当天课表后，这里显示课间倒计时。')
     };
   }
   function renderClassClock() {
     const clock = Core.getClassClock(state), copy = clockCopy(clock), status = sourceStatus('seiue');
-    return '<section id="class-clock" class="class-clock phase-' + esc(clock.phase) + '" aria-label="今日课程倒计时"><div class="clock-mark">' + icon('clock') + '</div><div class="clock-primary"><span id="class-clock-label" class="clock-label">' + esc(copy.label) + '</span><span id="class-clock-time" class="clock-value" role="timer" aria-live="off">' + esc(copy.time) + '</span></div><div class="clock-secondary"><p id="class-clock-detail">' + esc(copy.detail) + '</p><small id="class-clock-cache">' + esc((clock.stale ? '课表缓存待更新 · ' : '基于已读取课表 · ') + lastUpdated(status.lastCapturedAt)) + '</small></div></section>';
+    return '<section id="class-clock" class="class-clock phase-' + esc(clock.phase) + '" aria-label="' + esc(t('今日课程倒计时')) + '"><div class="clock-mark">' + icon('clock') + '</div><div class="clock-primary"><span id="class-clock-label" class="clock-label">' + esc(copy.label) + '</span><span id="class-clock-time" class="clock-value" role="timer" aria-live="off">' + esc(copy.time) + '</span></div><div class="clock-secondary"><p id="class-clock-detail">' + esc(copy.detail) + '</p><small id="class-clock-cache">' + esc(t(clock.stale ? '课表缓存待更新 · ' : '基于已读取课表 · ') + lastUpdated(status.lastCapturedAt)) + '</small></div></section>';
   }
   function updateClock() {
     const clock = Core.getClassClock(state), copy = clockCopy(clock), root = document.getElementById('class-clock');
@@ -254,7 +280,7 @@
       document.getElementById('class-clock-label').textContent = copy.label;
       document.getElementById('class-clock-time').textContent = copy.time;
       document.getElementById('class-clock-detail').textContent = copy.detail;
-      document.getElementById('class-clock-cache').textContent = (clock.stale ? '课表缓存待更新 · ' : '基于已读取课表 · ') + lastUpdated(sourceStatus('seiue').lastCapturedAt);
+      document.getElementById('class-clock-cache').textContent = t(clock.stale ? '课表缓存待更新 · ' : '基于已读取课表 · ') + lastUpdated(sourceStatus('seiue').lastCapturedAt);
     }
     return clock;
   }
@@ -291,25 +317,31 @@
     return warnings.length ? '<div class="source-warning teams-warning">' + warnings.slice(0, 6).map(esc).join('<br>') + '</div>' : '';
   }
   function focusButton(action, value, active, label) {
-    return '<button type="button" class="focus-button ' + (active ? 'active' : '') + '" data-action="' + esc(action) + '" data-value="' + esc(value) + '" aria-pressed="' + active + '" aria-label="' + esc((active ? '取消' : '特别关注') + label) + '">' + icon('focus') + '<span>' + (active ? '已关注' : '特别关注') + '</span></button>';
+    const englishLabel = isEnglish() ? label.replace(/^学科：/, 'Subject: ').replace(/^频道：/, 'Channel: ') : label;
+    const aria = isEnglish() ? (active ? 'Unfavorite ' : 'Favorite ') + englishLabel : (active ? '取消' : '特别关注') + label;
+    return '<button type="button" class="focus-button ' + (active ? 'active' : '') + '" data-action="' + esc(action) + '" data-value="' + esc(value) + '" aria-pressed="' + active + '" aria-label="' + esc(aria) + '">' + icon('focus') + '<span>' + (active ? '已关注' : '特别关注') + '</span></button>';
   }
-  function postSender(post) { return post.author || '发件人未标明'; }
-  function postRecipient(post) { return post.recipient || '收件人未标明'; }
-  function postChannel(post) { return post.channel || '频道未标明'; }
+  function postSender(post) { return post.author || t('发件人未标明'); }
+  function postRecipient(post) { return post.recipient || t('收件人未标明'); }
+  function postChannel(post) { return post.channel || t('频道未标明'); }
   function postRows(posts) {
-    return posts.map(post => '<article id="post-' + esc(encodeURIComponent(post.id)) + '" class="teams-post" data-reading-anchor><div class="post-meta"><span class="post-kind">' + ({ assignment: '作业消息', ec: 'EC 通知', general: '频道消息' }[post.kind] || '频道消息') + '</span><span>收件人：' + esc(postRecipient(post)) + '</span><span>频道：' + esc(postChannel(post)) + '</span><span>' + esc(post.author || '发送者未标明') + '</span><span>' + esc(post.publishedAt ? lastUpdated(post.publishedAt) : post.dateLabel ? '原文时间：' + post.dateLabel + '（日期未确认）' : '发布日期未确认') + '</span></div><h3>' + esc(post.title || (post.kind === 'ec' ? 'English Corner 通知' : '频道消息')) + '</h3><div id="post-text-' + esc(encodeURIComponent(post.id)) + '" data-selection-key class="post-original">' + esc(post.text || '本条消息未读取到文字，请打开原页面。') + '</div>' + attachmentsHTML(post.attachments, 'post:'+post.id) + '<div class="post-foot"><span>读取于 ' + esc(lastUpdated(post.capturedAt)) + '</span>' + (post.url ? button('查看 Teams 原文 ↗', 'open-source', 'data-source="teams" data-url="' + esc(post.url) + '"', 'button-plain') : '') + '</div></article>').join('');
+    return posts.map(post => {
+      const kind = ({ assignment: '作业消息', ec: 'EC 通知', general: '频道消息' }[post.kind] || '频道消息');
+      const published = post.publishedAt ? lastUpdated(post.publishedAt) : post.dateLabel ? (isEnglish() ? 'Original time: ' + post.dateLabel + ' (date unconfirmed)' : '原文时间：' + post.dateLabel + '（日期未确认）') : t('发布日期未确认');
+      return '<article id="post-' + esc(encodeURIComponent(post.id)) + '" class="teams-post" data-reading-anchor><div class="post-meta"><span class="post-kind">' + t(kind) + '</span><span>' + (isEnglish() ? 'Recipient: ' : '收件人：') + esc(postRecipient(post)) + '</span><span>' + (isEnglish() ? 'Channel: ' : '频道：') + esc(postChannel(post)) + '</span><span>' + esc(post.author || t('发送者未标明')) + '</span><span>' + esc(published) + '</span></div><h3>' + esc(post.title || (post.kind === 'ec' ? t('English Corner 通知') : t('频道消息'))) + '</h3><div id="post-text-' + esc(encodeURIComponent(post.id)) + '" data-selection-key class="post-original">' + esc(post.text || t('本条消息未读取到文字，请打开原页面。')) + '</div>' + attachmentsHTML(post.attachments, 'post:'+post.id) + '<div class="post-foot"><span>' + (isEnglish() ? 'Captured ' : '读取于 ') + esc(lastUpdated(post.capturedAt)) + '</span>' + (post.url ? button('查看 Teams 原文 ↗', 'open-source', 'data-source="teams" data-url="' + esc(post.url) + '"', 'button-plain') : '') + '</div></article>';
+    }).join('');
   }
   function groupedTeamsPosts(posts) {
     const watched = new Set(state.settings.focusTeamsChannels || []), senders = new Map();
     for (const post of posts) { const sender = postSender(post), channel = postChannel(post); if (!senders.has(sender)) senders.set(sender, new Map()); const channels = senders.get(sender); if (!channels.has(channel)) channels.set(channel, []); channels.get(channel).push(post); }
-    return [...senders.entries()].sort((a, b) => a[0].localeCompare(b[0], 'zh-CN')).map(([sender, channels]) => '<section class="teams-recipient-group"><h2>发件人：' + esc(sender) + '</h2>' + [...channels.entries()].sort((a, b) => Number(watched.has(b[0])) - Number(watched.has(a[0])) || a[0].localeCompare(b[0], 'zh-CN')).map(([channel, rows]) => '<div class="teams-channel-group"><div class="group-heading"><div><p>频道</p><h3>' + esc(channel) + '<span>' + rows.length + ' 条</span></h3></div>' + focusButton('toggle-focus-channel', channel, watched.has(channel), '频道：' + channel) + '</div>' + postRows(rows) + '</div>').join('') + '</section>').join('');
+    return [...senders.entries()].sort((a, b) => a[0].localeCompare(b[0], 'zh-CN')).map(([sender, channels]) => '<section class="teams-recipient-group"><h2>' + (isEnglish() ? 'Sender: ' : '发件人：') + esc(sender) + '</h2>' + [...channels.entries()].sort((a, b) => Number(watched.has(b[0])) - Number(watched.has(a[0])) || a[0].localeCompare(b[0], 'zh-CN')).map(([channel, rows]) => '<div class="teams-channel-group"><div class="group-heading"><div><p>' + (isEnglish() ? 'Channel' : '频道') + '</p><h3>' + esc(channel) + '<span>' + rows.length + (isEnglish() ? ' item(s)' : ' 条') + '</span></h3></div>' + focusButton('toggle-focus-channel', channel, watched.has(channel), '频道：' + channel) + '</div>' + postRows(rows) + '</div>').join('') + '</section>').join('');
   }
   function renderTeams() {
     const posts = Core.getTeamsPosts(state), watched = new Set(state.settings.focusTeamsChannels || []);
     const kindVisible = posts.filter(post => teamsFilter === 'all' || post.kind === teamsFilter);
     const visible = kindVisible.filter(post => teamsChannelFilter !== 'focus' || watched.has(postChannel(post)));
     const tasks = Core.getTasks(state).filter(task => task.source === 'teams' && !task.completed);
-    const controls = '<div class="page-tools teams-tools"><div class="filter-pills">' + [['all', '全部消息'], ['assignment', '作业消息'], ['general', '其他通知']].map(filter => '<button type="button" class="pill ' + (teamsFilter === filter[0] ? 'active' : '') + '" data-action="teams-filter" data-filter="' + filter[0] + '">' + filter[1] + '</button>').join('') + '</div><div class="filter-pills"><button type="button" class="pill ' + (teamsChannelFilter === 'all' ? 'active' : '') + '" data-action="teams-channel-filter" data-filter="all">全部频道</button><button type="button" class="pill ' + (teamsChannelFilter === 'focus' ? 'active' : '') + '" data-action="teams-channel-filter" data-filter="focus">特别关注</button></div><span class="subtle">' + visible.length + ' 条已读取消息</span></div>';
+    const controls = '<div class="page-tools teams-tools"><div class="filter-pills">' + [['all', '全部消息'], ['assignment', '作业消息'], ['general', '其他通知']].map(filter => '<button type="button" class="pill ' + (teamsFilter === filter[0] ? 'active' : '') + '" data-action="teams-filter" data-filter="' + filter[0] + '">' + filter[1] + '</button>').join('') + '</div><div class="filter-pills"><button type="button" class="pill ' + (teamsChannelFilter === 'all' ? 'active' : '') + '" data-action="teams-channel-filter" data-filter="all">全部频道</button><button type="button" class="pill ' + (teamsChannelFilter === 'focus' ? 'active' : '') + '" data-action="teams-channel-filter" data-filter="focus">特别关注</button></div><span class="subtle">' + visible.length + (isEnglish() ? ' captured message(s)' : ' 条已读取消息') + '</span></div>';
     return heading('频道里的重要信息，在这里。', '按发件人和频道整理；特别关注仅影响 CampusDesk 的优先展示。', button(icon('link') + '打开 Teams', 'open-source', 'data-source="teams"')) + teamsGuide() + (tasks.length ? '<section class="card settings-section">' + cardHeader('tasks', 'Teams 待完成作业', goLink('tasks', '全部待办')) + taskRows(tasks, 5) + (tasks.length > 5 ? '<p class="gpa-note">另有 ' + (tasks.length - 5) + ' 项，可在待办中查看。</p>' : '') + '</section>' : '') + controls + '<section class="card teams-groups-card">' + (visible.length ? groupedTeamsPosts(visible) : empty('teams', teamsChannelFilter === 'focus' ? '还没有特别关注频道的已读取消息' : '还没有已读取的消息', teamsChannelFilter === 'focus' ? '在任意频道标题旁点“特别关注”，它会优先显示在这里。' : '连接学校 Microsoft 账号后，这里会自动汇总有权访问的频道消息。没有同步到消息不代表频道没有消息。')) + teamsWarning() + sourceFooter('teams') + '</section>';
   }
   function ecDate(post) { return post.publishedAt ? Core.today(new Date(post.publishedAt)) : ''; }
@@ -322,7 +354,7 @@
     const shown = known.length + unknown.length;
     return '<p id="ec-result-count" class="ec-result-count" role="status" aria-live="polite">显示 ' + shown + ' / ' + all.length + ' 条已读取通知' + (unknown.length ? ' · ' + unknown.length + ' 条日期未确认（保留显示）' : '') + '</p>' + (known.length ? postRows(known) : '') + (unknown.length ? '<h3 class="ec-undated-heading">发布日期未确认</h3><p class="subtle">这些原文未因日期筛选被隐藏，不据此推断活动日期。</p>' + postRows(unknown) : '') + (!shown ? empty('ec', all.length ? '没有匹配的已读取通知' : '等待第一份 EC 通知', all.length ? '试试姓名的一部分、附件中的词语，或清除筛选。未匹配不代表不在名单中。' : '登录 Teams 并完成同步后，这里汇总已识别的 EC 原文。', all.length ? button('清除筛选','ec-clear') : teamsPrimaryButton()) : '');
   }
-  function updateECResults() { const target = document.getElementById('ec-results'); if (target) target.innerHTML = localizeMarkup(ecResultsHTML()); }
+  function updateECResults() { const target = document.getElementById('ec-results'); if (target) target.innerHTML = localizedHTML(ecResultsHTML); }
   function renderEC() {
     const dates = [...new Set(Core.getTeamsEC(state).map(ecDate).filter(Boolean))].sort().reverse();
     return heading('English Corner，记得赴约。', '搜索已读取原文和附件文字，核对最新安排。', button(icon('link') + '打开 Teams', 'open-source', 'data-source="teams"')) + teamsGuide() + '<div class="info-note">先核对取消或变更通知，再查看对应日期的名单；旧名单不代表今天的安排。下面按通知的明确发布日期筛选，不推断活动日期或参与人员。附件提取文字可能不完整，未匹配到姓名不代表不在名单中，请核对原件。</div>' + '<section class="card"><div class="ec-filters"><label for="ec-search">姓名或全文<input id="ec-search" type="search" value="' + esc(ecQuery) + '" placeholder="搜索通知和已解析附件" autocomplete="off" maxlength="200" aria-controls="ec-results"></label><label for="ec-date-filter">通知发布日期<select id="ec-date-filter" aria-controls="ec-results"><option value="all"' + (ecDateFilter === 'all' ? ' selected' : '') + '>全部日期</option><option value="unknown"' + (ecDateFilter === 'unknown' ? ' selected' : '') + '>仅日期未确认</option>' + dates.map(date => '<option value="' + date + '"' + (ecDateFilter === date ? ' selected' : '') + '>' + date + '</option>').join('') + '</select></label>' + button('清除筛选','ec-clear') + '</div><div id="ec-results">' + ecResultsHTML() + '</div>' + teamsWarning() + sourceFooter('teams') + '</section>';
@@ -370,7 +402,7 @@
     const completed = tasks.filter(task => task.completed).length;
     const gpa = getGpaView(), displayGpa = gpa.official || gpa.estimate;
     const classes = Core.getSchedule(state, today), course = Core.getNextClass(state);
-    const topText = course.current ? '正在上 ' + course.current.title + '，' + (course.current.end || '课后') + ' 结束。' : course.next ? '下一节 ' + course.next.title + '，' + (course.next.start || '时间待定') + ' 开始。' : '把今天的课程和待办排得清清楚楚。';
+    const topText = course.current ? (isEnglish() ? 'Current class: ' + course.current.title + ' ends at ' + (course.current.end || 'the end of class') + '.' : '正在上 ' + course.current.title + '，' + (course.current.end || '课后') + ' 结束。') : course.next ? (isEnglish() ? 'Next: ' + course.next.title + ' starts at ' + (course.next.start || 'TBD') + '.' : '下一节 ' + course.next.title + '，' + (course.next.start || '时间待定') + ' 开始。') : t('把今天的课程和待办排得清清楚楚。');
     const classPreview = classes.slice(0, 3).map(item => '<div class="board-class-row"><span>' + esc(item.start || '—') + '</span><strong>' + esc(item.title || '自习课') + '</strong><small>' + esc(item.room || '地点待确认') + '</small></div>').join('');
     const boardClock = '<div class="board-header-clock">' + renderClassClock() + '</div>';
     const metrics = '<div class="board-kpi-grid"><article class="board-kpi board-kpi-open"><span>未完成</span><strong>' + openTasks.length + '</strong><small>等待处理的任务</small></article><article class="board-kpi board-kpi-overdue"><span>已逾期</span><strong>' + overdue + '</strong><small>优先回到原页面核对</small></article><article class="board-kpi board-kpi-week"><span>7 天内</span><strong>' + nextWeek + '</strong><small>有明确截止时间</small></article><article class="board-kpi board-kpi-done"><span>已完成</span><strong>' + completed + '</strong><small>仅本机勾选记录</small></article><article class="board-kpi board-kpi-gpa"><span>' + (gpa.official ? '学校 GPA' : '参考 GPA') + '</span><strong>' + (displayGpa && displayGpa.value != null ? esc(Number(displayGpa.value).toFixed(2)) : '—') + '</strong><small>' + (displayGpa && displayGpa.scale ? '/ ' + esc(displayGpa.scale) : '等待成绩同步') + '</small></article></div>';
@@ -401,25 +433,25 @@
   function taskSubjectGroups(tasks, renderRows) {
     const focused = new Set(state.settings.focusSubjects || []), groups = new Map();
     for (const task of tasks) { const subject = task.course || '未分类'; if (!groups.has(subject)) groups.set(subject, []); groups.get(subject).push(task); }
-    return [...groups.entries()].sort((a, b) => Number(focused.has(b[0])) - Number(focused.has(a[0])) || a[0].localeCompare(b[0], 'zh-CN')).map(([subject, rows]) => '<section class="task-subject-group"><div class="group-heading"><div><p>学科</p><h2>' + esc(subject) + '<span>' + rows.length + ' 项</span></h2></div>' + focusButton('toggle-focus-subject', subject, focused.has(subject), '学科：' + subject) + '</div>' + (renderRows ? renderRows(rows) : taskRows(rows)) + '</section>').join('');
+    return [...groups.entries()].sort((a, b) => Number(focused.has(b[0])) - Number(focused.has(a[0])) || a[0].localeCompare(b[0], 'zh-CN')).map(([subject, rows]) => '<section class="task-subject-group"><div class="group-heading"><div><p>' + t('学科') + '</p><h2>' + esc(subject) + '<span>' + rows.length + (isEnglish() ? ' item(s)' : ' 项') + '</span></h2></div>' + focusButton('toggle-focus-subject', subject, focused.has(subject), '学科：' + subject) + '</div>' + (renderRows ? renderRows(rows) : taskRows(rows)) + '</section>').join('');
   }
   function taskSourceSections(tasks, renderRows) {
     const sources = [['teams', 'Teams 作业'], ['managebac', 'ManageBac 作业'], ['manual', '个人待办']];
     return '<div class="task-source-grid">' + sources.map(([source, title]) => {
       const rows = tasks.filter(task => task.source === source);
-      return rows.length ? '<section class="task-source-section task-source-' + source + '"><div class="task-source-heading"><div><p>作业来源</p><h2>' + esc(title) + '</h2></div><span>' + rows.length + ' 项</span></div><div class="task-source-subjects">' + taskSubjectGroups(rows, renderRows) + '</div></section>' : '';
+      return rows.length ? '<section class="task-source-section task-source-' + source + '"><div class="task-source-heading"><div><p>' + t('作业来源') + '</p><h2>' + esc(t(title)) + '</h2></div><span>' + rows.length + (isEnglish() ? ' item(s)' : ' 项') + '</span></div><div class="task-source-subjects">' + taskSubjectGroups(rows, renderRows) + '</div></section>' : '';
     }).join('') + '</div>';
   }
   function renderTasks() {
     const all = Core.getTasks(state), focused = new Set(state.settings.focusSubjects || []);
     const statusTasks = all.filter(task => taskFilter === 'all' || (taskFilter === 'done' ? task.completed : taskFilter === 'overdue' ? taskDue(task).overdue : !task.completed));
     const tasks = statusTasks.filter(task => taskSubjectFilter !== 'focus' || focused.has(task.course || '未分类'));
-    const controls = '<div class="page-tools task-tools"><div class="filter-pills">' + [['open', '未完成'], ['overdue', '已逾期'], ['done', '已完成'], ['all', '全部']].map(f => '<button type="button" class="pill ' + (taskFilter === f[0] ? 'active' : '') + '" data-action="task-filter" data-filter="' + f[0] + '">' + f[1] + '</button>').join('') + '</div><div class="filter-pills"><button type="button" class="pill ' + (taskSubjectFilter === 'all' ? 'active' : '') + '" data-action="task-subject-filter" data-filter="all">全部学科</button><button type="button" class="pill ' + (taskSubjectFilter === 'focus' ? 'active' : '') + '" data-action="task-subject-filter" data-filter="focus">特别关注</button></div><span class="subtle">' + tasks.length + ' 项</span></div>';
+    const controls = '<div class="page-tools task-tools"><div class="filter-pills">' + [['open', '未完成'], ['overdue', '已逾期'], ['done', '已完成'], ['all', '全部']].map(f => '<button type="button" class="pill ' + (taskFilter === f[0] ? 'active' : '') + '" data-action="task-filter" data-filter="' + f[0] + '">' + f[1] + '</button>').join('') + '</div><div class="filter-pills"><button type="button" class="pill ' + (taskSubjectFilter === 'all' ? 'active' : '') + '" data-action="task-subject-filter" data-filter="all">全部学科</button><button type="button" class="pill ' + (taskSubjectFilter === 'focus' ? 'active' : '') + '" data-action="task-subject-filter" data-filter="focus">特别关注</button></div><span class="subtle">' + tasks.length + (isEnglish() ? ' item(s)' : ' 项') + '</span></div>';
     return heading('一件一件，慢慢完成。', '先分 Teams 与 ManageBac，再在各自来源内按学科整理。', button(icon('plus') + '添加待办', 'add-task', '', 'button-primary')) + controls + '<div class="info-note">勾选仅更新本机待办状态，不会提交作业、回复老师或修改 ManageBac / Teams。学科特别关注只保存在本机。</div><section class="card task-subjects-card">' + (tasks.length ? taskSourceSections(tasks) : empty('tasks', taskSubjectFilter === 'focus' ? '还没有特别关注学科的任务' : taskFilter === 'done' ? '完成的事情，会留在这里' : '这里暂时没有待办', taskSubjectFilter === 'focus' ? '在任意学科标题旁点“特别关注”，它会优先显示在这里。' : taskFilter === 'open' ? '连接 ManageBac 和 Teams 获取已读取的学校任务，或添加一个个人待办。' : '切换筛选条件，查看其他任务。', taskFilter === 'open' && taskSubjectFilter !== 'focus' ? button(icon('plus') + '添加待办', 'add-task', '', 'button-primary') : '')) + sourceFooter('managebac') + sourceFooter('teams') + '</section>';
   }
   function renderFeedback() {
     const all = Core.getFeedback(state), items = all.filter(f => feedbackFilter === 'all' || !f.read);
-    return heading('认真读懂，每一次反馈。', '把老师的建议带回下一次学习。', button(icon('link') + '打开 ManageBac', 'open-source', 'data-source="managebac"')) + '<div class="page-tools"><div class="filter-pills"><button type="button" class="pill ' + (feedbackFilter === 'all' ? 'active' : '') + '" data-action="feedback-filter" data-filter="all">全部反馈</button><button type="button" class="pill ' + (feedbackFilter === 'unread' ? 'active' : '') + '" data-action="feedback-filter" data-filter="unread">未读</button></div><span class="subtle">' + items.length + ' 条</span></div><div class="info-note">这里汇总 ManageBac 评语和 Teams 已发布的作业反馈，覆盖范围取决于同步结果。尚未读取的课程、附件或历史内容请到学校原页面查看。已读标记仅保存在本机。</div><section class="card">' + (items.length ? feedbackRows(items) : empty('feedback', feedbackFilter === 'unread' ? '没有已读取的未读反馈' : '等待老师的下一条建议', '登录 ManageBac 并打开评语页，或连接 Teams 同步已发布的作业反馈。', button('打开 ManageBac', 'open-source', 'data-source="managebac"'))) + sourceFooter('managebac') + sourceFooter('teams') + '</section>';
+    return heading('认真读懂，每一次反馈。', '把老师的建议带回下一次学习。', button(icon('link') + '打开 ManageBac', 'open-source', 'data-source="managebac"')) + '<div class="page-tools"><div class="filter-pills"><button type="button" class="pill ' + (feedbackFilter === 'all' ? 'active' : '') + '" data-action="feedback-filter" data-filter="all">全部反馈</button><button type="button" class="pill ' + (feedbackFilter === 'unread' ? 'active' : '') + '" data-action="feedback-filter" data-filter="unread">' + (isEnglish() ? 'Unread' : '未读') + '</button></div><span class="subtle">' + items.length + (isEnglish() ? ' item(s)' : ' 条') + '</span></div><div class="info-note">这里汇总 ManageBac 评语和 Teams 已发布的作业反馈，覆盖范围取决于同步结果。尚未读取的课程、附件或历史内容请到学校原页面查看。已读标记仅保存在本机。</div><section class="card">' + (items.length ? feedbackRows(items) : empty('feedback', feedbackFilter === 'unread' ? '没有已读取的未读反馈' : '等待老师的下一条建议', '登录 ManageBac 并打开评语页，或连接 Teams 同步已发布的作业反馈。', button('打开 ManageBac', 'open-source', 'data-source="managebac"'))) + sourceFooter('managebac') + sourceFooter('teams') + '</section>';
   }
   function renderSourceCard(source) {
     if (source === 'teams') return renderGraphSourceCard();
@@ -451,6 +483,7 @@
   }
   function teamsAutoCountText() {
     const counts = teamsAuto.counts || {}, count = key => Number.isSafeInteger(counts[key]) && counts[key] >= 0 ? counts[key] : 0;
+    if (isEnglish()) return 'This run captured ' + count('messages') + ' message(s) · ' + count('channelsRead') + ' channel(s) · ' + count('chatsRead') + ' chat(s) · found ' + count('attachments') + ' attachment(s)' + (Number.isSafeInteger(teamsAuto.attachmentsParsed) ? ' · extracted text from ' + teamsAuto.attachmentsParsed + ' attachment(s)' : '') + (Number.isSafeInteger(teamsAuto.counts.attachmentsCached) ? ' · reused ' + count('attachmentsCached') + ' unchanged file(s)' : '');
     return '本轮已读取 ' + count('messages') + ' 条消息 · ' + count('channelsRead') + ' 个频道 · ' + count('chatsRead') + ' 个聊天 · 已发现 ' + count('attachments') + ' 个附件' + (Number.isSafeInteger(teamsAuto.attachmentsParsed) ? ' · 已提取文字 ' + teamsAuto.attachmentsParsed + ' 个附件' : '') + (Number.isSafeInteger(teamsAuto.counts.attachmentsCached) ? ' · 版本未变，复用 ' + count('attachmentsCached') + ' 份' : '');
   }
   function diagnosticsHTML(items) { return items.map(item => '<p><strong>' + esc(item.label || item.kind || 'Teams') + '</strong>：' + esc(item.reason || '部分读取') + '</p>').join(''); }
@@ -586,7 +619,7 @@
     document.getElementById('breadcrumb-page').textContent = pageName(page);
     document.getElementById('sidebar-clock').textContent = Core.clock();
     document.getElementById('sync-icon').innerHTML = icon('refresh');
-    document.getElementById('content').innerHTML = localizeMarkup(({ overview: renderOverview, schedule: renderSchedule, grades: renderGrades, tasks: renderTasks, feedback: renderFeedback, teams: renderTeams, ec: renderEC, settings: renderSettings })[page]());
+    document.getElementById('content').innerHTML = localizedHTML(({ overview: renderOverview, schedule: renderSchedule, grades: renderGrades, tasks: renderTasks, feedback: renderFeedback, teams: renderTeams, ec: renderEC, settings: renderSettings })[page]);
     if (graphConfigOpen && document.getElementById('graph-configuration')) document.getElementById('graph-configuration').open = true;
     renderedPage = page;restoreReading(saved);
     const clock = updateClock();
