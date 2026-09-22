@@ -167,6 +167,22 @@
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, .84), 0 4px 10px rgba(55, 112, 77, .12);
 }
 
+/* Keep the favorite control optically centered and wide enough for both
+ * Chinese labels (已关注 / 特别关注) and the English label (Following). */
+.focus-button {
+  justify-content: center;
+  min-width: 96px;
+  flex-shrink: 0;
+  text-align: center;
+  line-height: 1.2;
+}
+
+.focus-button > span {
+  display: block;
+  min-width: 0;
+  text-align: center;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .board-kpi, .board-task-card, .board-mini-card { transition: none; }
   .board-kpi:hover, .board-task-card:hover, .board-mini-card:hover { transform: none; }
