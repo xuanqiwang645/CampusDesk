@@ -11,8 +11,10 @@
   let page = ['overview', 'schedule', 'grades', 'tasks', 'feedback', 'teams', 'ec', 'settings'].includes(location.hash.slice(1)) ? location.hash.slice(1) : 'overview';
   let selectedDate = Core.today();
   let taskFilter = 'open';
+  let taskSubjectFilter = 'all';
   let feedbackFilter = 'all';
   let teamsFilter = 'all';
+  let teamsChannelFilter = 'all';
   let ecQuery = '', ecDateFilter = 'all', renderedPage = null;
   let detailTaskId = null;
   let notificationPermission = 'unknown';
@@ -48,6 +50,7 @@
     trash: '<path d="M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7m4-7v7"/>',
     clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
     bell: '<path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9Z"/><path d="M10 21h4"/>',
+    focus: '<path d="m12 3 2.75 5.57L21 9.48l-4.5 4.38 1.06 6.19L12 17.16l-5.56 2.89 1.06-6.19L3 9.48l6.25-.91L12 3Z"/>',
     alert: '<path d="M12 3 2 21h20L12 3Z"/><path d="M12 9v5m0 3h.01"/>'
   };
   function icon(name, cls) { return '<svg class="' + (cls || '') + '" viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.45" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + (icons[name] || icons.book) + '</svg>'; }
@@ -255,12 +258,26 @@
     const warnings = [...new Set((graphStatus.warnings || []).concat(status.warnings || []))];
     return warnings.length ? '<div class="source-warning teams-warning">' + warnings.slice(0, 6).map(esc).join('<br>') + '</div>' : '';
   }
+  function focusButton(action, value, active, label) {
+    return '<button type="button" class="focus-button ' + (active ? 'active' : '') + '" data-action="' + esc(action) + '" data-value="' + esc(value) + '" aria-pressed="' + active + '" aria-label="' + esc((active ? '取消' : '特别关注') + label) + '">' + icon('focus') + '<span>' + (active ? '已关注' : '特别关注') + '</span></button>';
+  }
+  function postRecipient(post) { return post.recipient || '收件人未标明'; }
+  function postChannel(post) { return post.channel || '频道未标明'; }
   function postRows(posts) {
-    return posts.map(post => '<article id="post-' + esc(encodeURIComponent(post.id)) + '" class="teams-post" data-reading-anchor><div class="post-meta"><span class="post-kind">' + ({ assignment: '作业消息', ec: 'EC 通知', general: '频道消息' }[post.kind] || '频道消息') + '</span><span>' + esc(post.channel || 'Teams') + '</span><span>' + esc(post.author || '发送者未标明') + '</span><span>' + esc(post.publishedAt ? lastUpdated(post.publishedAt) : post.dateLabel ? '原文时间：' + post.dateLabel + '（日期未确认）' : '发布日期未确认') + '</span></div><h3>' + esc(post.title || (post.kind === 'ec' ? 'English Corner 通知' : '频道消息')) + '</h3><div id="post-text-' + esc(encodeURIComponent(post.id)) + '" data-selection-key class="post-original">' + esc(post.text || '本条消息未读取到文字，请打开原页面。') + '</div>' + attachmentsHTML(post.attachments, 'post:'+post.id) + '<div class="post-foot"><span>读取于 ' + esc(lastUpdated(post.capturedAt)) + '</span>' + (post.url ? button('查看 Teams 原文 ↗', 'open-source', 'data-source="teams" data-url="' + esc(post.url) + '"', 'button-plain') : '') + '</div></article>').join('');
+    return posts.map(post => '<article id="post-' + esc(encodeURIComponent(post.id)) + '" class="teams-post" data-reading-anchor><div class="post-meta"><span class="post-kind">' + ({ assignment: '作业消息', ec: 'EC 通知', general: '频道消息' }[post.kind] || '频道消息') + '</span><span>收件人：' + esc(postRecipient(post)) + '</span><span>频道：' + esc(postChannel(post)) + '</span><span>' + esc(post.author || '发送者未标明') + '</span><span>' + esc(post.publishedAt ? lastUpdated(post.publishedAt) : post.dateLabel ? '原文时间：' + post.dateLabel + '（日期未确认）' : '发布日期未确认') + '</span></div><h3>' + esc(post.title || (post.kind === 'ec' ? 'English Corner 通知' : '频道消息')) + '</h3><div id="post-text-' + esc(encodeURIComponent(post.id)) + '" data-selection-key class="post-original">' + esc(post.text || '本条消息未读取到文字，请打开原页面。') + '</div>' + attachmentsHTML(post.attachments, 'post:'+post.id) + '<div class="post-foot"><span>读取于 ' + esc(lastUpdated(post.capturedAt)) + '</span>' + (post.url ? button('查看 Teams 原文 ↗', 'open-source', 'data-source="teams" data-url="' + esc(post.url) + '"', 'button-plain') : '') + '</div></article>').join('');
+  }
+  function groupedTeamsPosts(posts) {
+    const watched = new Set(state.settings.focusTeamsChannels || []), recipients = new Map();
+    for (const post of posts) { const recipient = postRecipient(post), channel = postChannel(post); if (!recipients.has(recipient)) recipients.set(recipient, new Map()); const channels = recipients.get(recipient); if (!channels.has(channel)) channels.set(channel, []); channels.get(channel).push(post); }
+    return [...recipients.entries()].sort((a, b) => a[0].localeCompare(b[0], 'zh-CN')).map(([recipient, channels]) => '<section class="teams-recipient-group"><h2>收件人：' + esc(recipient) + '</h2>' + [...channels.entries()].sort((a, b) => Number(watched.has(b[0])) - Number(watched.has(a[0])) || a[0].localeCompare(b[0], 'zh-CN')).map(([channel, rows]) => '<div class="teams-channel-group"><div class="group-heading"><div><p>频道</p><h3>' + esc(channel) + '<span>' + rows.length + ' 条</span></h3></div>' + focusButton('toggle-focus-channel', channel, watched.has(channel), '频道：' + channel) + '</div>' + postRows(rows) + '</div>').join('') + '</section>').join('');
   }
   function renderTeams() {
-    const posts = Core.getTeamsPosts(state), visible = posts.filter(post => teamsFilter === 'all' || post.kind === teamsFilter), tasks = Core.getTasks(state).filter(task => task.source === 'teams' && !task.completed);
-    return heading('频道里的重要信息，在这里。', '作业要求保留原文，截止时间集中到待办。', button(icon('link') + '打开 Teams', 'open-source', 'data-source="teams"')) + teamsGuide() + (tasks.length ? '<section class="card settings-section">' + cardHeader('tasks', 'Teams 待完成作业', goLink('tasks', '全部待办')) + taskRows(tasks, 5) + (tasks.length > 5 ? '<p class="gpa-note">另有 ' + (tasks.length - 5) + ' 项，可在待办中查看。</p>' : '') + '</section>' : '') + '<div class="page-tools"><div class="filter-pills">' + [['all', '全部消息'], ['assignment', '作业消息'], ['general', '其他通知']].map(filter => '<button type="button" class="pill ' + (teamsFilter === filter[0] ? 'active' : '') + '" data-action="teams-filter" data-filter="' + filter[0] + '">' + filter[1] + '</button>').join('') + '</div><span class="subtle">' + visible.length + ' 条已读取消息</span></div><section class="card">' + (visible.length ? postRows(visible) : empty('teams', '还没有已读取的消息', '连接学校 Microsoft 账号后，这里会自动汇总有权访问的频道消息。没有同步到消息不代表频道没有消息。')) + teamsWarning() + sourceFooter('teams') + '</section>';
+    const posts = Core.getTeamsPosts(state), watched = new Set(state.settings.focusTeamsChannels || []);
+    const kindVisible = posts.filter(post => teamsFilter === 'all' || post.kind === teamsFilter);
+    const visible = kindVisible.filter(post => teamsChannelFilter !== 'focus' || watched.has(postChannel(post)));
+    const tasks = Core.getTasks(state).filter(task => task.source === 'teams' && !task.completed);
+    const controls = '<div class="page-tools teams-tools"><div class="filter-pills">' + [['all', '全部消息'], ['assignment', '作业消息'], ['general', '其他通知']].map(filter => '<button type="button" class="pill ' + (teamsFilter === filter[0] ? 'active' : '') + '" data-action="teams-filter" data-filter="' + filter[0] + '">' + filter[1] + '</button>').join('') + '</div><div class="filter-pills"><button type="button" class="pill ' + (teamsChannelFilter === 'all' ? 'active' : '') + '" data-action="teams-channel-filter" data-filter="all">全部频道</button><button type="button" class="pill ' + (teamsChannelFilter === 'focus' ? 'active' : '') + '" data-action="teams-channel-filter" data-filter="focus">特别关注</button></div><span class="subtle">' + visible.length + ' 条已读取消息</span></div>';
+    return heading('频道里的重要信息，在这里。', '按收件人和频道整理；特别关注仅影响 CampusDesk 的优先展示。', button(icon('link') + '打开 Teams', 'open-source', 'data-source="teams"')) + teamsGuide() + (tasks.length ? '<section class="card settings-section">' + cardHeader('tasks', 'Teams 待完成作业', goLink('tasks', '全部待办')) + taskRows(tasks, 5) + (tasks.length > 5 ? '<p class="gpa-note">另有 ' + (tasks.length - 5) + ' 项，可在待办中查看。</p>' : '') + '</section>' : '') + controls + '<section class="card teams-groups-card">' + (visible.length ? groupedTeamsPosts(visible) : empty('teams', teamsChannelFilter === 'focus' ? '还没有特别关注频道的已读取消息' : '还没有已读取的消息', teamsChannelFilter === 'focus' ? '在任意频道标题旁点“特别关注”，它会优先显示在这里。' : '连接学校 Microsoft 账号后，这里会自动汇总有权访问的频道消息。没有同步到消息不代表频道没有消息。')) + teamsWarning() + sourceFooter('teams') + '</section>';
   }
   function ecDate(post) { return post.publishedAt ? Core.today(new Date(post.publishedAt)) : ''; }
   function searchText(value) { return String(value || '').normalize('NFKC').toLocaleLowerCase().replace(/\s+/g,' ').trim(); }
@@ -346,10 +363,17 @@
     if (!history.length) return '';
     return '<section class="card" style="margin-top:21px">' + cardHeader('clock', '本机记录的 GPA 变化', '<span class="card-kicker">参考值 · 最近 ' + history.length + ' 次</span>') + '<table class="grade-table"><thead><tr><th>记录时间</th><th>参考 GPA</th><th>计入课程</th></tr></thead><tbody>' + history.slice().reverse().map(h => '<tr><td>' + esc(lastUpdated(h.capturedAt || h.date)) + '</td><td>' + Number(h.value).toFixed(2) + '</td><td>' + esc(h.count) + ' 门</td></tr>').join('') + '</tbody></table><p class="gpa-note">记录从使用本应用后开始；课程覆盖范围变化也可能导致参考值变化。</p></section>';
   }
+  function taskSubjectGroups(tasks) {
+    const focused = new Set(state.settings.focusSubjects || []), groups = new Map();
+    for (const task of tasks) { const subject = task.course || '未分类'; if (!groups.has(subject)) groups.set(subject, []); groups.get(subject).push(task); }
+    return [...groups.entries()].sort((a, b) => Number(focused.has(b[0])) - Number(focused.has(a[0])) || a[0].localeCompare(b[0], 'zh-CN')).map(([subject, rows]) => '<section class="task-subject-group"><div class="group-heading"><div><p>学科</p><h2>' + esc(subject) + '<span>' + rows.length + ' 项</span></h2></div>' + focusButton('toggle-focus-subject', subject, focused.has(subject), '学科：' + subject) + '</div>' + taskRows(rows) + '</section>').join('');
+  }
   function renderTasks() {
-    const all = Core.getTasks(state);
-    let tasks = all.filter(t => taskFilter === 'all' || (taskFilter === 'done' ? t.completed : taskFilter === 'overdue' ? taskDue(t).overdue : !t.completed));
-    return heading('一件一件，慢慢完成。', '汇总学校任务，也留一个位置给自己的安排。', button(icon('plus') + '添加待办', 'add-task', '', 'button-primary')) + '<div class="page-tools"><div class="filter-pills">' + [['open', '未完成'], ['overdue', '已逾期'], ['done', '已完成'], ['all', '全部']].map(f => '<button type="button" class="pill ' + (taskFilter === f[0] ? 'active' : '') + '" data-action="task-filter" data-filter="' + f[0] + '">' + f[1] + '</button>').join('') + '</div><span class="subtle">' + tasks.length + ' 项</span></div><div class="info-note">勾选仅更新本机待办状态，不会提交作业、回复老师或修改 ManageBac / Teams。学校页面显示的完成状态可能不同，请以原页面为准。</div><section class="card">' + (tasks.length ? taskRows(tasks) : empty('tasks', taskFilter === 'done' ? '完成的事情，会留在这里' : '这里暂时没有待办', taskFilter === 'open' ? '连接 ManageBac 和 Teams 获取已读取的学校任务，或添加一个个人待办。' : '切换筛选条件，查看其他任务。', taskFilter === 'open' ? button(icon('plus') + '添加待办', 'add-task', '', 'button-primary') : '')) + sourceFooter('managebac') + sourceFooter('teams') + '</section>';
+    const all = Core.getTasks(state), focused = new Set(state.settings.focusSubjects || []);
+    const statusTasks = all.filter(task => taskFilter === 'all' || (taskFilter === 'done' ? task.completed : taskFilter === 'overdue' ? taskDue(task).overdue : !task.completed));
+    const tasks = statusTasks.filter(task => taskSubjectFilter !== 'focus' || focused.has(task.course || '未分类'));
+    const controls = '<div class="page-tools task-tools"><div class="filter-pills">' + [['open', '未完成'], ['overdue', '已逾期'], ['done', '已完成'], ['all', '全部']].map(f => '<button type="button" class="pill ' + (taskFilter === f[0] ? 'active' : '') + '" data-action="task-filter" data-filter="' + f[0] + '">' + f[1] + '</button>').join('') + '</div><div class="filter-pills"><button type="button" class="pill ' + (taskSubjectFilter === 'all' ? 'active' : '') + '" data-action="task-subject-filter" data-filter="all">全部学科</button><button type="button" class="pill ' + (taskSubjectFilter === 'focus' ? 'active' : '') + '" data-action="task-subject-filter" data-filter="focus">特别关注</button></div><span class="subtle">' + tasks.length + ' 项</span></div>';
+    return heading('一件一件，慢慢完成。', '按学科整理；特别关注会优先显示在最前。', button(icon('plus') + '添加待办', 'add-task', '', 'button-primary')) + controls + '<div class="info-note">勾选仅更新本机待办状态，不会提交作业、回复老师或修改 ManageBac / Teams。学科特别关注只保存在本机。</div><section class="card task-subjects-card">' + (tasks.length ? taskSubjectGroups(tasks) : empty('tasks', taskSubjectFilter === 'focus' ? '还没有特别关注学科的任务' : taskFilter === 'done' ? '完成的事情，会留在这里' : '这里暂时没有待办', taskSubjectFilter === 'focus' ? '在任意学科标题旁点“特别关注”，它会优先显示在这里。' : taskFilter === 'open' ? '连接 ManageBac 和 Teams 获取已读取的学校任务，或添加一个个人待办。' : '切换筛选条件，查看其他任务。', taskFilter === 'open' && taskSubjectFilter !== 'focus' ? button(icon('plus') + '添加待办', 'add-task', '', 'button-primary') : '')) + sourceFooter('managebac') + sourceFooter('teams') + '</section>';
   }
   function renderFeedback() {
     const all = Core.getFeedback(state), items = all.filter(f => feedbackFilter === 'all' || !f.read);
@@ -671,7 +695,22 @@
       if (!window.confirm('取消关注这个 Teams 页面？已读取的消息会保留。')) return;
       state.settings.teamsPages = state.settings.teamsPages.filter(item => item.id !== target.dataset.id); persist(); render();
     }
+    else if (action === 'toggle-focus-subject') {
+      const value = String(target.dataset.value || '').trim();
+      if (!value) return;
+      const values = state.settings.focusSubjects || [], exists = values.includes(value);
+      state.settings.focusSubjects = exists ? values.filter(item => item !== value) : values.concat(value).slice(0, 100);
+      persist(); render(); toast(exists ? '已取消特别关注学科：' + value : '已特别关注学科：' + value);
+    }
+    else if (action === 'toggle-focus-channel') {
+      const value = String(target.dataset.value || '').trim();
+      if (!value) return;
+      const values = state.settings.focusTeamsChannels || [], exists = values.includes(value);
+      state.settings.focusTeamsChannels = exists ? values.filter(item => item !== value) : values.concat(value).slice(0, 100);
+      persist(); render(); toast(exists ? '已取消关注频道：' + value : '已关注频道：' + value);
+    }
     else if (action === 'teams-filter') { teamsFilter = target.dataset.filter; render(); }
+    else if (action === 'teams-channel-filter') { teamsChannelFilter = target.dataset.filter === 'focus' ? 'focus' : 'all'; render(); }
     else if (action === 'ec-clear') { ecQuery='';ecDateFilter='all';const search=document.getElementById('ec-search'),date=document.getElementById('ec-date-filter');if(search)search.value='';if(date)date.value='all';updateECResults();if(search)search.focus(); }
     else if (action === 'add-task') { document.getElementById('task-form').reset(); openTaskDialog(); document.getElementById('task-title').focus(); }
     else if (action === 'close-task') closeTaskDialog();
@@ -686,6 +725,7 @@
       const item = Core.getFeedback(state).find(f => f.id === target.dataset.id);
       if (item) { state.feedbackRead[item.id] = !item.read; persist(); render(); }
     } else if (action === 'task-filter') { taskFilter = target.dataset.filter; render(); }
+    else if (action === 'task-subject-filter') { taskSubjectFilter = target.dataset.filter === 'focus' ? 'focus' : 'all'; render(); }
     else if (action === 'feedback-filter') { feedbackFilter = target.dataset.filter; render(); }
     else if (action === 'prev-day') shiftDate(-1);
     else if (action === 'next-day') shiftDate(1);

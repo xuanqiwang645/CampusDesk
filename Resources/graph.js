@@ -156,6 +156,7 @@
       if (message.createdDateTime && !date) warn('一条消息的发布时间格式无法确认。');
       snapshot.posts.push({ id, title: clip(title, 500, '消息标题'), text: clip(content, MAX_TEXT, '消息'), url: messageURL,
         author: clip(text(object(object(message.from).user).displayName) || text(object(object(message.from).application).displayName), 300, '作者'),
+        recipient: clip(batch.kind === 'chatMessages' ? text(chat.topic) : text(team.displayName), 300, '收件人'),
         channel: clip(label, 300, '频道名称'), date, dateLabel: date, kind: classify(label, title, content), attachments: files,
         replyToId: isReply ? graphID('channel', text(team.id), text(channel.id), text(parentID || message.replyToId || batch.rootMessageId)) : '',
         capturedAt });

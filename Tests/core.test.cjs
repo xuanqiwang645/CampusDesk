@@ -37,6 +37,19 @@ test('dashboard theme keeps old exports on classic and accepts only explicit pan
   assert.throws(() => Core.validateState(invalid), /面板样式/);
 });
 
+test('focus preferences migrate empty, preserve labels, and reject duplicate or blank values', () => {
+  const legacy = Core.emptyState(); delete legacy.settings.focusSubjects; delete legacy.settings.focusTeamsChannels;
+  const migrated = Core.validateState(legacy);
+  assert.deepEqual(migrated.settings.focusSubjects, []);
+  assert.deepEqual(migrated.settings.focusTeamsChannels, []);
+  const focused = Core.emptyState(); focused.settings.focusSubjects = ['English']; focused.settings.focusTeamsChannels = ['HOMEWORK'];
+  assert.deepEqual(Core.validateState(focused).settings.focusSubjects, ['English']);
+  const duplicate = Core.emptyState(); duplicate.settings.focusSubjects = ['English', 'English'];
+  assert.throws(() => Core.validateState(duplicate), /重复/);
+  const blank = Core.emptyState(); blank.settings.focusTeamsChannels = [''];
+  assert.throws(() => Core.validateState(blank), /不能为空/);
+});
+
 test('schedule never relabels yesterday as today; class interval excludes exact end', () => {
   const state = Core.mergeSnapshot(Core.emptyState(), seiue());
   assert.equal(Core.getSchedule(state, '2026-09-19').length, 0);

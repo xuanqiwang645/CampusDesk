@@ -61,8 +61,8 @@ function harness({ native = true, hash = '#overview', saved = null } = {}) {
 }
 function teamsSnapshot(tasks = []) {
   return { source: 'teams', url: 'https://teams.microsoft.com/v2/#/channels/test', title: 'Class channel', capturedAt: '2026-09-19T00:41:00Z', coverage: 'visible', warnings: ['仅覆盖已加载消息'], tasks, posts: [
-    { id: 'notice-ec', title: 'EC ANNOUNCEMENT', text: 'Roster notice\nGroup A: Student One\nCheck the original PDF.', kind: 'ec', author: 'Teacher', channel: 'ENGLISH CORNER ROSTER', date: '2026-09-18T08:00:00Z', url: 'https://teams.microsoft.com/v2/#/channels/test', attachments: [{ title: 'Roster.pdf', url: 'https://school.sharepoint.com/Shared%20Documents/Roster.pdf' }] },
-    { id: 'work-message', title: 'Writing task', text: 'Write a paragraph.\nExplain your evidence.', kind: 'assignment', dateLabel: '5:18 PM', url: 'https://teams.microsoft.com/v2/#/channels/test' }
+    { id: 'notice-ec', title: 'EC ANNOUNCEMENT', text: 'Roster notice\nGroup A: Student One\nCheck the original PDF.', kind: 'ec', author: 'Teacher', recipient: 'Grade 10 A', channel: 'ENGLISH CORNER ROSTER', date: '2026-09-18T08:00:00Z', url: 'https://teams.microsoft.com/v2/#/channels/test', attachments: [{ title: 'Roster.pdf', url: 'https://school.sharepoint.com/Shared%20Documents/Roster.pdf' }] },
+    { id: 'work-message', title: 'Writing task', text: 'Write a paragraph.\nExplain your evidence.', kind: 'assignment', recipient: 'Grade 10 A', channel: 'HOMEWORK', dateLabel: '5:18 PM', url: 'https://teams.microsoft.com/v2/#/channels/test' }
   ] };
 }
 function task(overrides = {}) { return Object.assign({ id: 'writing', title: 'Writing <task>', course: 'English', dueAt: '2026-09-19T02:00:00Z', requirements: 'Read the source.\nExplain <your> evidence.', status: 'open', url: 'https://teams.microsoft.com/v2/#/channels/test', attachments: [{ title: 'Guide.pdf', url: 'https://school.sharepoint.com/Guide.pdf' }] }, overrides); }
@@ -103,6 +103,20 @@ test('estimated GPA is always presented with two decimal places', () => {
   app.click({ page: 'grades' });
   assert.match(app.node('content').innerHTML, />3\.50</);
   assert.match(app.node('content').innerHTML, />4\.00</);
+});
+
+test('tasks group by subject and Teams group by recipient/channel with local focus controls', () => {
+  const app = harness(); app.receive({ type: 'snapshot', snapshot: teamsSnapshot([task(), task({ id: 'math-work', title: 'Math work', course: 'Math' })]) });
+  app.click({ page: 'tasks' });
+  assert.match(app.node('content').innerHTML, /学科/); assert.match(app.node('content').innerHTML, /English/); assert.match(app.node('content').innerHTML, /Math/);
+  app.click({ action: 'toggle-focus-subject', value: 'English' });
+  assert.deepEqual(app.last('saveState').state.settings.focusSubjects, ['English']);
+  app.click({ action: 'task-subject-filter', filter: 'focus' }); assert.match(app.node('content').innerHTML, /English/); assert.doesNotMatch(app.node('content').innerHTML, /Math work/);
+  app.click({ page: 'teams' });
+  assert.match(app.node('content').innerHTML, /收件人：Grade 10 A/); assert.match(app.node('content').innerHTML, /HOMEWORK/);
+  app.click({ action: 'toggle-focus-channel', value: 'HOMEWORK' });
+  assert.deepEqual(app.last('saveState').state.settings.focusTeamsChannels, ['HOMEWORK']);
+  app.click({ action: 'teams-channel-filter', filter: 'focus' }); assert.match(app.node('content').innerHTML, /HOMEWORK/); assert.doesNotMatch(app.node('content').innerHTML, /ENGLISH CORNER ROSTER/);
 });
 
 test('boot migrates old local state, renders new pages, and browser source opening never claims connection', () => {

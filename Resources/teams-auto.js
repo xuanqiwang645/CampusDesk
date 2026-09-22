@@ -86,6 +86,7 @@
       var clipped = body.length > LIMITS.text || instructions.length > LIMITS.text;
       if (clipped) out.coverageMetadata.textTruncated = true;
       out.posts.push({id:id,title:title,text:(body || instructions).slice(0,LIMITS.text),author:short(record.author,160) || null,
+        recipient:scope.type === 'channel' ? short(scope.teamName,200) || null : scope.type === 'chat' ? short(scope.name,200) || null : null,
         channel:channel,date:helpers.exactDate(record.postedAt),dateLabel:short(record.dateLabel || record.postedAt,200) || null,url:itemURL,kind:kind,attachments:attachments,
         nativeID:record.nativeID || null,textTruncated:clipped,messageType:record.messageType || 'message'});
       if (kind === 'assignment') {

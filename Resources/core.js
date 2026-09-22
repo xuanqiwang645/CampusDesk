@@ -204,7 +204,7 @@
     return { version: VERSION, settings: { timezone: 'Asia/Shanghai', refreshMinutes: 15, selfStudy: true,
       seiueURL: configuredSchools.seiue, managebacURL: configuredSchools.managebac, teamsPages: [], teamsNotifications: false,
       teamsBrowser: 'chrome', teamsBrowserAutomation: false, teamsMode: 'browser', teamsAutoDiscover: true, graphIncludeChats: true,
-      reminderMinutes: 30, teamsDueOverrides: {}, dashboardTheme: 'classic' }, snapshots: { seiue: {}, managebac: {}, teams: {} },
+      reminderMinutes: 30, teamsDueOverrides: {}, dashboardTheme: 'classic', focusSubjects: [], focusTeamsChannels: [] }, snapshots: { seiue: {}, managebac: {}, teams: {} },
       manualTasks: [], taskChecks: {}, feedbackRead: {}, gradeHistory: [] };
   }
   function scheduleRow(row) {
@@ -355,7 +355,7 @@
     const kind = str(row.kind, 30, 'general');
     if (!['assignment', 'ec', 'general'].includes(kind)) fail('Teams 帖子类型无效');
     const result = { id: teamsID(row.id, hash(url + title + text)), title, text, url, kind,
-      author: str(row.author, 300), channel: str(row.channel, 300), date: str(row.date, 100),
+      author: str(row.author, 300), recipient: str(row.recipient, 300), channel: str(row.channel, 300), date: str(row.date, 100),
       dateLabel: str(row.dateLabel, 300, str(row.date, 100)), attachments: attachments(row.attachments) };
     if (row.replyToId !== undefined) result.replyToId = row.replyToId ? teamsID(row.replyToId) : '';
     if (row.capturedAt !== undefined) result.capturedAt = dateISO(row.capturedAt, false);
@@ -477,6 +477,12 @@
     if (!Number.isInteger(s.settings.reminderMinutes)) fail('提醒分钟数必须为整数');
     s.settings.dashboardTheme = settings.dashboardTheme === undefined ? 'classic' : settings.dashboardTheme;
     if (!['classic', 'board'].includes(s.settings.dashboardTheme)) fail('面板样式无效');
+    for (const [key, label] of [['focusSubjects', '特别关注学科'], ['focusTeamsChannels', '关注 Teams 频道']]) {
+      const items = settings[key] === undefined ? [] : array(settings[key], label, 100).map(value => str(value, 300));
+      if (items.some(value => !value)) fail(label + '不能为空');
+      if (new Set(items).size !== items.length) fail(label + '重复');
+      s.settings[key] = items;
+    }
     if (settings.teamsDueOverrides !== undefined) {
       const overrides = record(settings.teamsDueOverrides, 'Teams 截止时间');
       if (Object.keys(overrides).length > MAX_ROWS) fail('手动截止时间过多');
