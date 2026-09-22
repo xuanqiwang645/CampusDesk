@@ -12,6 +12,9 @@
   let selectedDate = Core.today();
   let taskFilter = 'open';
   let taskSubjectFilter = 'all';
+  let customScheduleMode = 'period';
+  let customScheduleDays = [];
+  let customScheduleDraft = { title: '', room: '', period: '', start: '', end: '' };
   let feedbackFilter = 'all';
   let teamsFilter = 'all';
   let teamsChannelFilter = 'all';
@@ -39,6 +42,7 @@
     '让它适合你的每一天。': 'Make it work for every day.', '学校系统各自登录；课表、任务和频道原文保存在本机。': 'Sign in to each school system separately; schedules, tasks, and channel content remain on this Mac.', '更改会立即应用到导航、页面标题、按钮与固定说明文字。': 'Changes apply immediately to navigation, page titles, buttons, and fixed help text.',
     '面板样式': 'Dashboard style', '经典面板': 'Classic dashboard', '卡片看板': 'Card board', '熟悉的课程、成绩与待办布局': 'Familiar schedule, grades, and to-do layout', '统计概览与密集任务卡片': 'At-a-glance metrics and focused task cards',
     '日常偏好': 'Daily preferences', '学校连接': 'School connections', '数据与备份': 'Data & backups', '自动刷新间隔': 'Automatic refresh interval', '空白课节显示为自习': 'Show open periods as self-study', '显示时区': 'Display time zone', '每 5 分钟': 'Every 5 minutes', '每 15 分钟': 'Every 15 minutes', '每 30 分钟': 'Every 30 minutes', '每小时': 'Hourly',
+    '自编课表': 'Custom schedule', '添加自编课程': 'Add custom class', '课程名称': 'Class name', '教室（可选）': 'Room (optional)', '选择星期': 'Choose weekdays', '按节次': 'By period', '按时刻': 'By time', '第几节': 'Period', '开始时间': 'Start time', '结束时间': 'End time', '保存自编课程': 'Save custom class', '已添加': 'Added', '删除自编课程': 'Delete custom class', '请选择至少一天': 'Choose at least one weekday', '结束时间将自动补为开始时间后 45 分钟。': 'An empty or invalid end time is filled as 45 minutes after the start.', '按时间填写时，会按重叠比例自动归入对应节次。': 'Time-based entries are assigned by overlap with the matching period.', '周日': 'Sun', '周一': 'Mon', '周二': 'Tue', '周三': 'Wed', '周四': 'Thu', '周五': 'Fri', '周六': 'Sat',
     '希悦网址': 'Seiue URL', '学校 ManageBac 网址': 'School ManageBac URL', '导出或恢复本机数据': 'Export or restore local data', '构建时配置；未配置时不会连接。': 'Configured at build time; no connection is made when it is empty.', '构建时配置；仅允许指定学校的精确地址。': 'Configured at build time; only the approved school address is allowed.',
     'Teams 作业提醒': 'Teams assignment reminders', '截止前系统通知': 'System notifications before due dates', '提前多久提醒': 'Reminder lead time',
     '课程成绩': 'Course grades', '学校 GPA': 'School GPA', '参考 GPA': 'Estimated GPA', '今日课程': 'Today\'s classes', '全部待办': 'All to-dos', '添加待办': 'Add to-do', '查看全部': 'View all',
@@ -224,12 +228,93 @@
     return '<div class="page-heading"><div><div class="eyebrow">YOUR EVERYDAY, IN VIEW</div><h1>' + esc(t(title)) + '</h1><p class="page-subtitle">' + esc(t(subtitle)) + '</p></div>' + (right || '') + '</div>';
   }
   function cardHeader(name, title, right) { return '<div class="card-header"><h2 class="card-title"><span class="icon">' + icon(name) + '</span>' + t(title) + '</h2>' + (right || '') + '</div>'; }
+  function customPeriods() {
+    const periods = typeof Core.getSchedulePeriods === 'function' ? Core.getSchedulePeriods(state) : [];
+    return periods.length ? periods : Array.from({ length: 9 }, (_, index) => ({ period: 'P' + (index + 1), start: '', end: '' }));
+  }
+  function customHm2min(value) {
+    const match = /^(\d{1,2}):(\d{2})$/.exec(String(value || '').trim());
+    if (!match || Number(match[1]) > 23 || Number(match[2]) > 59) return null;
+    return Number(match[1]) * 60 + Number(match[2]);
+  }
+  function customMin2hm(value) {
+    const minutes = ((Math.round(value) % 1440) + 1440) % 1440;
+    return String(Math.floor(minutes / 60)).padStart(2, '0') + ':' + String(minutes % 60).padStart(2, '0');
+  }
+  function customPeriodTimes(period) {
+    const key = String(period || '').toUpperCase();
+    return customPeriods().find(item => String(item.period || '').toUpperCase() === key) || null;
+  }
+  function customBestPeriod(start, end) {
+    const a = customHm2min(start);
+    if (a === null) return null;
+    let b = customHm2min(end);
+    if (b === null || b <= a) b = a + 45;
+    let best = null, overlap = 0;
+    for (const period of customPeriods()) {
+      const pa = customHm2min(period.start), pb = customHm2min(period.end);
+      if (pa === null || pb === null) continue;
+      const amount = Math.min(b, pb) - Math.max(a, pa);
+      if (amount > overlap) { overlap = amount; best = period; }
+    }
+    return best && overlap / (b - a) >= 0.5 ? best : null;
+  }
+  function customCaptureDraft() {
+    const read = id => document.getElementById(id);
+    customScheduleDraft = {
+      title: read('custom-title') ? read('custom-title').value : customScheduleDraft.title,
+      room: read('custom-room') ? read('custom-room').value : customScheduleDraft.room,
+      period: read('custom-period') ? read('custom-period').value : customScheduleDraft.period,
+      start: read('custom-start') ? read('custom-start').value : customScheduleDraft.start,
+      end: read('custom-end') ? read('custom-end').value : customScheduleDraft.end
+    };
+  }
+  function customSyncFromPeriod() {
+    if (customScheduleMode !== 'period') return;
+    const period = customPeriodTimes(customScheduleDraft.period);
+    if (!period) return;
+    customScheduleDraft.start = period.start || '';
+    customScheduleDraft.end = period.end || '';
+    const start = document.getElementById('custom-start'), end = document.getElementById('custom-end');
+    if (start) start.value = customScheduleDraft.start;
+    if (end) end.value = customScheduleDraft.end;
+    const hint = document.getElementById('custom-time-hint');
+    if (hint) hint.textContent = period.start ? period.start + (period.end ? '–' + period.end : '') : '该节次暂无已读取的时间';
+  }
+  function customSyncFromTime() {
+    const hint = document.getElementById('custom-time-hint');
+    if (!hint) return;
+    const start = document.getElementById('custom-start'), end = document.getElementById('custom-end');
+    customScheduleDraft.start = start ? start.value : customScheduleDraft.start;
+    customScheduleDraft.end = end ? end.value : customScheduleDraft.end;
+    const a = customHm2min(customScheduleDraft.start);
+    if (a === null) { hint.textContent = '填入开始时间后会自动识别节次'; return; }
+    const b = customHm2min(customScheduleDraft.end);
+    if (b === null || b <= a) {
+      customScheduleDraft.end = customMin2hm(a + 45);
+      if (end) end.value = customScheduleDraft.end;
+    }
+    const hit = customBestPeriod(customScheduleDraft.start, customScheduleDraft.end);
+    hint.textContent = hit ? '将归入 ' + hit.period + (hit.start ? ' · ' + hit.start + '–' + hit.end : '') : '未匹配节次，将按开始时间插入';
+  }
+  function renderCustomSchedule() {
+    const periods = customPeriods(), days = [1, 2, 3, 4, 5, 6, 0], labels = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'];
+    const draft = customScheduleDraft, lessons = state.settings.customLessons || [];
+    const mode = customScheduleMode === 'time' ? 'time' : 'period';
+    const rows = lessons.map((lesson, index) => {
+      const when = lesson.date || (lesson.weekdays || []).map(day => ['周日', '周一', '周二', '周三', '周四', '周五', '周六'][day]).join('、');
+      const period = lesson.period ? lesson.period + ' · ' : '';
+      return '<div class="custom-lesson-row"><div><strong>' + esc(period + (lesson.start || '') + (lesson.end ? '–' + lesson.end : '') + ' · ' + lesson.title) + '</strong><small>' + esc(when + (lesson.room ? ' · ' + lesson.room : '')) + '</small></div><button class="icon-button" type="button" data-action="delete-custom-lesson" data-index="' + index + '" aria-label="' + esc(t('删除自编课程')) + '" title="' + esc(t('删除自编课程')) + '">' + icon('trash') + '</button></div>';
+    }).join('');
+    return '<section class="card custom-schedule-card">' + cardHeader('schedule', '自编课表', '<span class="card-kicker">' + t('添加自编课程') + '</span>') +
+      '<form id="custom-schedule-form" class="custom-schedule-form"><div class="custom-schedule-grid"><label><span>' + t('课程名称') + '</span><input id="custom-title" type="text" maxlength="300" value="' + esc(draft.title) + '" placeholder="如：晨会、社团"></label><label><span>' + t('教室（可选）') + '</span><input id="custom-room" type="text" maxlength="200" value="' + esc(draft.room) + '" placeholder="如：操场"></label></div><div class="custom-schedule-label">' + t('选择星期') + '</div><div class="custom-days">' + days.map((day, index) => '<button type="button" class="custom-day ' + (customScheduleDays.includes(day) ? 'active' : '') + '" data-action="custom-day" data-day="' + day + '">' + t(labels[index]) + '</button>').join('') + '</div><div class="custom-mode-tabs"><button type="button" class="custom-mode ' + (mode === 'period' ? 'active' : '') + '" data-action="custom-mode" data-mode="period">' + t('按节次') + '</button><button type="button" class="custom-mode ' + (mode === 'time' ? 'active' : '') + '" data-action="custom-mode" data-mode="time">' + t('按时刻') + '</button></div><div class="custom-schedule-grid ' + (mode === 'time' ? 'is-time' : '') + '"><label class="custom-period-field"><span>' + t('第几节') + '</span><select id="custom-period">' + periods.map(item => '<option value="' + esc(item.period) + '"' + (item.period === draft.period ? ' selected' : '') + '>' + esc(item.period) + (item.start ? ' · ' + esc(item.start) + '–' + esc(item.end) : '') + '</option>').join('') + '</select></label><label><span>' + t('开始时间') + '</span><input id="custom-start" type="time" value="' + esc(draft.start) + '"></label><label><span>' + t('结束时间') + '</span><input id="custom-end" type="time" value="' + esc(draft.end) + '"></label></div><p id="custom-time-hint" class="custom-time-hint">' + esc(mode === 'period' ? '选择节次后自动带出时间' : '填入开始时间后会自动识别节次') + '</p><p class="custom-schedule-note">' + t('结束时间将自动补为开始时间后 45 分钟。') + ' ' + t('按时间填写时，会按重叠比例自动归入对应节次。') + '</p><button class="button button-primary" type="submit">' + icon('plus') + t('保存自编课程') + '</button></form>' + (rows ? '<div class="custom-lesson-list"><div class="custom-schedule-label">' + t('已添加') + ' ' + lessons.length + '</div>' + rows + '</div>' : '') + '</section>';
+  }
   function scheduleRows(rows, date) {
     const now = Core.clock(), today = Core.today();
     return '<div class="schedule-list">' + rows.map(row => {
       const current = date === today && row.start && row.end && row.start <= now && row.end > now;
       const past = date < today || (date === today && row.end && row.end <= now);
-      return '<div class="schedule-row ' + (current ? 'current' : past ? 'past' : '') + '"><div class="schedule-time">' + esc(row.start || '待定') + '<small>' + esc(row.end || '') + '</small></div><div class="timeline"><span class="timeline-dot"></span></div><div class="class-tile"><h3>' + esc(row.title || (row.isSelfStudy ? '自习课' : '未命名课程')) + (current ? '<span class="inline-label">正在上课</span>' : '') + '</h3><div class="class-meta">' + (row.room ? '<span>' + esc(row.room) + '</span>' : '') + (row.teacher ? '<span>' + esc(row.teacher) + '</span>' : '') + (row.isSelfStudy ? '<span>空白课节 · 自习</span>' : '') + (!row.room && !row.teacher && !row.isSelfStudy ? '<span>教室与教师未显示</span>' : '') + '</div></div></div>';
+      return '<div class="schedule-row ' + (row.custom ? 'custom-row ' : '') + (current ? 'current' : past ? 'past' : '') + '"><div class="schedule-time">' + esc(row.start || (row.period || '待定')) + '<small>' + esc(row.end || '') + '</small></div><div class="timeline"><span class="timeline-dot"></span></div><div class="class-tile"><h3>' + esc(row.title || (row.isSelfStudy ? '自习课' : '未命名课程')) + (row.custom ? '<span class="inline-label custom-label">自编</span>' : '') + (current ? '<span class="inline-label">正在上课</span>' : '') + '</h3><div class="class-meta">' + (row.room ? '<span>' + esc(row.room) + '</span>' : '') + (row.teacher ? '<span>' + esc(row.teacher) + '</span>' : '') + (row.period ? '<span>' + esc(row.period) + '</span>' : '') + (row.isSelfStudy ? '<span>空白课节 · 自习</span>' : '') + (!row.room && !row.teacher && !row.period && !row.isSelfStudy ? '<span>教室与教师未显示</span>' : '') + '</div></div></div>';
     }).join('') + '</div>';
   }
   function noSchedule(date) {
@@ -423,7 +508,7 @@
   }
   function renderSchedule() {
     const rows = Core.getSchedule(state, selectedDate);
-    return heading('为每一节课，留好位置。', '以北京时间展示课程。空白课节按你的设置显示为自习。') + (selectedDate === Core.today() ? renderClassClock() : '') + '<div class="page-tools"><div class="date-control"><button class="icon-button" type="button" data-action="prev-day" aria-label="前一天">' + icon('back') + '</button><label class="visually-hidden" for="schedule-date">课表日期</label><input id="schedule-date" type="date" value="' + esc(selectedDate) + '"><button class="icon-button" type="button" data-action="next-day" aria-label="后一天">' + icon('arrow') + '</button><span class="date-day">' + esc(dayLabel(selectedDate)) + '</span>' + button('今天', 'today') + '</div>' + button(icon('link') + '打开希悦课表', 'open-source', 'data-source="seiue"') + '</div><section class="card schedule-full">' + cardHeader('schedule', selectedDate === Core.today() ? '今日课程' : esc(selectedDate) + ' 的课程', '<span class="card-kicker">' + rows.length + ' 节已读取课程</span>') + (rows.length ? scheduleRows(rows, selectedDate) : noSchedule(selectedDate)) + sourceFooter('seiue') + '</section><p class="footer-note">自习仅补充学校页面中能确认时间的空白课节，不推测未读取的课表。</p>';
+    return heading('为每一节课，留好位置。', '以北京时间展示课程。空白课节按你的设置显示为自习。') + (selectedDate === Core.today() ? renderClassClock() : '') + '<div class="page-tools"><div class="date-control"><button class="icon-button" type="button" data-action="prev-day" aria-label="前一天">' + icon('back') + '</button><label class="visually-hidden" for="schedule-date">课表日期</label><input id="schedule-date" type="date" value="' + esc(selectedDate) + '"><button class="icon-button" type="button" data-action="next-day" aria-label="后一天">' + icon('arrow') + '</button><span class="date-day">' + esc(dayLabel(selectedDate)) + '</span>' + button('今天', 'today') + '</div>' + button(icon('link') + '打开希悦课表', 'open-source', 'data-source="seiue"') + '</div><section class="card schedule-full">' + cardHeader('schedule', selectedDate === Core.today() ? '今日课程' : esc(selectedDate) + ' 的课程', '<span class="card-kicker">' + rows.length + ' 节已读取课程</span>') + (rows.length ? scheduleRows(rows, selectedDate) : noSchedule(selectedDate)) + sourceFooter('seiue') + '</section>' + renderCustomSchedule() + '<p class="footer-note">自习仅补充学校页面中能确认时间的空白课节，不推测未读取的课表。</p>';
   }
   function renderGrades() {
     const gpa = getGpaView();
@@ -830,6 +915,32 @@
     else if (action === 'prev-day') shiftDate(-1);
     else if (action === 'next-day') shiftDate(1);
     else if (action === 'today') { selectedDate = Core.today(); render(); }
+    else if (action === 'custom-day') {
+      customCaptureDraft();
+      const day = Number(target.dataset.day);
+      if (!Number.isInteger(day) || day < 0 || day > 6) return;
+      customScheduleDays = customScheduleDays.includes(day) ? customScheduleDays.filter(item => item !== day) : customScheduleDays.concat(day).sort((a, b) => a - b);
+      render();
+    }
+    else if (action === 'custom-mode') {
+      customCaptureDraft();
+      const mode = target.dataset.mode === 'time' ? 'time' : 'period';
+      if (mode === 'time') {
+        const period = customPeriodTimes(customScheduleDraft.period);
+        if (period) { customScheduleDraft.start = period.start || ''; customScheduleDraft.end = period.end || ''; }
+      } else {
+        const hit = customBestPeriod(customScheduleDraft.start, customScheduleDraft.end);
+        if (hit) customScheduleDraft.period = hit.period;
+      }
+      customScheduleMode = mode; render();
+      if (mode === 'period') customSyncFromPeriod(); else customSyncFromTime();
+    }
+    else if (action === 'delete-custom-lesson') {
+      const index = Number(target.dataset.index), lessons = state.settings.customLessons || [];
+      if (!Number.isInteger(index) || index < 0 || index >= lessons.length) return;
+      state.settings.customLessons = lessons.slice(0, index).concat(lessons.slice(index + 1));
+      persist(); render(); toast('已删除自编课程。');
+    }
     else if (action === 'export') { if (!send('exportData')) exportBrowser(); }
     else if (action === 'import') { if (!send('importData')) document.getElementById('import-file').click(); }
     else if (action === 'clear-session') {
@@ -885,8 +996,46 @@
   });
   document.addEventListener('input', event => {
     if (event.target.id === 'ec-search') { ecQuery=event.target.value.slice(0,200);updateECResults();return; }
+    if (['custom-title', 'custom-room', 'custom-start', 'custom-end'].includes(event.target.id)) {
+      customCaptureDraft();
+      if (event.target.id === 'custom-start' || event.target.id === 'custom-end') customSyncFromTime();
+      return;
+    }
     if (event.target.id !== 'graph-client-id' && event.target.id !== 'graph-tenant') return;
     graphConfigurationDraft = { clientId: document.getElementById('graph-client-id').value, tenant: document.getElementById('graph-tenant').value };
+  });
+  document.addEventListener('change', event => {
+    const el = event.target;
+    if (el.id === 'custom-period') {
+      customScheduleDraft.period = el.value;
+      customSyncFromPeriod();
+    }
+  });
+  document.addEventListener('submit', event => {
+    if (!event.target || event.target.id !== 'custom-schedule-form') return;
+    event.preventDefault();
+    customCaptureDraft();
+    const title = customScheduleDraft.title.trim();
+    if (!title) { toast('请填写课程名称。'); return; }
+    if (!customScheduleDays.length) { toast(t('请选择至少一天')); return; }
+    let period = customScheduleDraft.period, start = customScheduleDraft.start, end = customScheduleDraft.end;
+    if (customScheduleMode === 'period') {
+      const times = customPeriodTimes(period);
+      start = times && times.start || start;
+      end = times && times.end || end;
+      if (!period) { toast('请选择节次。'); return; }
+    } else {
+      if (customHm2min(start) === null) { toast('请填写有效的开始时间。'); return; }
+      if (customHm2min(end) === null || customHm2min(end) <= customHm2min(start)) end = customMin2hm(customHm2min(start) + 45);
+      const hit = customBestPeriod(start, end);
+      period = hit ? hit.period : '';
+    }
+    const id = 'custom-' + (window.crypto && window.crypto.randomUUID ? window.crypto.randomUUID() : Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10));
+    state.settings.customLessons = (state.settings.customLessons || []).concat({ id, title, room: customScheduleDraft.room.trim(), weekdays: customScheduleDays.slice().sort((a, b) => a - b), period, start, end, byTime: customScheduleMode === 'time' });
+    persist();
+    customScheduleDraft = { title: '', room: '', period: period || customScheduleDraft.period, start: '', end: '' };
+    render();
+    toast('自编课程已添加。');
   });
   document.getElementById('teams-page-form').addEventListener('submit', event => {
     event.preventDefault();

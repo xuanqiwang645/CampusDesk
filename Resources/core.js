@@ -204,7 +204,7 @@
     return { version: VERSION, settings: { timezone: 'Asia/Shanghai', refreshMinutes: 15, selfStudy: true,
       seiueURL: configuredSchools.seiue, managebacURL: configuredSchools.managebac, teamsPages: [], teamsNotifications: false,
       teamsBrowser: 'chrome', teamsBrowserAutomation: false, teamsMode: 'browser', teamsAutoDiscover: true, graphIncludeChats: true,
-      reminderMinutes: 30, teamsDueOverrides: {}, dashboardTheme: 'classic', language: 'zh-CN', focusSubjects: [], focusTeamsChannels: [] }, snapshots: { seiue: {}, managebac: {}, teams: {} },
+      reminderMinutes: 30, teamsDueOverrides: {}, dashboardTheme: 'classic', language: 'zh-CN', focusSubjects: [], focusTeamsChannels: [], customLessons: [] }, snapshots: { seiue: {}, managebac: {}, teams: {} },
       manualTasks: [], taskChecks: {}, feedbackRead: {}, gradeHistory: [] };
   }
   function scheduleRow(row) {
@@ -215,6 +215,33 @@
     const isSelfStudy = bool(row.isSelfStudy, !title);
     return { id: id(row.id, 'schedule-' + hash(date + start + title)), date, start, end,
       title: title || (isSelfStudy ? '自习课' : ''), room: str(row.room, 200), teacher: str(row.teacher, 200), isSelfStudy };
+  }
+  function periodRow(row) {
+    record(row, '节次');
+    const period = str(row.period || row.name, 40);
+    const start = timeKey(row.start), end = timeKey(row.end);
+    if (!period) fail('节次名称不能为空');
+    if (end <= start) fail('节次结束时间必须晚于开始时间');
+    return { period, start, end };
+  }
+  function customLessonRow(row) {
+    record(row, '自编课程');
+    const title = str(row.title || row.subject, 300);
+    if (!title) fail('自编课程名称不能为空');
+    const weekdays = array(row.weekdays, '自编课程星期', 7).map(value => finite(value, 0, 6, false));
+    const date = row.date === undefined || row.date === null || row.date === '' ? '' : dayKey(row.date);
+    if (!date && !weekdays.length) fail('自编课程需要指定日期或星期');
+    if (new Set(weekdays).size !== weekdays.length) fail('自编课程星期重复');
+    const period = str(row.period, 40);
+    const start = row.start === undefined || row.start === null || row.start === '' ? '' : timeKey(row.start);
+    let end = row.end === undefined || row.end === null || row.end === '' ? '' : timeKey(row.end);
+    if (start && (!end || end <= start)) {
+      const total = (Number(start.slice(0, 2)) * 60 + Number(start.slice(3)) + 45) % 1440;
+      end = String(Math.floor(total / 60)).padStart(2, '0') + ':' + String(total % 60).padStart(2, '0');
+    }
+    if (!period && !start) fail('自编课程需要节次或开始时间');
+    return { id: id(row.id, 'custom-' + hash(title + date + period + start)), title, room: str(row.room, 200),
+      date, weekdays: [...new Set(weekdays)].sort((a, b) => a - b), period, start, end, byTime: bool(row.byTime, Boolean(start)) };
   }
   function courseRow(row) {
     record(row, '成绩');
@@ -399,6 +426,7 @@
       loginRequired: bool(value.loginRequired, false), warnings: array(value.warnings, '提示', 100).map(w => str(w, 2000)) };
     if (source === 'seiue') {
       result.schedule = array(value.schedule, '课表').map(scheduleRow);
+      if (value.periods !== undefined) result.periods = array(value.periods, '节次', 100).map(periodRow);
       result.calendarDates = [...new Set(array(value.calendarDates, '已核对的课表日期', 366).map(dayKey))];
     }
     else if (source === 'teams') {
@@ -485,6 +513,7 @@
       if (new Set(items).size !== items.length) fail(label + '重复');
       s.settings[key] = items;
     }
+    s.settings.customLessons = array(settings.customLessons, '自编课程', 500).map(customLessonRow);
     if (settings.teamsDueOverrides !== undefined) {
       const overrides = record(settings.teamsDueOverrides, 'Teams 截止时间');
       if (Object.keys(overrides).length > MAX_ROWS) fail('手动截止时间过多');
@@ -526,9 +555,50 @@
   function entries(state, source) {
     return Object.values(state.snapshots[source] || {}).sort((a, b) => Date.parse(b.capturedAt) - Date.parse(a.capturedAt));
   }
+  function getSchedulePeriods(state) {
+    for (const snapshot of entries(state, 'seiue')) {
+      if (Array.isArray(snapshot.periods) && snapshot.periods.length) return snapshot.periods.slice().sort((a, b) => a.start.localeCompare(b.start));
+    }
+    const latest = entries(state, 'seiue')[0];
+    const seen = new Set(), inferred = [];
+    for (const row of (latest && latest.schedule) || []) {
+      const key = row.start + '|' + row.end;
+      if (seen.has(key)) continue;
+      seen.add(key); inferred.push({ period: 'P' + (inferred.length + 1), start: row.start, end: row.end });
+    }
+    return inferred.sort((a, b) => a.start.localeCompare(b.start));
+  }
+  function weekdayKey(value) { return new Date(value + 'T12:00:00Z').getUTCDay(); }
+  function customScheduleForDay(state, key) {
+    const periods = getSchedulePeriods(state), weekday = weekdayKey(key);
+    return (state.settings.customLessons || []).filter(item => item.date === key || (!item.date && item.weekdays.includes(weekday))).map(item => {
+      const period = periods.find(candidate => candidate.period.toUpperCase() === item.period.toUpperCase());
+      const start = item.start || (period && period.start) || '';
+      let end = item.end || (period && period.end) || '';
+      if (start && !end) {
+        const total = (Number(start.slice(0, 2)) * 60 + Number(start.slice(3)) + 45) % 1440;
+        end = String(Math.floor(total / 60)).padStart(2, '0') + ':' + String(total % 60).padStart(2, '0');
+      }
+      return { id: item.id + '@' + key, date: key, start, end, title: item.title, room: item.room, teacher: '',
+        isSelfStudy: false, custom: true, period: item.period, byTime: item.byTime };
+    });
+  }
+  function schedulePeriodForRow(row, periods) {
+    if (row.period) return row.period;
+    const start = Number(row.start.slice(0, 2)) * 60 + Number(row.start.slice(3));
+    const end = Number(row.end.slice(0, 2)) * 60 + Number(row.end.slice(3));
+    let best = '', bestOverlap = 0;
+    for (const period of periods) {
+      const a = Number(period.start.slice(0, 2)) * 60 + Number(period.start.slice(3));
+      const b = Number(period.end.slice(0, 2)) * 60 + Number(period.end.slice(3));
+      const overlap = Math.min(end, b) - Math.max(start, a);
+      if (overlap > bestOverlap) { bestOverlap = overlap; best = period.period; }
+    }
+    return bestOverlap > 0 && bestOverlap / Math.max(1, end - start) >= 0.5 ? best : '';
+  }
   function getSchedule(state, date, includeSelfStudy) {
     const key = typeof date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(date) ? dayKey(date) : today(date, state.settings.timezone);
-    const seen = new Set(), rows = [];
+    const periods = getSchedulePeriods(state), seen = new Set(), rows = [];
     // One slot gets the latest authoritative title, including a change to self-study.
     for (const s of entries(state, 'seiue')) {
       for (const r of s.schedule || []) {
@@ -537,12 +607,18 @@
         if (seen.has(slot)) continue;
         seen.add(slot);
         if (r.isSelfStudy && !state.settings.selfStudy && !includeSelfStudy) continue;
-        rows.push(Object.assign({}, r, { capturedAt: s.capturedAt, sourceURL: s.url }));
+        rows.push(Object.assign({}, r, { period: schedulePeriodForRow(r, periods), capturedAt: s.capturedAt, sourceURL: s.url }));
       }
       // A verified complete day is authoritative, including a day with no lessons.
       if ((s.calendarDates || []).includes(key)) break;
     }
-    return rows.sort((a, b) => a.start.localeCompare(b.start));
+    rows.push(...customScheduleForDay(state, key));
+    const order = new Map(periods.map((period, index) => [String(period.period).toUpperCase(), index]));
+    return rows.sort((a, b) => {
+      const ap = order.has(String(a.period || '').toUpperCase()) ? order.get(String(a.period).toUpperCase()) : 999;
+      const bp = order.has(String(b.period || '').toUpperCase()) ? order.get(String(b.period).toUpperCase()) : 999;
+      return ap - bp || String(a.start || '99:99').localeCompare(String(b.start || '99:99')) || String(a.title || '').localeCompare(String(b.title || ''));
+    });
   }
   function termKey(value) { return (value || '').toLowerCase().replace(/\s*\((?:current|current term)\)\s*/g, '').trim(); }
   function getCourses(state) {
@@ -822,12 +898,12 @@
   function buildView(state, date) {
     const courses = getCourses(state);
     return { date: today(date, state.settings.timezone), time: clock(date, state.settings.timezone),
-      schedule: getSchedule(state, date), courses, tasks: getTasks(state), feedback: getFeedback(state),
+      schedule: getSchedule(state, date), schedulePeriods: getSchedulePeriods(state), courses, tasks: getTasks(state), feedback: getFeedback(state),
       officialGPA: getOfficialGPA(state), estimatedGPA: estimateGPA(courses), nextClass: getNextClass(state, date),
       classClock: getClassClock(state, date), teamsPosts: getTeamsPosts(state), teamsEC: getTeamsEC(state), teamsGrades: getTeamsGrades(state),
       sources: { seiue: getSourceStatus(state, 'seiue', date), managebac: getSourceStatus(state, 'managebac', date), teams: getSourceStatus(state, 'teams', date) } };
   }
   return Object.freeze({ VERSION, configureSchools, schoolHomes, emptyState, defaultState: emptyState, validateState, normalizeState: validateState,
     mergeSnapshot, resetTeamsData, clearTeamsData: resetTeamsData, today, clock, getSchedule, getCourses, getTasks, getFeedback, getOfficialGPA, estimateGPA,
-    getNextClass, getClassClock, getTeamsPosts, getTeamsEC, getTeamsGrades, getSourceStatus, buildView, safeURL, safeAttachmentURL, gradePoints: points });
+    getNextClass, getClassClock, getSchedulePeriods, getTeamsPosts, getTeamsEC, getTeamsGrades, getSourceStatus, buildView, safeURL, safeAttachmentURL, gradePoints: points });
 });

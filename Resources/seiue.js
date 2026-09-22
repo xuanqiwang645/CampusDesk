@@ -97,9 +97,9 @@
     const warnings = [];
     const dates = resolveWeekDates(model.monthText, model.headers);
     if (!model.completeWeek || !dates || !Array.isArray(model.days) || model.days.length !== 7) {
-      return { schedule: [], calendarDates: [], warnings: ['请在希悦首页打开完整的周课表；未能核对日期，暂不读取课程。'] };
+      return { schedule: [], periods: [], calendarDates: [], warnings: ['请在希悦首页打开完整的周课表；未能核对日期，暂不读取课程。'] };
     }
-    if (model.loading) return { schedule: [], calendarDates: [], warnings: ['希悦课表仍在加载，等待加载完成后更新。'] };
+    if (model.loading) return { schedule: [], periods: [], calendarDates: [], warnings: ['希悦课表仍在加载，等待加载完成后更新。'] };
     const periods = parsePeriods(model.periods);
     if (!periods) warnings.push('未能确认完整课时列表，暂不推断自习课。');
     const schedule = [];
@@ -126,7 +126,8 @@
       schedule.push(...events);
     });
     const unique = new Map(schedule.map(event => [event.id, event]));
-    return { schedule: [...unique.values()].sort((a, b) => (a.date + a.start + a.title).localeCompare(b.date + b.start + b.title)), calendarDates: dates, warnings };
+    return { schedule: [...unique.values()].sort((a, b) => (a.date + a.start + a.title).localeCompare(b.date + b.start + b.title)),
+      periods: (periods || []).map(period => ({ period: 'P' + period.number, start: period.start, end: period.end })), calendarDates: dates, warnings };
   }
 
   function readDOM(doc) {
@@ -173,7 +174,7 @@
   function extract(doc) {
     doc = doc || (typeof document !== 'undefined' ? document : null);
     const location = doc && doc.location;
-    const result = { source: 'seiue', url: location ? location.href : '', title: doc ? doc.title : '', capturedAt: new Date().toISOString(), loginRequired: false, schedule: [], calendarDates: [], warnings: [] };
+    const result = { source: 'seiue', url: location ? location.href : '', title: doc ? doc.title : '', capturedAt: new Date().toISOString(), loginRequired: false, schedule: [], periods: [], calendarDates: [], warnings: [] };
     if (!doc) { result.warnings.push('没有可读取的页面。'); return result; }
     const model = readDOM(doc);
     const bodyText = clean(doc.body && doc.body.innerText);
