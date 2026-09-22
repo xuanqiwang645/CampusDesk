@@ -32,6 +32,7 @@
   let graphStatus = { configured: false, connected: false, busy: false, displayName: '', message: '', clientId: '', tenant: 'organizations', requiresAdminConsent: false };
   let graphConfigurationDraft = null;
   let teamsAuto = { running: false, phase: 'idle', message: '登录 Teams 后自动发现频道和聊天。', counts: {}, warnings: [], coverageItems: [] };
+  let gpaKlineChart = null;
   let toastTimer = null;
   let lastMenuTitle = '';
   let lastMenuCountdown = '';
@@ -558,7 +559,30 @@
     return heading('看见积累，也看见进步。', '先确认成绩来自哪一门课、哪一个学期，再理解 GPA。', button(icon('link') + '打开成绩页面', 'open-source', 'data-source="managebac"')) +
       '<div class="grade-top"><section class="card">' + cardHeader('grades', '学校 GPA', '<span class="card-kicker">学校公布</span>') + gpaValue(gpa.official && gpa.official.value, gpa.official ? gpa.official.scale : '—') + '<p class="gpa-note">' + (gpa.official ? esc(gpa.official.label || '来自已读取的学校页面，以正式成绩单为准。') : '尚未读取到学校公布的 GPA。这里不会用参考值替代。') + '</p></section><section class="card">' + cardHeader('grades', '参考 GPA', '<span class="card-kicker">非官方 · 4.0 制</span>') + gpaValue(gpa.estimate.value, '4.00') + '<p class="gpa-note">根据 ' + esc(gpa.estimate.count || 0) + ' 门可用课程等权估算' + (gpa.estimate.excluded ? '，另有 ' + esc(gpa.estimate.excluded) + ' 门未计入' : '') + '。</p></section></div>' +
       '<div class="info-note">参考换算：90–100 → 4.0；80–89.99 → 3.0；70–79.99 → 2.0；60–69.99 → 1.0；低于 60 → 0。仅使用能确认的当前学期课程总评，不把单次作业分数当总评；不含学分与 AP 加权，也不代表学校的换算规则。</div>' + renderGradePie(gpa.courses, gpa.official || gpa.estimate) + '<section class="card">' + cardHeader('book', '课程成绩', '<span class="card-kicker">' + gpa.courses.length + ' 门已读取课程</span>') +
-      (gpa.courses.length ? '<div style="overflow-x:auto"><table class="grade-table"><thead><tr><th>课程</th><th>学期</th><th>百分制总评</th><th>参考绩点</th><th></th></tr></thead><tbody>' + gpa.courses.map(c => '<tr><td class="course-name">' + esc(c.name) + '</td><td>' + esc(c.term || '未确认') + '</td><td class="num">' + (c.percentage == null ? '—' : esc(Number(c.percentage).toFixed(1)) + '%') + (c.percentage == null ? '' : '<span class="grade-bar"><span style="width:' + Math.max(0, Math.min(100, Number(c.percentage) || 0)) + '%"></span></span>') + '</td><td class="num">' + (c.gpaEligible === false || c.percentage == null ? '未计入' : Core.estimateGPA([c]).value == null ? '未计入' : Number(Core.estimateGPA([c]).value).toFixed(2)) + '</td><td>' + (c.url ? '<button type="button" class="icon-button" data-action="open-source" data-source="managebac" data-url="' + esc(c.url) + '" aria-label="打开课程成绩">' + icon('link') + '</button>' : '') + '</td></tr>').join('') + '</tbody></table></div>' : empty('grades', '你的成绩，值得准确地记录', '登录 ManageBac 并打开当前学期成绩页面。读取到课程总评后，参考 GPA 会自动计算。', button('打开 ManageBac', 'open-source', 'data-source="managebac"'))) + sourceFooter('managebac') + '</section>' + renderHistory();
+      (gpa.courses.length ? '<div style="overflow-x:auto"><table class="grade-table"><thead><tr><th>课程</th><th>学期</th><th>百分制总评</th><th>参考绩点</th><th></th></tr></thead><tbody>' + gpa.courses.map(c => '<tr><td class="course-name">' + esc(c.name) + '</td><td>' + esc(c.term || '未确认') + '</td><td class="num">' + (c.percentage == null ? '—' : esc(Number(c.percentage).toFixed(1)) + '%') + (c.percentage == null ? '' : '<span class="grade-bar"><span style="width:' + Math.max(0, Math.min(100, Number(c.percentage) || 0)) + '%"></span></span>') + '</td><td class="num">' + (c.gpaEligible === false || c.percentage == null ? '未计入' : Core.estimateGPA([c]).value == null ? '未计入' : Number(Core.estimateGPA([c]).value).toFixed(2)) + '</td><td>' + (c.url ? '<button type="button" class="icon-button" data-action="open-source" data-source="managebac" data-url="' + esc(c.url) + '" aria-label="打开课程成绩">' + icon('link') + '</button>' : '') + '</td></tr>').join('') + '</tbody></table></div>' : empty('grades', '你的成绩，值得准确地记录', '登录 ManageBac 并打开当前学期成绩页面。读取到课程总评后，参考 GPA 会自动计算。', button('打开 ManageBac', 'open-source', 'data-source="managebac"'))) + sourceFooter('managebac') + '</section>' + renderKlineChartHistory();
+  }
+  function renderKlineChartHistory() {
+    const history = (state.gradeHistory || []).filter(h => h.value != null && Number.isFinite(Number(h.value))).slice().sort((a, b) => String(a.capturedAt || a.date || '').localeCompare(String(b.capturedAt || b.date || '')));
+    if (!history.length) return '';
+    const palette = state.settings.gpaCandleColors === 'green-up' ? { up: '#4f8a70', down: '#c47768', label: '绿涨红跌' } : { up: '#c47768', down: '#4f8a70', label: '红涨绿跌' };
+    return '<section class="card" style="margin-top:21px"><div class="card-header"><h2 class="card-title"><span class="icon">' + icon('clock') + '</span>本机 GPA K 线</h2><span class="card-kicker">全部历史 · ' + history.length + ' 次</span></div><div id="gpa-kline-chart" aria-label="GPA K 线图" style="width:100%;height:360px;min-height:300px"></div><div style="display:flex;gap:18px;flex-wrap:wrap;margin-top:12px;color:#778779;font-size:11px"><span><i style="display:inline-block;width:9px;height:9px;border-radius:2px;background:' + palette.up + ';margin-right:5px"></i>上涨</span><span><i style="display:inline-block;width:9px;height:9px;border-radius:2px;background:' + palette.down + ';margin-right:5px"></i>下降</span><span>当前设置：' + palette.label + '</span><span>拖动、缩放或悬停查看开高低收数据</span></div><p class="gpa-note">使用 KLineChart 原生 Canvas 蜡烛图渲染；每根 K 线对应一次本机 GPA 记录，开盘取上一条收盘，最高/最低取开盘与收盘。</p></section>';
+  }
+  function mountGpaKlineChart() {
+    const container = document.getElementById('gpa-kline-chart'), lib = window.klinecharts;
+    if (!container || !lib || typeof lib.init !== 'function') return;
+    const history = (state.gradeHistory || []).filter(h => h.value != null && Number.isFinite(Number(h.value))).slice().sort((a, b) => String(a.capturedAt || a.date || '').localeCompare(String(b.capturedAt || b.date || '')));
+    if (!history.length) return;
+    const palette = state.settings.gpaCandleColors === 'green-up' ? { up: '#4f8a70', down: '#c47768' } : { up: '#c47768', down: '#4f8a70' };
+    const data = history.map((item, index) => { const close = Number(item.value), open = index ? Number(history[index - 1].value) : close; return { timestamp: new Date(item.capturedAt || item.date).getTime(), open, high: Math.max(open, close), low: Math.min(open, close), close, volume: Number(item.count) || 0 }; });
+    const chart = lib.init(container);
+    if (!chart) return;
+    chart.setSymbol({ ticker: 'GPA', pricePrecision: 2, volumePrecision: 0 });
+    chart.setPeriod({ type: 'day', span: 1 });
+    chart.setStyles({ candle: { type: 'candle_solid', bar: { upColor: palette.up, downColor: palette.down, noChangeColor: '#8a9386', upBorderColor: palette.up, downBorderColor: palette.down, noChangeBorderColor: '#8a9386', upWickColor: palette.up, downWickColor: palette.down, noChangeWickColor: '#8a9386' }, priceMark: { high: { show: false }, low: { show: false }, last: { show: true, text: { show: true }, line: { show: true } } } }, grid: { show: true, horizontal: { show: true, color: '#e5ebe4', size: 1, style: 'dashed', dashedValue: [2, 2] }, vertical: { show: false } } });
+    chart.setDataLoader({ getBars: params => params.callback(data, { backward: false, forward: false }) });
+    try { chart.createIndicator({ name: 'MA', calcParams: [1], precision: 2, paneId: 'candle_pane', styles: { lines: [{ color: '#607f6e', size: 2 }] } }, false); } catch (_) { /* The candle chart remains usable if an older bundled build omits MA. */ }
+    chart.resize();
+    gpaKlineChart = chart;
   }
   function renderHistory() {
     const history = (state.gradeHistory || []).filter(h => h.value != null && Number.isFinite(Number(h.value))).slice().sort((a, b) => String(a.capturedAt || a.date || '').localeCompare(String(b.capturedAt || b.date || '')));
@@ -763,6 +787,7 @@
     const saved = renderedPage === page ? readingState(document.getElementById('content')) : null;
     const graphConfigOpen = page === 'settings' && document.getElementById('graph-configuration') && document.getElementById('graph-configuration').open;
     const shell = document.getElementById('app-shell');
+    if (gpaKlineChart && window.klinecharts && typeof window.klinecharts.dispose === 'function') { window.klinecharts.dispose(gpaKlineChart); gpaKlineChart = null; }
     if (shell) shell.dataset.dashboardTheme = state.settings.dashboardTheme || 'classic';
     renderNav();
     updateStaticChrome();
@@ -776,6 +801,7 @@
     lastRenderedDay = Core.today();
     lastClockBoundary = clock.phase + ':' + (clock.current && clock.current.id || '') + ':' + (clock.next && clock.next.id || '');
     updateStatus(); updateMenu(clock);
+    if (page === 'grades') window.requestAnimationFrame(mountGpaKlineChart);
   }
   function shiftDate(direction) {
     const d = new Date(selectedDate + 'T12:00:00Z');
