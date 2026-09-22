@@ -105,7 +105,7 @@ test('estimated GPA is always presented with two decimal places', () => {
   assert.match(app.node('content').innerHTML, />4\.00</);
 });
 
-test('tasks group by subject and Teams group by recipient/channel with local focus controls', () => {
+test('tasks group by subject and Teams group by sender/channel with local focus controls', () => {
   const app = harness(); app.receive({ type: 'snapshot', snapshot: teamsSnapshot([task(), task({ id: 'math-work', title: 'Math work', course: 'Math' })]) });
   app.click({ page: 'tasks' });
   assert.match(app.node('content').innerHTML, /学科/); assert.match(app.node('content').innerHTML, /English/); assert.match(app.node('content').innerHTML, /Math/);
@@ -113,7 +113,7 @@ test('tasks group by subject and Teams group by recipient/channel with local foc
   assert.deepEqual(app.last('saveState').state.settings.focusSubjects, ['English']);
   app.click({ action: 'task-subject-filter', filter: 'focus' }); assert.match(app.node('content').innerHTML, /English/); assert.doesNotMatch(app.node('content').innerHTML, /Math work/);
   app.click({ page: 'teams' });
-  assert.match(app.node('content').innerHTML, /收件人：Grade 10 A/); assert.match(app.node('content').innerHTML, /HOMEWORK/);
+  assert.match(app.node('content').innerHTML, /发件人：Teacher/); assert.match(app.node('content').innerHTML, /HOMEWORK/);
   app.click({ action: 'toggle-focus-channel', value: 'HOMEWORK' });
   assert.deepEqual(app.last('saveState').state.settings.focusTeamsChannels, ['HOMEWORK']);
   app.click({ action: 'teams-channel-filter', filter: 'focus' }); assert.match(app.node('content').innerHTML, /HOMEWORK/); assert.doesNotMatch(app.node('content').innerHTML, /ENGLISH CORNER ROSTER/);
