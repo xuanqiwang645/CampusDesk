@@ -46,9 +46,43 @@ test('GPA chart stays readable under repeated zoom, pan, aggregation and refresh
       const rect = document.querySelector('#gpa-kline-chart').getBoundingClientRect();
       return { x: rect.left + point.x, y: rect.top + point.y, close: bar.close };
     });
-    await page.mouse.move(snapTarget.x, snapTarget.y + 18);
+    await page.mouse.move(snapTarget.x, snapTarget.y - 18);
     await page.waitForFunction(() => { const badge = document.getElementById('gpa-kline-snap-value'); return badge && !badge.hidden; });
     assert.equal(await page.locator('#gpa-kline-snap-value').textContent(), 'GPA · ' + snapTarget.close.toFixed(2));
+    const hover = async (fraction = 0.27, first = 1) => {
+      await plot.scrollIntoViewIfNeeded();
+      const target = await page.evaluate(({ fraction, first }) => {
+        const chart = klinecharts.init('gpa-kline-chart'), bars = chart.getDataList();
+        const a = bars[first], b = bars[Math.min(first + 1, bars.length - 1)];
+        const p = chart.convertToPixel({ timestamp: a.timestamp, value: a.close });
+        const q = chart.convertToPixel({ timestamp: b.timestamp, value: b.close });
+        const rect = document.querySelector('#gpa-kline-chart').getBoundingClientRect();
+        const pane = chart.getSize('candle_pane', 'main');
+        return { x: rect.x + pane.left + p.x + (q.x - p.x) * fraction, y: rect.y + 40,
+          snapX: p.x + (q.x - p.x) * fraction, snapY: p.y + (q.y - p.y) * fraction,
+          value: a.close + (b.close - a.close) * fraction };
+      }, { fraction, first });
+      await page.mouse.move(target.x, target.y);
+      await page.waitForFunction(() => !document.querySelector('.gpa-kline-hover').hidden);
+      const actual = await page.locator('.gpa-kline-hover').evaluate(el => ({
+        x: parseFloat(el.style.getPropertyValue('--snap-x')), y: parseFloat(el.style.getPropertyValue('--snap-y')),
+        text: el.querySelector('span').textContent,
+        vertical: getComputedStyle(el.querySelector('.gpa-hover-vertical')).borderLeftWidth,
+        horizontal: getComputedStyle(el.querySelector('.gpa-hover-horizontal')).borderTopWidth
+      }));
+      assert.ok(Math.abs(actual.x - target.snapX) < 1, 'vertical guide follows continuous x, not a date');
+      assert.ok(Math.abs(actual.y - target.snapY) < 1, 'horizontal guide intersects the close polyline');
+      assert.equal(actual.text, 'GPA · ' + target.value.toFixed(2));
+      assert.equal(actual.vertical, '1px');
+      assert.equal(actual.horizontal, '1px');
+      assert.equal(await page.locator('.gpa-kline-hover').count(), 1);
+    };
+    await hover();
+    await plot.screenshot({ path: '/tmp/campusdesk-kline-hover.png' });
+    for (const target of [{ x: box.x + 10, y: box.y + 40 }, { x: box.x + box.width / 2, y: box.y + box.height - 50 }, { x: box.x - 10, y: box.y + 40 }]) {
+      await page.mouse.move(target.x, target.y);
+      assert.equal(await page.locator('#gpa-kline-snap-value').isVisible(), false, 'empty dates, other panes and mouse leave hide hover');
+    }
     await page.mouse.move(box.x + box.width / 2, box.y + 100);
     for (const [dx, dy] of [[80, 20], [20, 80], [-80, -20], [-20, -80], [0, 100]]) {
       await page.mouse.wheel(dx, dy);
@@ -90,11 +124,13 @@ test('GPA chart stays readable under repeated zoom, pan, aggregation and refresh
     assert.equal(afterRefresh.id, beforeRefresh.id, 'unchanged snapshots must retain the chart instance');
     assert.equal(afterRefresh.spacing, beforeRefresh.spacing);
     assert.deepEqual(afterRefresh.range, beforeRefresh.range);
+    await hover();
     // Real slider change: a 30-day bucket leaves one valid record; 1h restores four.
     for (const [value, count] of [['10', 1], ['0', 4]]) {
       await page.locator('#gpa-kline-interval').evaluate((el, value) => { el.value = value; el.dispatchEvent(new Event('change', { bubbles: true })); }, value);
       await page.waitForTimeout(100);
       assert.equal((await inspect()).count, count);
+      await hover(0, 0);
     }
     await plot.screenshot({ path: process.env.KLINE_SCREENSHOT || '/tmp/campusdesk-kline-regression.png' });
     await page.setViewportSize({ width: 760, height: 1000 });

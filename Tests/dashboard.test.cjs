@@ -49,6 +49,7 @@ function harness({ native = true, hash = '#overview', saved = null, idle = false
   if (native) ctx.webkit = { messageHandlers: { campus: { postMessage: item => sent.push(JSON.parse(JSON.stringify(item))) } } };
   vm.createContext(ctx);
   vm.runInContext(fs.readFileSync(path.join(root, 'Resources/core.js'), 'utf8'), ctx);
+  vm.runInContext(fs.readFileSync(path.join(root, 'Resources/grade-planner.js'), 'utf8'), ctx);
   // The public application defaults to no configured school; this harness uses invented hosts.
   vm.runInContext("CampusCore.configureSchools({seiue:'https://example-school.seiue.com/',managebac:'https://example-school.managebac.cn/'})", ctx);
   vm.runInContext(fs.readFileSync(path.join(root, 'Resources/graph.js'), 'utf8'), ctx);
@@ -194,10 +195,10 @@ test('semester forecast explains its assumptions and saves local term dates', ()
   ], tasks: [], feedback: [], officialGPA: null } });
   app.click({ page: 'grades' });
   assert.match(app.node('content').innerHTML, /学期 GPA 预测/);
-  assert.match(app.node('content').innerHTML, /学期日期对学生端通常不可见/);
-  assert.match(app.node('content').innerHTML, /请补充学期起止日期/);
+  assert.match(app.node('content').innerHTML, /无需填写日期也能按类别预测/);
+  assert.match(app.node('content').innerHTML, /情景参考 GPA/);
   assert.match(app.node('content').innerHTML, /type="text" id="gpa-term-start"[^>]*placeholder="YYYY-MM-DD"/);
-  assert.match(app.node('content').innerHTML, /日期格式：YYYY-MM-DD/);
+  assert.match(app.node('content').innerHTML, /支持 YYYY-MM-DD 或 YYYYMMDD/);
   const savesBeforeInvalidDates = app.sent.filter(item => item.action === 'saveState').length;
   app.node('gpa-term-start').value = '2026-02-31'; app.node('gpa-term-end').value = '2026-12-31';
   app.node('gpa-term-dates-form').dataset.term = 'current';
@@ -208,7 +209,7 @@ test('semester forecast explains its assumptions and saves local term dates', ()
   app.node('gpa-term-dates-form').dataset.term = 'current';
   app.submit('gpa-term-dates-form');
   assert.deepEqual(app.last('saveState').state.settings.gpaTermDates.current, { start: '2026-09-01', end: '2026-12-31' });
-  assert.match(app.node('content').innerHTML, /剩余部分参考 GPA/);
+  assert.match(app.node('content').innerHTML, /情景参考 GPA/);
   assert.match(app.node('content').innerHTML, /3\.00 \/ 4\.00/);
 });
 

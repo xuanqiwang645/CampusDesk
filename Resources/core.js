@@ -217,7 +217,7 @@
       seiueURL: configuredSchools.seiue, managebacURL: configuredSchools.managebac, teamsPages: [], teamsNotifications: false,
       teamsBrowser: 'chrome', teamsBrowserAutomation: false, teamsMode: 'browser', teamsAutoDiscover: true, graphIncludeChats: true,
       reminderMinutes: 30, teamsDueOverrides: {}, dashboardTheme: 'classic', gpaCandleColors: 'red-up', language: 'zh-CN', focusSubjects: [], focusTeamsChannels: [], customLessons: [],
-      scheduleHolidays: [], scheduleWeekAnchor: '', scheduleOverrides: [], focusMode: false, planOrder: [], taskMinutes: {}, taskPriority: {}, gradeGoals: {}, gpaTermDates: {}, ecIdentityNames: [] }, snapshots: { seiue: {}, managebac: {}, teams: {} },
+      scheduleHolidays: [], scheduleWeekAnchor: '', scheduleOverrides: [], focusMode: false, planOrder: [], taskMinutes: {}, taskPriority: {}, gradeGoals: {}, gradePlans: {}, gpaTermDates: {}, ecIdentityNames: [] }, snapshots: { seiue: {}, managebac: {}, teams: {} },
       manualTasks: [], taskChecks: {}, feedbackRead: {}, gradeHistory: [], changeLog: [] };
   }
   function scheduleRow(row) {
@@ -587,6 +587,27 @@
         }
       }
       s.settings[key] = clean;
+    }
+    s.settings.gradePlans = {};
+    if (settings.gradePlans !== undefined) {
+      const plans = record(settings.gradePlans, '类别成绩计划');
+      if (Object.keys(plans).length > 500) fail('类别成绩计划过多');
+      for (const [key, plan] of Object.entries(plans)) {
+        if (!key || key.length > 1500 || BAD_KEYS.has(key)) fail('类别成绩计划标识无效');
+        record(plan, '类别成绩计划');
+        s.settings.gradePlans[key] = {
+          target: finite(plan.target, 0, 100, false), manual: bool(plan.manual, false),
+          categories: array(plan.categories, '本机类别', 40).map(row => {
+            record(row, '本机类别');
+            return { name: str(row.name, 300), weight: finite(row.weight, 0, 100, false), percentage: finite(row.percentage, 0, 100, true) };
+          }),
+          overrides: array(plan.overrides, '类别情景', 40).map(row => {
+            record(row, '类别情景');
+            if (!['hold', 'estimate'].includes(row.mode)) fail('类别情景无效');
+            return { name: str(row.name, 300), mode: row.mode, score: finite(row.score, 0, 100, true) };
+          })
+        };
+      }
     }
     if (settings.gpaTermDates !== undefined) {
       const terms = record(settings.gpaTermDates, 'GPA 学期日期');

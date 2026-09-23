@@ -71,6 +71,22 @@
     }
     return result.slice(0,100);
   }
+  // Current ManageBac renders this "table" as ordinary layout blocks, not
+  // <table> or ARIA rows. Restrict text parsing to its explicitly named section.
+  function categoryAveragesFromText(input) {
+    const section = String(input || '').split(/Task\s+Category\s+Averages/i)[1];
+    if (!section || !/Category\s*\(Weight\)/i.test(section) || !/Mark\s*\(Score\)/i.test(section)) return [];
+    const body = clean(section.split(/View the average grades/i)[0]).split(/Mark\s*\(Score\)/i)[1]
+      .replace(/^\s*Overall\s*(?:(?:[A-F][+-]?\s*)?\(\s*\d+(?:\.\d+)?\s*%\s*\)|\d+(?:\.\d+)?\s*%|[-–—])\s*/i, ''), rows = [];
+    // Flex/grid layouts may separate cells by spaces rather than line breaks.
+    const pattern = /([^%]+?)\s*\(\s*(\d+(?:\.\d+)?)\s*%\s*\)\s*((?:[A-F][+-]?\s*)?\(\s*\d+(?:\.\d+)?\s*%\s*\)|\d+(?:\.\d+)?\s*%|[-–—])/gi;
+    for (const match of body.matchAll(pattern)) {
+      const name = clean(match[1]);
+      if (!name || /^(?:overall|total)$/i.test(name)) continue;
+      rows.push({name,weight:Number(match[2]),percentage:componentPercentage(match[3])});
+    }
+    return parseGradeComponents(rows);
+  }
   function taskStatus(item) {
     // A pending dropbox badge can coexist with a recorded quiz grade.
     if (item.points && /\d\s*\/\s*\d/.test(item.points)) return 'graded';
@@ -111,24 +127,43 @@
     // Only capture a grade component when the rendered table labels both its
     // assessment/category and an explicit weight column. Assignment marks alone
     // are never promoted to weighted course components.
-    const tables = all(doc, 'main table, #main-content table, main [role="table"], #main-content [role="table"]');
+    // Task Information can be rendered in a portal outside <main> and may not
+    // expose role="dialog". The strict header checks below keep this broad
+    // search from treating ordinary assignment tables as weighted components.
+    const tables = all(doc, 'table, [role="table"]');
     for (const table of tables) {
       if (!visible(table)) continue;
       const tableRows = all(table, 'tr, [role="row"]');
-      const header = tableRows.find(row => all(row, 'th, [role="columnheader"]').length >= 2);
+      const header = tableRows.find(row => all(row, 'th, [role="columnheader"]').length >= 2) || tableRows[0];
       if (!header) continue;
       const headers = all(header, 'th, td, [role="columnheader"], [role="cell"]').map(text);
-      const nameIndex = headers.findIndex(value => /^(?:category|component|assessment|criterion|类别|分类|组成|项目)$/i.test(value));
+      const nameIndex = headers.findIndex(value => /^(?:category|component|assessment|criterion|类别|分类|组成|项目)(?:\s*\(\s*weight\s*\))?$/i.test(value));
       const weightIndex = headers.findIndex(isPercentageWeightHeader);
       const gradeIndex = headers.findIndex(value => /(?:average|percentage|grade|score|mark|result|成绩|分数|平均|百分比)/i.test(value) && !/(?:weight|weighting|权重|比重)/i.test(value));
-      if (nameIndex < 0 || weightIndex < 0 || gradeIndex < 0) continue;
+      const weightInCategory = nameIndex >= 0 && /^(?:category|component|assessment|criterion)\s*\(\s*weight\s*\)$/i.test(headers[nameIndex]);
+      if (nameIndex < 0 || (weightIndex < 0 && !weightInCategory) || gradeIndex < 0) continue;
       for (const row of tableRows) {
         if (row === header || !visible(row)) continue;
         const cells = all(row, 'th, td, [role="cell"]');
-        if (Math.max(nameIndex, weightIndex, gradeIndex) >= cells.length) continue;
-        const name = text(cells[nameIndex]), weight = componentWeight(text(cells[weightIndex]));
+        if (Math.max(nameIndex, weightIndex < 0 ? nameIndex : weightIndex, gradeIndex) >= cells.length) continue;
+        const rawName = text(cells[nameIndex]);
+        const embeddedWeight = weightInCategory && rawName.match(/^(.*?)\s*[([]\s*(\d{1,3}(?:\.\d+)?)\s*%\s*[)\]]\s*$/);
+        const name = embeddedWeight ? clean(embeddedWeight[1]) : rawName;
+        const weight = weightIndex >= 0 ? componentWeight(text(cells[weightIndex])) : componentWeight(embeddedWeight && embeddedWeight[2]);
         if (!name || weight == null || /^(?:total|overall|总计|总评)$/i.test(name)) continue;
         page.gradeComponents.push({ name, weight, percentage:componentPercentage(text(cells[gradeIndex])) });
+      }
+    }
+    if (!page.gradeComponents.length) {
+      for (const heading of all(doc, 'h1, h2, h3, h4, h5, h6, [role="heading"]')) {
+        if (!visible(heading) || !/^Task\s+Category\s+Averages$/i.test(text(heading))) continue;
+        let section = heading.parentElement;
+        for (let depth = 0; section && depth < 8 && !section.matches('body, main, html'); depth++, section = section.parentElement) {
+          const raw = String(section.innerText == null ? section.textContent || '' : section.innerText);
+          if (raw.length > 12000) break;
+          const components = categoryAveragesFromText(raw);
+          if (components.length) { page.gradeComponents.push(...components); break; }
+        }
       }
     }
     for (const node of all(doc, '[data-grade-component][data-grade-weight]')) {
@@ -245,12 +280,40 @@
     if (page.recognized === true && !result.parseError) result.success = true;
     return result;
   }
+  function openTaskCategoryAverages(doc) {
+    const controls = all(doc, 'button, [role="button"], [data-toggle="popover"], [data-bs-toggle="popover"], [title], [aria-label], [data-original-title]');
+    const control = controls.find(node => {
+      if (!visible(node)) return false;
+      const labels = ['aria-label', 'title', 'data-tooltip', 'data-original-title']
+        .map(name => node.getAttribute && node.getAttribute(name) || '').join(' ');
+      return /task\s*(?:information|info)|task\s*category\s*averages/i.test(labels) || /^(?:Details\s*){1,2}$/i.test(text(node));
+    });
+    if (!control) return false;
+    // The adapter is re-injected on every native retry. Keep the marker on the
+    // actual control so retries cannot toggle an already-open popover closed.
+    const lastOpened = Number(control.getAttribute('data-campusdesk-category-opened') || 0);
+    if (control.getAttribute('aria-expanded') !== 'true' && Date.now() - lastOpened > 15000) {
+      control.setAttribute('data-campusdesk-category-opened', String(Date.now()));
+      control.click();
+    }
+    return true;
+  }
   function extract(doc, url) {
     const documentToRead = doc || root.document;
     const currentURL = url || documentToRead.location.href;
-    return fromProjection(collect(documentToRead,currentURL));
+    let page = collect(documentToRead,currentURL);
+    let categoryAveragesPending = false;
+    if (/\/student\/classes\/\d+\/core_tasks\/?$/.test(new URL(currentURL).pathname) && !page.gradeComponents.length) {
+      openTaskCategoryAverages(documentToRead);
+      page = collect(documentToRead,currentURL);
+      // Also retry late-loading controls; the native worker bounds the retries.
+      categoryAveragesPending = !page.gradeComponents.length && !page.hasPassword;
+    }
+    const result = fromProjection(page);
+    if (categoryAveragesPending) result.categoryAveragesPending = true;
+    return result;
   }
-  const api = {extract,collect,fromProjection,overallPercentage,parseGradeComponents,componentPercentage,componentWeight,isPercentageWeightHeader,taskStatus,exactDate,safeURL};
+  const api = {extract,collect,fromProjection,overallPercentage,parseGradeComponents,categoryAveragesFromText,componentPercentage,componentWeight,isPercentageWeightHeader,taskStatus,exactDate,safeURL};
   if (typeof module === 'object' && module.exports) module.exports = api;
   if (root) root.CampusManageBac = api;
 })(typeof window !== 'undefined' ? window : null);

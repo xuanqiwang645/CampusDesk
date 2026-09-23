@@ -29,6 +29,16 @@ const fixture = {
 const clone = () => JSON.parse(JSON.stringify(fixture));
 const timestamp = '2032-04-08T01:00:00.000Z';
 
+test('Details category blocks accept whitespace layouts but require explicit section and headers', () => {
+  for (const sep of [' ', '\n']) {
+    const input=['Task Category Averages','Category (Weight)','Mark (Score)','Overall','A (94%)','Quiz (40%)','A (90%)','Project (60%)','-'].join(sep);
+    assert.deepEqual(mb.categoryAveragesFromText(input).map(({name,weight,percentage})=>({name,weight,percentage})),[{name:'Quiz',weight:40,percentage:90},{name:'Project',weight:60,percentage:null}]);
+  }
+  assert.deepEqual(mb.categoryAveragesFromText('Quiz (40%) A (90%) Project (60%) -'),[]);
+  assert.deepEqual(mb.categoryAveragesFromText('Task Category Averages\nCategory (Weight)\nMark (Score)\nOverall\n-\nQuiz (100%)\n-').map(({name,weight,percentage})=>({name,weight,percentage})),[{name:'Quiz',weight:100,percentage:null}]);
+  assert.deepEqual(mb.categoryAveragesFromText('Task Category Averages Category (Weight) Mark (Score) Overall B (85%) Midterm (Group Research Project) (20%) - Final exam (80%) B (85%)').map(({name,weight,percentage})=>({name,weight,percentage})),[{name:'Midterm (Group Research Project)',weight:20,percentage:null},{name:'Final exam',weight:80,percentage:85}]);
+});
+
 test('synthetic overall grade and task statuses use their own explicit fields', () => {
   const result = mb.fromProjection(fixture, timestamp);
   assert.equal(result.courses.length, 1);

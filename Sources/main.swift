@@ -262,6 +262,10 @@ final class SyncWorker: NSObject, WKNavigationDelegate {
             if snapshot["loginRequired"] as? Bool == true {
                 self.onSnapshot?(snapshot); self.busy = false; self.perPageToken = UUID(); self.onStatus?("登录已失效，请打开学校网页重新登录", false); return
             }
+            if snapshot["categoryAveragesPending"] as? Bool == true && attempt < 3 {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in self?.extract(expected: expected, attempt: attempt + 1) }
+                return
+            }
             let keys = self.source == "seiue" ? ["schedule", "calendarDates"] : (self.source == "teams" ? ["tasks", "posts"] : ["courses", "tasks", "feedback", "links"])
             let empty = keys.allSatisfy { (snapshot[$0] as? [Any] ?? []).isEmpty } && !(snapshot["officialGPA"] is [String: Any])
             let parseError = snapshot["parseError"] as? Bool == true || !(snapshot["parseError"] as? String ?? "").isEmpty
