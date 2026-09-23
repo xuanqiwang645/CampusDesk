@@ -1,112 +1,13 @@
-/*
- * Liquid-glass icon treatment.
- *
- * CampusDesk is a dependency-free HTML/CSS/JavaScript dashboard rather than a
- * React application, so liquid-glass-react cannot be imported directly. This
- * keeps the same visual ideas (frosted translucency, edge highlight, and a
- * soft refraction-like shadow) in a native WebKit stylesheet. The effect is
- * deliberately scoped to controls and icon surfaces so school content remains
- * untouched and the classic/card layouts stay interchangeable.
- */
-:root {
-  --glass-border: rgba(255, 255, 255, .74);
-  --glass-fill: rgba(255, 255, 255, .34);
-  --glass-shadow: rgba(39, 91, 73, .15);
-  --glass-tint: rgba(215, 239, 226, .58);
-}
-
-.icon-button,
-.focus-button,
-.check-button,
-.board-check,
-.nav-item > .icon,
-.card-title > .icon,
-.banner-icon,
-.clock-mark,
-.empty-illustration,
-.brand-mark,
-.board-hero-actions .button-light {
-  position: relative;
-  isolation: isolate;
-  border: 1px solid var(--glass-border);
-  background:
-    linear-gradient(145deg, rgba(255, 255, 255, .68), rgba(255, 255, 255, .18) 48%, rgba(183, 222, 202, .28)),
-    var(--glass-fill);
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, .82),
-    inset 0 -1px 0 rgba(79, 132, 105, .10),
-    0 5px 15px var(--glass-shadow);
-  -webkit-backdrop-filter: blur(13px) saturate(145%);
-  backdrop-filter: blur(13px) saturate(145%);
-  overflow: hidden;
-}
-
-.icon-button::after,
-.focus-button::after,
-.check-button::after,
-.board-check::after,
-.nav-item > .icon::after,
-.card-title > .icon::after,
-.banner-icon::after,
-.clock-mark::after,
-.empty-illustration::after,
-.brand-mark::after,
-.board-hero-actions .button-light::after {
-  content: "";
-  position: absolute;
-  inset: 1px;
-  border-radius: inherit;
-  pointer-events: none;
-  background: linear-gradient(122deg, rgba(255, 255, 255, .54), transparent 36%, transparent 68%, rgba(255, 255, 255, .16));
-  opacity: .8;
-  z-index: -1;
-}
-
-.nav-item > .icon,
-.card-title > .icon {
-  width: 29px;
-  height: 29px;
-  padding: 5px;
-  border-radius: 10px;
-  flex: 0 0 29px;
-}
-
-.nav-item:hover > .icon,
-.nav-item.active > .icon,
-.icon-button:hover,
-.focus-button:hover,
-.focus-button.active,
-.board-check:hover {
-  border-color: rgba(71, 143, 109, .56);
-  background:
-    linear-gradient(145deg, rgba(255, 255, 255, .82), rgba(218, 244, 225, .58)),
-    var(--glass-tint);
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, .9),
-    0 7px 20px rgba(39, 111, 80, .2);
-}
-
-.icon-button { border-radius: 10px; }
-.focus-button { border-radius: 11px; }
-.check-button, .board-check { border-radius: 50%; }
-
-.check-button.checked,
-.board-check:hover {
-  border-color: rgba(50, 125, 88, .72);
-  background: linear-gradient(145deg, rgba(219, 247, 228, .86), rgba(91, 157, 117, .74));
-}
-
-.clock-mark { border-radius: 15px; }
-.banner-icon, .empty-illustration { border-radius: 16px; }
-.brand-mark { border-radius: 14px; color: var(--teal); }
-.board-hero-actions .button-light { border-radius: 12px; }
-
-@media (prefers-reduced-transparency: reduce) {
-  .icon-button, .focus-button, .check-button, .board-check,
-  .nav-item > .icon, .card-title > .icon, .banner-icon, .clock-mark,
-  .empty-illustration, .brand-mark, .board-hero-actions .button-light {
-    -webkit-backdrop-filter: none;
-    backdrop-filter: none;
-    background: #e5f1e8;
-  }
-}
+/* Content layer for the WebGL Liquid Glass compositor. No CSS backdrop capture. */
+:root{--glass-border:rgba(255,255,255,.62);--glass-shadow:rgba(31,76,59,.13)}
+#liquid-glass-canvas{position:fixed;inset:0;width:100vw;height:100vh;z-index:0;pointer-events:none}
+.app-shell,#toast,dialog{position:relative;z-index:1}
+html.webgl-liquid-glass,html.webgl-liquid-glass body,html.webgl-liquid-glass .app-shell,html.webgl-liquid-glass #main{background:transparent}
+html.webgl-liquid-glass .sidebar,html.webgl-liquid-glass .topbar,html.webgl-liquid-glass .card,html.webgl-liquid-glass .class-clock,html.webgl-liquid-glass .connect-banner,html.webgl-liquid-glass .icon-button,html.webgl-liquid-glass .focus-button,html.webgl-liquid-glass .check-button,html.webgl-liquid-glass .board-check,html.webgl-liquid-glass .nav-item>.icon,html.webgl-liquid-glass .card-title>.icon,html.webgl-liquid-glass .banner-icon,html.webgl-liquid-glass .clock-mark,html.webgl-liquid-glass .empty-illustration,html.webgl-liquid-glass .brand-mark,html.webgl-liquid-glass .button-light{background:transparent;border-color:var(--glass-border);box-shadow:inset 0 1px 0 rgba(255,255,255,.5),0 8px 22px var(--glass-shadow)}
+.icon-button,.focus-button,.check-button,.board-check,.nav-item>.icon,.card-title>.icon,.banner-icon,.clock-mark,.empty-illustration,.brand-mark{position:relative;isolation:isolate;overflow:hidden}
+.nav-item>.icon,.card-title>.icon{width:29px;height:29px;padding:5px;border:1px solid var(--glass-border);border-radius:10px;flex:0 0 29px}
+.icon-button{border-radius:10px}.focus-button{border-radius:11px}.check-button,.board-check{border-radius:50%}.clock-mark{border-radius:15px}.banner-icon,.empty-illustration{border-radius:16px}.brand-mark{border:1px solid var(--glass-border);border-radius:14px;color:var(--teal)}
+.nav-item:hover>.icon,.nav-item.active>.icon,.icon-button:hover,.focus-button:hover,.focus-button.active,.board-check:hover{border-color:rgba(71,143,109,.68);box-shadow:inset 0 1px 0 rgba(255,255,255,.74),0 9px 24px rgba(39,111,80,.18)}
+.check-button.checked,.board-check:hover{border-color:rgba(50,125,88,.76)}
+html.no-webgl-liquid-glass .icon-button,html.no-webgl-liquid-glass .focus-button,html.no-webgl-liquid-glass .check-button,html.no-webgl-liquid-glass .board-check,html.no-webgl-liquid-glass .nav-item>.icon,html.no-webgl-liquid-glass .card-title>.icon,html.no-webgl-liquid-glass .banner-icon,html.no-webgl-liquid-glass .clock-mark,html.no-webgl-liquid-glass .empty-illustration,html.no-webgl-liquid-glass .brand-mark{background:#e5f1e8}
+@media(prefers-reduced-transparency:reduce){#liquid-glass-canvas{display:none}html.webgl-liquid-glass body{background:var(--paper)}html.webgl-liquid-glass .sidebar,html.webgl-liquid-glass .topbar,html.webgl-liquid-glass .card,html.webgl-liquid-glass .class-clock,html.webgl-liquid-glass .connect-banner{background:#fbfcf5}}

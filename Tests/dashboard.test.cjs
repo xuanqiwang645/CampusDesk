@@ -6,17 +6,19 @@ const vm = require('node:vm');
 const fs = require('node:fs');
 const path = require('node:path');
 const root = path.join(__dirname, '..');
-function harness({ native = true, hash = '#overview', saved = null } = {}) {
-  const nodes = new Map(), listeners = {}, intervals = [], sent = [], opened = [], store = new Map();
+function harness({ native = true, hash = '#overview', saved = null, idle = false } = {}) {
+  const nodes = new Map(), listeners = {}, intervals = [], sent = [], opened = [], store = new Map(), idleQueue = [];
   let instant = Date.parse('2026-09-19T00:41:28Z');
   class Clock extends Date { constructor(...args) { super(...(args.length ? args : [instant])); } static now() { return instant; } }
   class Element {
-    constructor(id = '') { this.id = id; this.dataset = {}; this.attributes={};this.tagName='DIV';this.scrollTop=0;this.scrollLeft=0;this.selectionStart=0;this.selectionEnd=0;this.events = {}; this.value = ''; this.checked = false; this.open = false; this.writes = 0; this.children = []; this.textContent = ''; this.classList = { toggle() {}, add() {}, remove() {} }; }
+    constructor(id = '') { this.id = id; this.dataset = {}; this.attributes={};this.tagName='DIV';this.style={};this.scrollTop=0;this.scrollLeft=0;this.selectionStart=0;this.selectionEnd=0;this.events = {}; this.value = ''; this.checked = false; this.open = false; this.writes = 0; this.children = []; this.textContent = ''; this.animations = []; this.classList = { toggle() {}, add() {}, remove() {} }; }
     set innerHTML(html) { for (const id of this.children) nodes.delete(id); this.children = []; this.html = html; this.writes++; scan(html, this); }
     get innerHTML() { return this.html || ''; }
     addEventListener(type, cb) { this.events[type] = cb; }
     setAttribute(name, value) { if (name === 'open') this.open = true; this[name] = value; }
     removeAttribute(name) { if (name === 'open') this.open = false; }
+    matches(selector) { return selector.split(',').some(part => { const match = /^\[([\w-]+)\]$/.exec(part.trim()); return Boolean(match && Object.hasOwn(this.attributes, match[1])); }); }
+    animate(keyframes, options) { const animation = { keyframes, options, cancelled: false }; this.animations.push(animation); return { cancel() { animation.cancelled = true; }, set onfinish(callback) { animation.onfinish = callback; } }; }
     showModal() { this.open = true; } close() { this.open = false; } focus() {ctx.document.activeElement=this;} scrollIntoView() {}
     setSelectionRange(start,end,direction){this.selectionStart=start;this.selectionEnd=end;this.selectionDirection=direction;}
     contains(node){return node===this || this.children.includes(node && node.id);}
@@ -37,9 +39,10 @@ function harness({ native = true, hash = '#overview', saved = null } = {}) {
   if (saved) store.set('campusdesk.browser.v1', JSON.stringify(saved));
   const ctx = { Date: Clock, Intl, URL, URLSearchParams, Blob, setTimeout: () => 1, clearTimeout() {}, setInterval: (cb, ms) => { intervals.push({ cb, ms }); return intervals.length; }, console,
     location: { hash }, localStorage: { getItem: key => store.get(key), setItem: (key, value) => store.set(key, value) },
-    document: { getElementById: id => nodes.get(id) || null, querySelector: selector => selector === '.settings-nav' ? nodes.get('settings-nav') : null, createElement: () => new Element(), addEventListener: (event, cb) => listeners[event] = cb },
-    addEventListener() {}, scrollX:0,scrollY:0,scrollTo(x,y) {this.scrollX=x;this.scrollY=y;}, confirm: () => true, open: (...args) => opened.push(args), crypto: { randomUUID: () => 'test-uuid' }
+    document: { getElementById: id => nodes.get(id) || null, querySelector: selector => selector === '.settings-nav' ? nodes.get('settings-nav') : null, createElement: () => new Element(), addEventListener: (event, cb) => (listeners[event] ||= []).push(cb) },
+    addEventListener() {}, scrollX:0,scrollY:0,scrollTo(x,y) {this.scrollX=x;this.scrollY=y;}, requestAnimationFrame: callback => { callback(instant); return 1; }, confirm: () => true, open: (...args) => opened.push(args), crypto: { randomUUID: () => 'test-uuid' }
   };
+  if (idle) ctx.requestIdleCallback = callback => { idleQueue.push(callback); return idleQueue.length; };
   ctx.window = ctx;
   if (native) ctx.webkit = { messageHandlers: { campus: { postMessage: item => sent.push(JSON.parse(JSON.stringify(item))) } } };
   vm.createContext(ctx);
@@ -50,9 +53,11 @@ function harness({ native = true, hash = '#overview', saved = null } = {}) {
   vm.runInContext(fs.readFileSync(path.join(root, 'Resources/dashboard.js'), 'utf8'), ctx);
   return { ctx, nodes, sent, opened, intervals, store,
     node: id => { const node = nodes.get(id); assert.ok(node, 'Missing rendered element: ' + id); return node; },
-    click: dataset => { const element = new Element(); element.dataset = dataset; listeners.click({ target: element }); },
-    change: (id, data) => { const element = nodes.get(id); assert.ok(element, id); Object.assign(element, data); listeners.change({ target: element }); },
-    input: (id, value) => { const element = nodes.get(id); assert.ok(element, id); element.value = value; listeners.input({ target: element }); },
+    click: dataset => { const element = new Element(); element.dataset = dataset; for (const listener of listeners.click || []) listener({ target: element }); },
+    change: (id, data) => { const element = nodes.get(id); assert.ok(element, id); Object.assign(element, data); for (const listener of listeners.change || []) listener({ target: element }); },
+    input: (id, value) => { const element = nodes.get(id); assert.ok(element, id); element.value = value; for (const listener of listeners.input || []) listener({ target: element }); },
+    runIdleStep: () => { const callback = idleQueue.shift(); if (callback) callback({ timeRemaining: () => 50 }); },
+    drainIdle: () => { let steps = 0; while (idleQueue.length && steps++ < 1000) { const callback = idleQueue.shift(); callback({ timeRemaining: () => 50 }); } assert.ok(steps < 1000, 'idle work should finish'); },
     submit: id => nodes.get(id).events.submit({ preventDefault() {} }),
     receive: event => { ctx.__eventJSON = JSON.stringify(event); vm.runInContext('CampusDesk.receive(JSON.parse(__eventJSON))', ctx); },
     tick: milliseconds => { instant += milliseconds; for (const timer of intervals) timer.cb(); },
@@ -90,6 +95,49 @@ test('dashboard appearance setting switches between the preserved classic panel 
   assert.equal(app.node('app-shell').dataset.dashboardTheme, 'classic');
   app.click({ page: 'overview' });
   assert.match(app.node('content').innerHTML, /今天，也有条不紊/);
+});
+
+test('sidebar navigation animates once and does not rebuild the unchanged navigation bar', () => {
+  const app = harness();
+  const navWrites = app.node('nav').writes;
+  app.click({ page: 'schedule' });
+  assert.equal(app.node('nav').writes, navWrites);
+  assert.equal(app.node('content').animations.length, 1);
+  assert.equal(app.node('content').animations[0].options.duration, 360);
+  assert.match(app.node('content').animations[0].keyframes[0].transform, /translate3d\(0, 16px, 0\)/);
+  assert.equal(app.node('content').animations[0].keyframes[0].opacity, 0.42);
+  const contentWrites = app.node('content').writes;
+  app.click({ page: 'schedule' });
+  assert.equal(app.node('content').writes, contentWrites);
+  assert.equal(app.node('content').animations.length, 1);
+});
+
+test('Teams and EC message pages paginate large captured histories', () => {
+  const teams = harness({ hash: '#teams' });
+  const teamSnapshot = teamsSnapshot();
+  teamSnapshot.posts = Array.from({ length: 45 }, (_, index) => ({
+    id: 'message-' + index, title: 'Captured message ' + index, text: 'Message body ' + index,
+    kind: 'general', author: 'Teacher', channel: 'HOMEWORK', date: '2026-09-18T08:00:00Z',
+    url: 'https://teams.microsoft.com/v2/#/channels/test'
+  }));
+  teams.receive({ type: 'snapshot', snapshot: teamSnapshot });
+  assert.equal((teams.node('content').innerHTML.match(/class="teams-post"/g) || []).length, 40);
+  assert.match(teams.node('content').innerHTML, /显示 40 \/ 45 条已读取消息/);
+  teams.click({ action: 'teams-show-more' });
+  assert.equal((teams.node('content').innerHTML.match(/class="teams-post"/g) || []).length, 45);
+
+  const ec = harness({ hash: '#ec' });
+  const ecSnapshot = teamsSnapshot();
+  ecSnapshot.posts = Array.from({ length: 45 }, (_, index) => ({
+    id: 'ec-notice-' + index, title: 'EC notice ' + index, text: 'Roster body ' + index,
+    kind: 'ec', author: 'Teacher', channel: 'ENGLISH CORNER ROSTER', date: '2026-09-18T08:00:00Z',
+    url: 'https://teams.microsoft.com/v2/#/channels/test'
+  }));
+  ec.receive({ type: 'snapshot', snapshot: ecSnapshot });
+  assert.equal((ec.node('content').innerHTML.match(/class="teams-post"/g) || []).length, 40);
+  assert.match(ec.node('content').innerHTML, /显示 40 \/ 45 条匹配通知/);
+  ec.click({ action: 'ec-show-more' });
+  assert.equal((ec.node('ec-results').innerHTML.match(/class="teams-post"/g) || []).length, 45);
 });
 
 test('interface language setting persists and translates the application chrome without translating school data', () => {
@@ -553,6 +601,18 @@ test('EC search matches local extracted attachment text without inventing attend
   app.input('ec-search','张同学');assert.match(app.node('ec-results').innerHTML,/Friday roster/);
   app.input('ec-search','No matching name');assert.match(app.node('ec-results').innerHTML,/未匹配不代表不在名单中/);
   assert.equal(app.last('teams-auto-start'),undefined);
+});
+test('large EC search indexes six notices per idle slice and updates progress without blocking the page',()=>{
+  const app=harness({hash:'#ec',idle:true}),snapshot=teamsSnapshot();
+  snapshot.posts=Array.from({length:15},(_,index)=>({id:'large-ec-'+index,title:'EC notice '+index,text:index===14?'needle appears in this notice':'Roster update '+index,kind:'ec',date:'2026-09-18T08:00:00Z'}));
+  app.receive({type:'snapshot',snapshot});app.input('ec-search','needle');
+  assert.match(app.node('ec-results').innerHTML,/正在准备搜索索引 · 0 \/ 15/);
+  app.runIdleStep();
+  assert.equal(app.node('ec-result-count').textContent,'正在准备搜索索引 · 6 / 15');
+  assert.equal(app.node('ec-search-progress-fill').style.width,'40%');
+  app.drainIdle();
+  assert.match(app.node('ec-results').innerHTML,/EC notice 14/);
+  assert.doesNotMatch(app.node('ec-results').innerHTML,/EC notice 13/);
 });
 test('EC filters use confirmed publication dates and retain an explicit undated group',()=>{
   const app=harness({hash:'#ec'});app.receive({type:'snapshot',snapshot:searchableEC()});

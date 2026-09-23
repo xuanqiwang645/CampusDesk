@@ -181,7 +181,8 @@
     result.loginRequired = !model && (!!doc.querySelector('input[type="password"]') || /(?:登录|sign in|log in)/i.test(bodyText.slice(0, 3000)));
     if (result.loginRequired) { result.warnings.push('请在希悦页面登录，登录成功后会自动读取周课表。'); return result; }
     if (!model) { result.warnings.push('当前页面没有周课表，请打开希悦首页并选择“周”。'); return result; }
-    return { ...result, ...parseCalendar(model) };
+    const parsed = parseCalendar(model);
+    return { ...result, ...parsed, ...(parsed.calendarDates.length === 7 ? { success: true } : {}) };
   }
 
   return { extract, parseTimeRange, parseMonth, parseDayHeader, resolveWeekDates, parseDetails, parsePeriods, parseCalendar, readDOM };

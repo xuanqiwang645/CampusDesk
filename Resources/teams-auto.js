@@ -60,7 +60,7 @@
   }
   function exportNav(items) { return items.map(function (item) { var out = {}; Object.keys(item).forEach(function (key) { if (key !== 'node') out[key] = item[key]; }); return out; }); }
   function normalizeRecords(records, scope, url, capturedAt, pageTitle) {
-    var out = {source:'teams',coverage:'browser',url:url,title:short(pageTitle),capturedAt:capturedAt || new Date().toISOString(),
+    var out = {source:'teams',coverage:'browser',url:url,title:short(pageTitle),capturedAt:capturedAt || new Date().toISOString(),success:true,
       snapshotId:'browser:'+hash((scope.accountId || '')+'|'+scope.type+'|'+scope.id),accountId:scope.accountId || null,loginRequired:false,parseError:false,warnings:[],tasks:[],posts:[],grades:[],
       coverageMetadata:{adapterVersion:VERSION,scope:scope,renderedOnly:true,fullHistory:false,attachmentContentRead:false,recordsTruncated:records.length>LIMITS.records,textTruncated:false,attachmentsTruncated:false}};
     var seen = new Set();

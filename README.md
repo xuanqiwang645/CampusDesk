@@ -9,10 +9,11 @@
 
 如发现任何值得改进的地方，欢迎联系我！邮箱：xuanqiwang645@gmail.com
 
-**当前版本：0.5.4 · MIT · 实验性软件。** 可在“连接与设置 → 界面语言”随时切换简体中文与 English；英文看板与主要页面保持一致，切换不翻译课程、作业、消息或学校原文；待办在待办页与总览页均将 Teams 与 ManageBac 作业并排显示，再在各自来源内按学科分组并特别关注；Teams 消息可按发件人与频道分组并关注频道；可在“连接与设置 → 面板样式”切换经典面板与卡片看板。界面采用适配 WKWebView 的 Liquid Glass 分层材质，不改变学校原文或数据行为。自动读取不等于完整读取；遇到权限、布局、限流或数量限制时保留已有结果，并显示未完成范围。不要把看板作为成绩、截止时间或 EC 安排的唯一依据，请以学校原平台为准。
+**当前版本：0.5.5 · MIT · 实验性软件。** 支持中文默认界面与 English 切换、经典面板与卡片看板，以及 Three.js/WebGL Liquid Glass 效果。学习中心汇总全局搜索、今日学习计划、同步可信度、变化记录、成绩目标模拟、EC 定位、附件中心和专注模式；Teams 与 ManageBac 待办分区并按学科整理。课表支持单双周、节假日、一次性课程和临时调课。成绩页保留数字 GPA、百分比分布与本机历史 K 线；K 线支持 1 小时至 30 天时间分度、柱状图和收盘折线，悬停显示 GPA 数值但不显示日期。自动读取不等于完整读取；遇到权限、布局、限流或数量限制时保留已有结果，并显示未完成范围。不要把看板作为成绩、截止时间或 EC 安排的唯一依据，请以学校原平台为准。
 
 ## 已发布版本
 
+- [v0.5.5](releases/v0.5.5.md) — 学习中心、Liquid Glass 界面、课表规则和 GPA K 线。
 - [v0.5.4](releases/v0.5.4.md) — 自编课表按节次/按时刻联动、自动补全与重叠归类，并纳入课程表和下节课提醒。
 - [v0.4.4](releases/v0.4.4.md) — 卡片看板、课程时间表头与两位小数 GPA 展示。
 - [v0.4.2](releases/v0.4.2.md) — 待办与提醒的可见性改进。
@@ -99,7 +100,7 @@ CAMPUSDESK_BUILD_DIR="$(mktemp -d /private/tmp/CampusDesk-build.XXXXXX)" bash bu
 
 ## 开发与测试
 
-原生壳：Swift / AppKit / WKWebView。界面和适配器：本地 HTML、CSS、JavaScript。附件文字：PDFKit、Vision 与受限 Office ZIP/XML 解析。无 npm 或 SwiftPM 运行时依赖。
+原生壳：Swift / AppKit / WKWebView。界面和适配器：本地 HTML、CSS、JavaScript；Liquid Glass 使用随应用打包的 Three.js/WebGL2/GLSL 渲染。附件文字：PDFKit、Vision 与受限 Office ZIP/XML 解析。无 npm 或 SwiftPM 运行时依赖。
 
 JavaScript 回归测试需要支持 `node:test` 的 Node.js（建议 22 或更新版本）：
 
@@ -117,7 +118,7 @@ bash test-native.sh
 
 ## 许可
 
-[MIT License](LICENSE)。相关第三方 MIT 声明及参考提交保留在 [Resources/THIRD_PARTY_TEAMS_API.txt](Resources/THIRD_PARTY_TEAMS_API.txt)。MIT 许可只覆盖本项目可授权的代码，不授予学校数据、第三方服务或商标的使用权。
+[MIT License](LICENSE)。相关第三方声明保留在 [Resources/THIRD_PARTY_TEAMS_API.txt](Resources/THIRD_PARTY_TEAMS_API.txt)、[Resources/THIRD_PARTY_KLINECHART.txt](Resources/THIRD_PARTY_KLINECHART.txt) 与 [Resources/THIRD_PARTY_THREEJS.txt](Resources/THIRD_PARTY_THREEJS.txt)。MIT 许可只覆盖本项目可授权的代码，不授予学校数据、第三方服务或商标的使用权。
 
 
 

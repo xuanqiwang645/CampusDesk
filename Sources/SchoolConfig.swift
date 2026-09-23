@@ -1,11 +1,12 @@
 import Foundation
 
-/// Public builds contain no school-specific endpoint. Configuration is bundled
-/// at build time and never inferred from imported data or a remote page.
+/// Public builds contain no school-specific endpoint. A private, per-user
+/// configuration in Application Support can override the bundled defaults so
+/// upgrading the app does not remove the user's school login entry points.
 struct CampusSchoolConfiguration {
     let homes: [String: String]
     static let sources = ["seiue", "managebac"]
-    static let help = "请在源码 Resources/SchoolConfig.json 配置学校 HTTPS 根地址后重新构建应用；未配置的学校系统不会连接，Teams 不受影响。"
+    static let help = "尚未配置学校登录地址。请在 Application Support/CampusDesk/SchoolConfig.json 中填写学校 HTTPS 根地址后重新打开应用；Teams 不受影响。"
 
     init(_ values: [String: Any] = [:]) {
         var result = [String: String]()
@@ -14,11 +15,21 @@ struct CampusSchoolConfiguration {
         }
         homes = result
     }
-    static func load(resources: URL?) -> CampusSchoolConfiguration {
-        guard let url = resources?.appendingPathComponent("SchoolConfig.json"),
-              let size = try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize, size <= 8192,
+    private static func read(_ url: URL?) -> [String: Any]? {
+        guard let url,
+              let values = try? url.resourceValues(forKeys: [.fileSizeKey, .isRegularFileKey]),
+              values.isRegularFile == true, let size = values.fileSize, size <= 8192,
               let data = try? Data(contentsOf: url), data.count <= 8192,
-              let values = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return Self() }
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+        return object
+    }
+    static func load(resources: URL?, userConfig: URL? = nil) -> CampusSchoolConfiguration {
+        var values = read(resources?.appendingPathComponent("SchoolConfig.json")) ?? [:]
+        if let local = read(userConfig) {
+            // Only the two known keys can override the public defaults. Empty
+            // values deliberately disable one provider without affecting the other.
+            for source in sources where local[source] != nil { values[source] = local[source] }
+        }
         return Self(values)
     }
     var frontend: [String: String] {

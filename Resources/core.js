@@ -205,8 +205,8 @@
       seiueURL: configuredSchools.seiue, managebacURL: configuredSchools.managebac, teamsPages: [], teamsNotifications: false,
       teamsBrowser: 'chrome', teamsBrowserAutomation: false, teamsMode: 'browser', teamsAutoDiscover: true, graphIncludeChats: true,
       reminderMinutes: 30, teamsDueOverrides: {}, dashboardTheme: 'classic', gpaCandleColors: 'red-up', language: 'zh-CN', focusSubjects: [], focusTeamsChannels: [], customLessons: [],
-      scheduleHolidays: [], scheduleWeekAnchor: '', scheduleOverrides: [] }, snapshots: { seiue: {}, managebac: {}, teams: {} },
-      manualTasks: [], taskChecks: {}, feedbackRead: {}, gradeHistory: [] };
+      scheduleHolidays: [], scheduleWeekAnchor: '', scheduleOverrides: [], focusMode: false, planOrder: [], taskMinutes: {}, taskPriority: {}, gradeGoals: {}, ecIdentityNames: [] }, snapshots: { seiue: {}, managebac: {}, teams: {} },
+      manualTasks: [], taskChecks: {}, feedbackRead: {}, gradeHistory: [], changeLog: [] };
   }
   function scheduleRow(row) {
     record(row, '课程');
@@ -513,6 +513,14 @@
       value: finite(value.value, 0, 4, false), count: finite(value.count, 1, 1000, false), scale: 4,
       term: str(value.term, 300), method: str(value.method, 500, METHOD), signature: str(value.signature, 100000) };
   }
+  function changeRow(value) {
+    record(value, '变化记录');
+    const source = str(value.source, 30);
+    if (!SOURCES.includes(source)) fail('变化来源无效');
+    return { id: id(value.id), source, kind: str(value.kind, 30, 'update'), category: str(value.category, 40),
+      title: str(value.title, 500), course: str(value.course, 300), detail: str(value.detail, 500),
+      capturedAt: dateISO(value.capturedAt, false), url: checkedURL(value.url, source, true) };
+  }
   function validateState(input) {
     const raw = inputObject(input);
     if (raw.version !== VERSION) fail('不支持的数据版本');
@@ -540,6 +548,25 @@
     if (!['red-up', 'green-up'].includes(s.settings.gpaCandleColors)) fail('GPA K 线颜色设置无效');
     s.settings.language = settings.language === undefined ? 'zh-CN' : settings.language;
     if (!['zh-CN', 'en-US'].includes(s.settings.language)) fail('界面语言无效');
+    s.settings.focusMode = bool(settings.focusMode, false);
+    s.settings.ecIdentityNames = settings.ecIdentityNames === undefined ? [] : array(settings.ecIdentityNames, 'EC 姓名匹配', 10).map(value => str(value, 100));
+    s.settings.planOrder = settings.planOrder === undefined ? [] : array(settings.planOrder, '今日计划顺序', 3000).map(value => str(value, 512));
+    for (const key of ['taskMinutes', 'taskPriority', 'gradeGoals']) {
+      if (settings[key] === undefined) { s.settings[key] = {}; continue; }
+      const map = record(settings[key], key);
+      if (Object.keys(map).length > MAX_ROWS) fail(key + '记录过多');
+      const clean = {};
+      for (const [rawID, rawValue] of Object.entries(map)) {
+        const rowID = id(rawID);
+        if (key === 'taskMinutes') clean[rowID] = finite(rawValue, 5, 1440, false);
+        else if (key === 'taskPriority') clean[rowID] = finite(rawValue, 1, 3, false);
+        else {
+          record(rawValue, '成绩目标');
+          clean[rowID] = { target: finite(rawValue.target, 0, 100, false), remainingWeight: finite(rawValue.remainingWeight, 1, 100, false) };
+        }
+      }
+      s.settings[key] = clean;
+    }
     for (const [key, label] of [['focusSubjects', '特别关注学科'], ['focusTeamsChannels', '关注 Teams 频道']]) {
       const items = settings[key] === undefined ? [] : array(settings[key], label, 100).map(value => str(value, 300));
       if (items.some(value => !value)) fail(label + '不能为空');
@@ -575,6 +602,7 @@
     s.taskChecks = flagMap(raw.taskChecks, '待办标记');
     s.feedbackRead = flagMap(raw.feedbackRead, '反馈标记');
     s.gradeHistory = array(raw.gradeHistory, '成绩历史', 120).map(historyRow);
+    s.changeLog = array(raw.changeLog, '变化收件箱', 600).map(changeRow);
     return s;
   }
   function parts(date, tz) {
@@ -804,6 +832,51 @@
     }
     return rows.sort((a, b) => Number(a.read) - Number(b.read) || (Date.parse(b.date) || 0) - (Date.parse(a.date) || 0));
   }
+  function changeEvents(previous, current, source, capturedAt) {
+    if (!previous) return [];
+    const rows = [];
+    const compare = (field, category, fields, label) => {
+      const oldRows = new Map((previous[field] || []).map(row => [row.id, row]));
+      for (const row of current[field] || []) {
+        const old = oldRows.get(row.id);
+        if (!old) {
+          rows.push({ id: 'change-' + hash(source + '|new|' + row.id + '|' + category + '|' + capturedAt), source, kind: 'new', category,
+            title: row.title || row.name || label, course: row.course || '', detail: '新读取到记录（可能为新增，也可能是首次覆盖到此内容）', capturedAt, url: row.url || current.url });
+          continue;
+        }
+        const changes = fields.filter(key => JSON.stringify(old[key] == null ? null : old[key]) !== JSON.stringify(row[key] == null ? null : row[key]));
+        if (!changes.length) continue;
+        const details = changes.map(key => ({ dueAt: '截止日期已调整', dueLabel: '截止日期说明已调整', requirements: '作业要求已更新',
+          attachments: '附件有增删或版本变化', percentage: '课程百分比成绩已更新', score: '作业得分已更新', gradeLabel: '成绩等级已更新',
+          text: '正文内容已更新', title: '标题已更新', status: '提交状态已更新' }[key] || '内容已更新'));
+        if (field === 'posts' && row.kind === 'ec' && changes.includes('text')) {
+          const before = ecSignals(old.text || ''), after = ecSignals(row.text || '');
+          for (const key of ['group', 'time', 'place', 'members']) if (before[key] !== after[key] && (before[key] || after[key])) {
+            details.push(({ group: 'EC 组别信息有变化', time: 'EC 时间信息有变化', place: 'EC 地点信息有变化', members: 'EC 成员名单信息有变化' })[key]);
+          }
+        }
+        rows.push({ id: 'change-' + hash(source + '|' + row.id + '|' + category + '|' + capturedAt + '|' + changes.join(',')),
+          source, kind: 'update', category, title: row.title || row.name || label, course: row.course || '', detail: [...new Set(details)].join(' · '),
+          capturedAt, url: row.url || current.url });
+      }
+    };
+    compare('tasks', '作业', ['dueAt', 'dueLabel', 'requirements', 'status', 'attachments'], '作业');
+    compare('posts', '消息', ['title', 'text', 'attachments'], '消息');
+    compare('courses', '成绩', ['percentage'], '课程成绩');
+    compare('grades', '成绩', ['score', 'percentage', 'gradeLabel'], '作业成绩');
+    compare('feedback', '反馈', ['text', 'score', 'gradeLabel'], '老师反馈');
+    return rows;
+  }
+  function ecSignals(text) {
+    const value = String(text || '').replace(/\r/g, '');
+    const pick = pattern => ((value.match(pattern) || [])[1] || '').trim().replace(/\s+/g, ' ').slice(0, 240);
+    return {
+      group: pick(/(?:组别|小组|团队|group)\s*[:：]?\s*([^\n。；;]{2,100})/i),
+      time: pick(/(?:时间|集合时间|time)\s*[:：]?\s*([^\n。；;]{2,100})/i) || pick(/\b(?:[01]?\d|2[0-3])[:：][0-5]\d(?:\s*[-–—至]\s*(?:[01]?\d|2[0-3])[:：][0-5]\d)?\b/),
+      place: pick(/(?:地点|教室|位置|集合地点|location|room)\s*[:：]?\s*([^\n。；;]{2,100})/i),
+      members: pick(/(?:成员|参加人员|名单|participants?|attendees?)\s*[:：]?\s*([^\n。；;]{2,240})/i)
+    };
+  }
   function getNextClass(state, date) {
     const rows = getSchedule(state, date), time = clock(date, state.settings.timezone);
     return { current: rows.find(r => r.start <= time && time < r.end) || null, next: rows.find(r => r.start > time) || null };
@@ -854,9 +927,16 @@
     const lastAttempt = all.slice().sort((a, b) => Date.parse(b.lastAttemptAt || b.capturedAt) - Date.parse(a.lastAttemptAt || a.capturedAt))[0];
     const lastCapturedAt = latest ? latest.capturedAt : null;
     const ageMinutes = lastCapturedAt ? Math.max(0, (now - Date.parse(lastCapturedAt)) / 60000) : null;
-    return { lastCapturedAt, ageMinutes, stale: ageMinutes === null || ageMinutes > Math.max(30, state.settings.refreshMinutes * 2),
-      loginRequired: !!(lastAttempt && lastAttempt.loginRequired), warnings: lastAttempt ? lastAttempt.warnings.slice() : [],
-      lastAttemptAt: lastAttempt ? lastAttempt.lastAttemptAt || lastAttempt.capturedAt : null, failed: !!(lastAttempt && lastAttempt.lastAttemptFailed) };
+    const records = latest ? (source === 'seiue' ? (latest.schedule || []).length : source === 'managebac' ? (latest.courses || []).length + (latest.tasks || []).length + (latest.feedback || []).length : (latest.tasks || []).length + (latest.posts || []).length + (latest.feedback || []).length + (latest.grades || []).length) : 0;
+    const failed = !!(lastAttempt && lastAttempt.lastAttemptFailed), loginRequired = !!(lastAttempt && lastAttempt.loginRequired);
+    const stale = ageMinutes === null || ageMinutes > Math.max(30, state.settings.refreshMinutes * 2);
+    const metadata = latest && latest.coverageMetadata;
+    const partial = Boolean(lastAttempt && (lastAttempt.warnings.length || (metadata && metadata.status !== 'complete')));
+    const attemptedRecords = lastAttempt ? (source === 'seiue' ? (lastAttempt.schedule || []).length : source === 'managebac' ? (lastAttempt.courses || []).length + (lastAttempt.tasks || []).length + (lastAttempt.feedback || []).length : (lastAttempt.tasks || []).length + (lastAttempt.posts || []).length + (lastAttempt.feedback || []).length + (lastAttempt.grades || []).length) : 0;
+    const condition = !lastAttempt ? 'not_connected' : loginRequired ? 'login_required' : failed ? 'unread' : partial ? 'partial' : attemptedRecords === 0 ? 'empty' : stale ? 'stale' : 'available';
+    return { lastCapturedAt, ageMinutes, stale, loginRequired, warnings: lastAttempt ? lastAttempt.warnings.slice() : [],
+      lastAttemptAt: lastAttempt ? lastAttempt.lastAttemptAt || lastAttempt.capturedAt : null, failed, condition, records,
+      snapshotCount: all.length, coverage: metadata || null, coverageLabel: lastAttempt && lastAttempt.coverage || '' };
   }
   function mergeSnapshot(state, incoming) {
     const result = validateState(state), raw = inputObject(incoming), item = snapshot(raw);
@@ -864,7 +944,8 @@
     const key = snapshotKey(item), previous = result.snapshots[item.source][key];
     if (previous && Date.parse(previous.lastAttemptAt || previous.capturedAt) > Date.parse(item.capturedAt)) return result;
     const hasData = item.source === 'seiue' ? item.schedule.length || item.calendarDates.length : item.source === 'teams' ? item.tasks.length || item.posts.length || item.feedback.length || item.grades.length : item.courses.length || item.tasks.length || item.feedback.length || item.officialGPA;
-    const failed = item.loginRequired || item.parseError || item.success === false || !!item.error || (!hasData && item.source !== 'teams');
+    const failed = item.loginRequired || item.parseError || item.success === false || !!item.error || (!hasData && item.source !== 'teams' && item.success !== true);
+    const changes = !failed && previous ? changeEvents(previous, item, item.source, item.capturedAt) : [];
     // An unreadable/logged-out page records the attempted sync while retaining its last useful data.
     if (failed && previous) result.snapshots[item.source][key] = Object.assign({}, previous, {
       lastAttemptAt: item.capturedAt, lastAttemptFailed: true, loginRequired: item.loginRequired,
@@ -942,6 +1023,7 @@
       if (item.source === 'teams' && !previous && Object.keys(result.snapshots.teams).length >= 500) fail('Teams 已达到 500 个本地同步分组上限，无法保存新的分组');
       result.snapshots[item.source][key] = item;
     }
+    if (changes.length) result.changeLog = result.changeLog.concat(changes).slice(-600);
     if (!failed && item.source === 'managebac') {
       const courses = getCourses(result), estimate = estimateGPA(courses);
       if (estimate.count) {
@@ -975,7 +1057,8 @@
       schedule: getSchedule(state, date), schedulePeriods: getSchedulePeriods(state), courses, tasks: getTasks(state), feedback: getFeedback(state),
       officialGPA: getOfficialGPA(state), estimatedGPA: estimateGPA(courses), nextClass: getNextClass(state, date),
       classClock: getClassClock(state, date), teamsPosts: getTeamsPosts(state), teamsEC: getTeamsEC(state), teamsGrades: getTeamsGrades(state),
-      sources: { seiue: getSourceStatus(state, 'seiue', date), managebac: getSourceStatus(state, 'managebac', date), teams: getSourceStatus(state, 'teams', date) } };
+      sources: { seiue: getSourceStatus(state, 'seiue', date), managebac: getSourceStatus(state, 'managebac', date), teams: getSourceStatus(state, 'teams', date) },
+      changes: state.changeLog.slice().sort((a, b) => Date.parse(b.capturedAt) - Date.parse(a.capturedAt)) };
   }
   return Object.freeze({ VERSION, configureSchools, schoolHomes, emptyState, defaultState: emptyState, validateState, normalizeState: validateState,
     mergeSnapshot, resetTeamsData, clearTeamsData: resetTeamsData, today, clock, getSchedule, getCourses, getTasks, getFeedback, getOfficialGPA, estimateGPA,

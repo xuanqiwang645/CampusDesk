@@ -1,7 +1,10 @@
 import Cocoa
 import WebKit
 
-let schoolEndpoints = CampusSchoolConfiguration.load(resources: Bundle.main.resourceURL)
+let userSchoolConfigURL = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first?
+    .appendingPathComponent("CampusDesk", isDirectory: true)
+    .appendingPathComponent("SchoolConfig.json", isDirectory: false)
+let schoolEndpoints = CampusSchoolConfiguration.load(resources: Bundle.main.resourceURL, userConfig: userSchoolConfigURL)
 let sourceHomes = schoolEndpoints.homes.merging(["teams": "https://teams.microsoft.com/"]) { _, teams in teams }
 let sourceHosts: [String: [String]] = sourceHomes.reduce(into: [:]) { result, entry in
     if let host = URL(string: entry.value)?.host { result[entry.key] = [host] }

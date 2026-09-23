@@ -10,6 +10,17 @@ struct SchoolConfigurationSmoke {
         }
         check(CampusSchoolConfiguration().frontend == ["seiue": "", "managebac": ""], "Empty defaults")
         check(CampusSchoolConfiguration.load(resources: nil).homes.isEmpty, "Missing resource fails closed")
+        let temporary = FileManager.default.temporaryDirectory.appendingPathComponent("CampusDesk-school-config-" + UUID().uuidString, isDirectory: true)
+        try! FileManager.default.createDirectory(at: temporary, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: temporary) }
+        let resources = temporary.appendingPathComponent("Resources", isDirectory: true)
+        try! FileManager.default.createDirectory(at: resources, withIntermediateDirectories: true)
+        try! Data("{\"seiue\":\"https://public-school.seiue.com/\",\"managebac\":\"\"}".utf8).write(to: resources.appendingPathComponent("SchoolConfig.json"))
+        let local = temporary.appendingPathComponent("SchoolConfig.json")
+        try! Data("{\"seiue\":\"https://private-school.seiue.com/\",\"managebac\":\"https://private-school.managebac.cn/\"}".utf8).write(to: local)
+        check(CampusSchoolConfiguration.load(resources: resources, userConfig: local).frontend == [
+            "seiue": "https://private-school.seiue.com/", "managebac": "https://private-school.managebac.cn/"
+        ], "Private config overrides bundled defaults")
         check(CampusSchoolConfiguration.validatedHome("HTTPS://EXAMPLE-SCHOOL.SEIUE.COM:443/", source: "seiue") == "https://example-school.seiue.com/", "Normalized HTTPS default port")
         for suffix in ["managebac.com", "managebac.cn"] {
             check(CampusSchoolConfiguration.validatedHome("https://example-school." + suffix, source: "managebac") == "https://example-school." + suffix + "/", "ManageBac provider suffix")

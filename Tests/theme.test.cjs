@@ -24,7 +24,7 @@ function contrast(foreground, background) {
   return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
 }
 
-test('the vivid theme and liquid-glass icon treatment load after the reminder icons', () => {
+test('the WebGL liquid-glass compositor loads after the content dashboard', () => {
   const base = html.indexOf('href="style.css"');
   const reminders = html.indexOf('href="reminders.css"');
   const vivid = html.indexOf('href="vivid.css"');
@@ -32,7 +32,28 @@ test('the vivid theme and liquid-glass icon treatment load after the reminder ic
   assert.ok(base >= 0 && reminders > base && vivid > reminders && liquid > vivid);
   assert.match(theme, /\.task-row\.done \.task-copy h3\s*\{\s*color:\s*#53685b/);
   const glass = fs.readFileSync(path.join(resources, 'liquid-glass.css'), 'utf8');
-  assert.match(glass, /backdrop-filter:\s*blur\(13px\) saturate\(145%\)/);
+  const shader = fs.readFileSync(path.join(resources, 'liquid-glass-webgl.js'), 'utf8');
+  for (const file of fs.readdirSync(resources).filter(file => file.endsWith('.css'))) {
+    assert.doesNotMatch(fs.readFileSync(path.join(resources, file), 'utf8'), /backdrop-filter/, file + ' must not fake glass with CSS backdrop capture');
+  }
+  assert.match(html, /id="liquid-glass-canvas"/);
+  assert.match(html, /src="three\.min\.js"/);
+  assert.match(html, /src="liquid-glass-webgl\.js"/);
+  assert.match(shader, /paintComposeRT/);
+  assert.match(shader, /textureLod\(paintComposeRT/);
+  assert.match(shader, /minFilter:\s*THREE\.LinearMipmapLinearFilter/);
+  assert.match(shader, /generateMipmaps:\s*true/);
+  assert.match(shader, /float sdCircle\(/);
+  assert.match(shader, /float sdRoundedBox\(/);
+  assert.match(shader, /float smin\(/);
+  assert.match(shader, /float glassSurfaceSdf\(/);
+  assert.match(shader, /float interior = max\(-sdf, 0\.0\)/);
+  assert.match(shader, /float bevel = uNormalTransition \* 0\.82/);
+  assert.match(shader, /clamp\(uNormalTransition \* 0\.13, 0\.003, 0\.012\)/);
+  assert.match(shader, /refract\(incident, frontNormal, 1\.0 \/ ior\)/);
+  assert.match(shader, /float glassPath = height \/ max\(-insideRay\.z, 0\.025\)/);
+  assert.match(shader, /refract\(insideRay, vec3\(0\.0, 0\.0, 1\.0\), ior\)/);
+  assert.match(shader, /distributionGGX/);
   assert.match(glass, /\.icon-button/);
   assert.match(glass, /prefers-reduced-transparency/);
 });

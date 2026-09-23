@@ -1,204 +1,30 @@
-/*
- * Liquid Glass board surfaces.
- *
- * The downloaded Apple Landmarks sample demonstrates three ideas that map well
- * to CampusDesk's WebKit dashboard: extend a visual layer behind its content,
- * group related glass elements, and keep the system-provided effect subtle.
- * This is a native CSS translation for the dependency-free CampusDesk shell;
- * it does not copy Apple's SwiftUI source or alter school-provided content.
- */
-:root {
-  --board-glass-edge: rgba(255, 255, 255, .78);
-  --board-glass-fill: rgba(255, 255, 255, .50);
-  --board-glass-shadow: rgba(35, 77, 62, .12);
-  --board-glass-blur: blur(19px) saturate(135%);
-}
+/* Board-mode Content layer. Background and Glass are GPU-rendered. */
+:root{--board-glass-edge:rgba(255,255,255,.68);--board-glass-shadow:rgba(35,77,62,.12)}
+html.webgl-liquid-glass .app-shell[data-dashboard-theme="board"] #main,html.webgl-liquid-glass .app-shell[data-dashboard-theme="board"] .sidebar,html.webgl-liquid-glass .app-shell[data-dashboard-theme="board"] .topbar{background:transparent;border-color:rgba(209,222,211,.72)}
+.app-shell[data-dashboard-theme="board"] .sidebar{box-shadow:12px 0 35px rgba(70,91,70,.04)}
+.app-shell[data-dashboard-theme="board"] .topbar{position:relative;z-index:2}
+.board-panel{position:relative;isolation:isolate}
+html.webgl-liquid-glass .app-shell[data-dashboard-theme="board"] .board-hero,html.webgl-liquid-glass .app-shell[data-dashboard-theme="board"] .board-kpi,html.webgl-liquid-glass .app-shell[data-dashboard-theme="board"] .board-task-section,html.webgl-liquid-glass .app-shell[data-dashboard-theme="board"] .board-mini-card,html.webgl-liquid-glass .app-shell[data-dashboard-theme="board"] .board-task-card{position:relative;border-color:var(--board-glass-edge);background:transparent;box-shadow:inset 0 1px 0 rgba(255,255,255,.62),0 10px 25px var(--board-glass-shadow)}
+.board-hero{padding:15px 16px 19px;border-radius:23px}.board-hero-actions{align-items:center;gap:9px}.board-hero-actions>span:first-child{display:inline-block;padding:8px 11px;border:1px solid rgba(255,255,255,.65);border-radius:999px;background:rgba(255,255,255,.1)}
+.board-kpi-grid{position:relative;padding:2px}.board-task-section{padding:21px}.board-task-card,.board-mini-card{overflow:hidden}
+.board-kpi,.board-task-card,.board-mini-card{transition:transform .22s ease,box-shadow .22s ease,border-color .22s ease}
+.board-kpi:hover,.board-task-card:hover,.board-mini-card:hover{transform:translateY(-2px);border-color:rgba(103,157,126,.55);box-shadow:inset 0 1px 0 rgba(255,255,255,.75),0 14px 28px rgba(59,104,79,.14)}
+.board-check{box-shadow:inset 0 1px 0 rgba(255,255,255,.7),0 4px 10px rgba(55,112,77,.12)}
+.focus-button{justify-content:center;min-width:96px;flex-shrink:0;text-align:center;line-height:1.2}.focus-button>span{display:block;min-width:0;text-align:center}
+@media(prefers-reduced-motion:reduce){.board-kpi,.board-task-card,.board-mini-card{transition:none}.board-kpi:hover,.board-task-card:hover,.board-mini-card:hover{transform:none}}
+@media(prefers-reduced-transparency:reduce){.app-shell[data-dashboard-theme="board"] .sidebar,.app-shell[data-dashboard-theme="board"] .topbar,.board-hero,.board-kpi,.board-task-section,.board-mini-card,.board-task-card{background:#fbfcf5}}
+@media(max-width:760px){.board-hero{padding:14px;border-radius:18px}}
 
-.app-shell[data-dashboard-theme="board"] #main {
-  position: relative;
-  isolation: isolate;
-  overflow: hidden;
-  background:
-    radial-gradient(circle at 92% 2%, rgba(213, 239, 223, .72), transparent 27rem),
-    radial-gradient(circle at 2% 98%, rgba(244, 227, 194, .42), transparent 24rem),
-    #f3f0e7;
-}
+/* Keep sidebar selection feedback on the compositor; no layout-affecting motion. */
+.nav-item{transition:background-color .32s ease,color .32s ease,box-shadow .32s ease,border-color .32s ease}
+.nav-item>.icon{transition:background-color .32s ease,box-shadow .32s ease,border-color .32s ease,transform .32s cubic-bezier(.16,1,.3,1)}
+.nav-item.active{box-shadow:inset 0 0 0 1px rgba(54,120,91,.1),0 3px 12px rgba(55,105,74,.08)}
+.nav-item.active>.icon{transform:scale(1.08)}
+.nav-item:active{transform:scale(.985)}
+@media(prefers-reduced-motion:reduce){.nav-item,.nav-item>.icon{transition:none}.nav-item:active{transform:none}}
 
-.app-shell[data-dashboard-theme="board"] #main::before {
-  content: "";
-  position: absolute;
-  z-index: -1;
-  width: min(56vw, 700px);
-  height: min(56vw, 700px);
-  top: -28rem;
-  right: -15rem;
-  border-radius: 50%;
-  background: radial-gradient(circle, rgba(255, 255, 255, .76), rgba(222, 244, 229, .14) 55%, transparent 72%);
-  filter: blur(5px);
-  pointer-events: none;
-}
-
-.app-shell[data-dashboard-theme="board"] .sidebar,
-.app-shell[data-dashboard-theme="board"] .topbar {
-  -webkit-backdrop-filter: var(--board-glass-blur);
-  backdrop-filter: var(--board-glass-blur);
-  background: rgba(250, 249, 243, .68);
-  border-color: rgba(209, 222, 211, .72);
-}
-
-.app-shell[data-dashboard-theme="board"] .sidebar {
-  box-shadow: 12px 0 35px rgba(70, 91, 70, .04);
-}
-
-.app-shell[data-dashboard-theme="board"] .topbar {
-  position: relative;
-  z-index: 2;
-}
-
-.board-panel {
-  position: relative;
-  isolation: isolate;
-}
-
-.board-panel::after {
-  content: "";
-  position: absolute;
-  z-index: -1;
-  left: 10%;
-  right: 10%;
-  top: 0;
-  height: 1px;
-  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, .96), transparent);
-  opacity: .9;
-}
-
-.board-hero {
-  position: relative;
-  padding: 15px 16px 19px;
-  border: 1px solid rgba(255, 255, 255, .64);
-  border-radius: 23px;
-  background: linear-gradient(135deg, rgba(255, 255, 255, .56), rgba(241, 248, 239, .28));
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .78), 0 12px 30px rgba(76, 89, 65, .05);
-  -webkit-backdrop-filter: var(--board-glass-blur);
-  backdrop-filter: var(--board-glass-blur);
-}
-
-.board-hero::after,
-.board-kpi::after,
-.board-task-section::after,
-.board-mini-card::after,
-.board-task-card::after {
-  content: "";
-  position: absolute;
-  inset: 1px;
-  border-radius: inherit;
-  pointer-events: none;
-  background: linear-gradient(118deg, rgba(255, 255, 255, .46), transparent 29%, transparent 72%, rgba(255, 255, 255, .13));
-  opacity: .72;
-}
-
-.board-hero-actions {
-  align-items: center;
-  gap: 9px;
-}
-
-.board-hero-actions > span:first-child {
-  padding: 8px 11px;
-  border: 1px solid rgba(255, 255, 255, .72);
-  border-radius: 999px;
-  background: rgba(255, 255, 255, .36);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .76);
-  -webkit-backdrop-filter: blur(11px) saturate(130%);
-  backdrop-filter: blur(11px) saturate(130%);
-}
-
-.board-kpi-grid {
-  position: relative;
-  padding: 2px;
-}
-
-.board-kpi {
-  border-color: var(--board-glass-edge);
-  background:
-    linear-gradient(145deg, rgba(255, 255, 255, .65), rgba(255, 255, 255, .30) 48%, rgba(229, 243, 230, .38)),
-    var(--board-glass-fill);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .83), 0 9px 22px var(--board-glass-shadow);
-  -webkit-backdrop-filter: var(--board-glass-blur);
-  backdrop-filter: var(--board-glass-blur);
-}
-
-.board-kpi:hover,
-.board-task-card:hover,
-.board-mini-card:hover {
-  transform: translateY(-2px);
-  border-color: rgba(103, 157, 126, .46);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .9), 0 14px 28px rgba(59, 104, 79, .12);
-}
-
-.board-kpi,
-.board-task-card,
-.board-mini-card { transition: transform .22s ease, box-shadow .22s ease, border-color .22s ease; }
-
-.board-task-section,
-.board-mini-card {
-  position: relative;
-  overflow: hidden;
-  border-color: var(--board-glass-edge);
-  background: linear-gradient(145deg, rgba(255, 255, 255, .62), rgba(255, 255, 255, .31));
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .79), 0 12px 27px var(--board-glass-shadow);
-  -webkit-backdrop-filter: var(--board-glass-blur);
-  backdrop-filter: var(--board-glass-blur);
-}
-
-.board-task-section { padding: 21px; }
-
-.board-task-card {
-  overflow: hidden;
-  border-color: rgba(255, 255, 255, .78);
-  background: linear-gradient(145deg, rgba(255, 255, 255, .78), rgba(250, 252, 244, .48));
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .86), 0 6px 15px rgba(59, 77, 60, .075);
-  -webkit-backdrop-filter: blur(15px) saturate(130%);
-  backdrop-filter: blur(15px) saturate(130%);
-}
-
-.board-task-card::after { opacity: .47; }
-
-.board-check {
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .84), 0 4px 10px rgba(55, 112, 77, .12);
-}
-
-/* Keep the favorite control optically centered and wide enough for both
- * Chinese labels (已关注 / 特别关注) and the English label (Following). */
-.focus-button {
-  justify-content: center;
-  min-width: 96px;
-  flex-shrink: 0;
-  text-align: center;
-  line-height: 1.2;
-}
-
-.focus-button > span {
-  display: block;
-  min-width: 0;
-  text-align: center;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .board-kpi, .board-task-card, .board-mini-card { transition: none; }
-  .board-kpi:hover, .board-task-card:hover, .board-mini-card:hover { transform: none; }
-}
-
-@media (prefers-reduced-transparency: reduce) {
-  .app-shell[data-dashboard-theme="board"] .sidebar,
-  .app-shell[data-dashboard-theme="board"] .topbar,
-  .board-hero, .board-kpi, .board-task-section, .board-mini-card, .board-task-card {
-    -webkit-backdrop-filter: none;
-    backdrop-filter: none;
-    background: #fbfcf5;
-  }
-}
-
-@media (max-width: 760px) {
-  .board-hero { padding: 14px; border-radius: 18px; }
-  .board-hero-actions > span:first-child { display: inline-block; }
-}
+.message-pagination{display:flex;justify-content:center;padding:18px 0 4px}
+.teams-groups-card .message-pagination{margin-top:12px;border-top:1px solid var(--line)}
+.ec-search-progress{height:3px;margin:10px 0 16px;overflow:hidden;border-radius:4px;background:#e7eee7}
+.ec-search-progress span{display:block;height:100%;border-radius:inherit;background:var(--teal);transition:width .16s ease}
+@media(prefers-reduced-motion:reduce){.ec-search-progress span{transition:none}}

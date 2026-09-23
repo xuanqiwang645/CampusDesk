@@ -172,9 +172,12 @@
     }
     if (result.tasks.some(x=>x.dueLabel && !x.dueAt)) result.warnings.push('部分任务未显示完整年份或时区，保留原始截止时间；请以原页面为准。');
     if (!result.courses.length && !result.tasks.length && !result.links.length && !result.officialGPA) {
-      result.parseError = true;
-      result.warnings.push('当前页面没有可识别的课程或任务，请打开课程 Tasks 页面后同步。');
+      if (page.recognized !== true) {
+        result.parseError = true;
+        result.warnings.push('当前页面没有可识别的课程或任务，请打开课程 Tasks 页面后同步。');
+      }
     }
+    if (page.recognized === true && !result.parseError) result.success = true;
     return result;
   }
   function extract(doc, url) {

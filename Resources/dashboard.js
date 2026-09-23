@@ -8,7 +8,7 @@
   const native = Boolean(window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.campus);
   const storageKey = 'campusdesk.browser.v1';
   let state = Core.emptyState();
-  let page = ['overview', 'schedule', 'grades', 'tasks', 'feedback', 'teams', 'ec', 'settings'].includes(location.hash.slice(1)) ? location.hash.slice(1) : 'overview';
+  let page = ['overview', 'learning', 'schedule', 'grades', 'tasks', 'feedback', 'teams', 'ec', 'settings'].includes(location.hash.slice(1)) ? location.hash.slice(1) : 'overview';
   let selectedDate = Core.today();
   let taskFilter = 'open';
   let taskSubjectFilter = 'all';
@@ -24,6 +24,18 @@
   let ecQuery = '', ecDateFilter = 'all', renderedPage = null;
   let detailTaskId = null;
   let notificationPermission = 'unknown';
+  let learningQuery = '';
+  let cachedSearchIndex = null;
+  let draggingTaskID = '';
+  let pageSwitchAnimation = null;
+  let gpaChartMountScheduled = false;
+  let teamsPostsCache = new Map();
+  let ecSearchIndex = null;
+  let ecSearchBuildToken = 0;
+  let ecSearchBuildProgress = 0;
+  let ecVisibleLimit = 40;
+  let teamsVisibleLimit = 40;
+  const MESSAGE_PAGE_SIZE = 40;
   let lastReminderSignature = '';
   let lastRenderedDay = Core.today();
   let lastClockBoundary = '';
@@ -33,6 +45,8 @@
   let graphConfigurationDraft = null;
   let teamsAuto = { running: false, phase: 'idle', message: '登录 Teams 后自动发现频道和聊天。', counts: {}, warnings: [], coverageItems: [] };
   let gpaKlineChart = null;
+  let gpaKlineChartKey = '';
+  let gpaKlineWheelAt = -Infinity;
   const GPA_KLINE_INTERVALS = [
     { ms: 60 * 60 * 1000, label: '1 小时', short: '1h', chart: { type: 'hour', span: 1 } },
     { ms: 2 * 60 * 60 * 1000, label: '2 小时', short: '2h', chart: { type: 'hour', span: 2 } },
@@ -51,16 +65,17 @@
   let lastMenuTitle = '';
   let lastMenuCountdown = '';
   let markupEscapes = null;
-  const pageNames = { overview: '总览', schedule: '课程表', grades: '成绩与 GPA', tasks: '待办事项', feedback: '老师反馈', teams: 'Teams 消息', ec: 'English Corner', settings: '连接与设置' };
+  const pageNames = { overview: '总览', learning: '学习中心', schedule: '课程表', grades: '成绩与 GPA', tasks: '待办事项', feedback: '老师反馈', teams: 'Teams 消息', ec: 'English Corner', settings: '连接与设置' };
   // Only CampusDesk's own fixed labels are translated. School data stays exactly as received.
   const english = Object.freeze({
-    '总览': 'Overview', '课程表': 'Schedule', '成绩与 GPA': 'Grades & GPA', '待办事项': 'To-Do', '老师反馈': 'Teacher Feedback', 'Teams 消息': 'Teams Messages', '连接与设置': 'Connections & Settings', '希悦': 'Seiue',
+    '总览': 'Overview', '学习中心': 'Study Center', '课程表': 'Schedule', '成绩与 GPA': 'Grades & GPA', '待办事项': 'To-Do', '老师反馈': 'Teacher Feedback', 'Teams 消息': 'Teams Messages', '连接与设置': 'Connections & Settings', '希悦': 'Seiue',
     '学习，一目了然': 'Study, in view', '我的校园': 'My Campus', '北京时间': 'Beijing time', '把今天留给重要的事。': 'Make today count.', '同步数据': 'Sync data', '尚未同步': 'Not synced',
     '界面语言': 'Interface language', '选择 CampusDesk 的界面语言。课程、作业、消息、附件和学校原文保持原样，不会被翻译。': 'Choose the CampusDesk interface language. Courses, assignments, messages, attachments, and school content stay exactly as received.', '简体中文': 'Simplified Chinese',
     '让它适合你的每一天。': 'Make it work for every day.', '学校系统各自登录；课表、任务和频道原文保存在本机。': 'Sign in to each school system separately; schedules, tasks, and channel content remain on this Mac.', '更改会立即应用到导航、页面标题、按钮与固定说明文字。': 'Changes apply immediately to navigation, page titles, buttons, and fixed help text.',
-    '面板样式': 'Dashboard style', '经典面板': 'Classic dashboard', '卡片看板': 'Card board', '熟悉的课程、成绩与待办布局': 'Familiar schedule, grades, and to-do layout', '统计概览与密集任务卡片': 'At-a-glance metrics and focused task cards',
+    '面板样式': 'Dashboard style', '经典面板': 'Classic dashboard', '卡片看板': 'Card board', '熟悉的课程、成绩与待办布局': 'Familiar schedule, grades, and to-do layout', '统计概览与密集任务卡片': 'At-a-glance metrics and focused task cards', 'GPA K 线涨跌颜色': 'GPA candle colors', '选择成绩上升和下降时 K 线的颜色，设置会保存在本机。': 'Choose how rising and falling GPA candles are colored. This preference stays on this Mac.', '红涨绿跌': 'Red up, green down', '绿涨红跌': 'Green up, red down', 'GPA K 线已设为绿涨红跌。': 'GPA candles are set to green up, red down.', 'GPA K 线已设为红涨绿跌。': 'GPA candles are set to red up, green down.',
     '日常偏好': 'Daily preferences', '学校连接': 'School connections', '数据与备份': 'Data & backups', '自动刷新间隔': 'Automatic refresh interval', '空白课节显示为自习': 'Show open periods as self-study', '显示时区': 'Display time zone', '每 5 分钟': 'Every 5 minutes', '每 15 分钟': 'Every 15 minutes', '每 30 分钟': 'Every 30 minutes', '每小时': 'Hourly',
     '自编课表': 'Custom schedule', '添加自编课程': 'Add custom class', '课程名称': 'Class name', '教室（可选）': 'Room (optional)', '选择星期': 'Choose weekdays', '按节次': 'By period', '按时刻': 'By time', '第几节': 'Period', '开始时间': 'Start time', '结束时间': 'End time', '保存自编课程': 'Save custom class', '已添加': 'Added', '删除自编课程': 'Delete custom class', '请选择至少一天': 'Choose at least one weekday', '结束时间将自动补为开始时间后 45 分钟。': 'An empty or invalid end time is filled as 45 minutes after the start.', '按时间填写时，会按重叠比例自动归入对应节次。': 'Time-based entries are assigned by overlap with the matching period.', '周日': 'Sun', '周一': 'Mon', '周二': 'Tue', '周三': 'Wed', '周四': 'Thu', '周五': 'Fri', '周六': 'Sat',
+    '上课日期': 'Class date', '操作': 'Action', '如：晨会、社团': 'e.g. morning meeting or club', '如：操场': 'e.g. playground', '如：调课后的课程': 'e.g. adjusted class name', '选择节次后自动带出时间': 'Choose a period to fill in the times', '填入开始时间后会自动识别节次': 'A period is suggested after you enter the start time', '将归入 ': 'Assigned to ', '未匹配节次，将按开始时间插入': 'No period match; will be placed by start time', '该节次暂无已读取的时间': 'No captured time is available for this period', '尚未设置节假日；设置后当天常规课表和每周自编课程会隐藏。': 'No holidays set. Adding one hides regular and weekly custom classes for that date.',
     '希悦网址': 'Seiue URL', '学校 ManageBac 网址': 'School ManageBac URL', '导出或恢复本机数据': 'Export or restore local data', '构建时配置；未配置时不会连接。': 'Configured at build time; no connection is made when it is empty.', '构建时配置；仅允许指定学校的精确地址。': 'Configured at build time; only the approved school address is allowed.',
     'Teams 作业提醒': 'Teams assignment reminders', '截止前系统通知': 'System notifications before due dates', '提前多久提醒': 'Reminder lead time',
     '课程成绩': 'Course grades', '学校 GPA': 'School GPA', '参考 GPA': 'Estimated GPA', '今日课程': 'Today\'s classes', '全部待办': 'All to-dos', '添加待办': 'Add to-do', '查看全部': 'View all',
@@ -96,7 +111,12 @@
     '每周课程': 'Weekly class', '一次性课程': 'One-time class', '单双周': 'Week pattern', '每周': 'Every week', '单周': 'Odd weeks', '双周': 'Even weeks',
     '单周/双周基准周（周一）': 'Anchor Monday for odd/even weeks', '节假日与临时调课': 'Holidays & temporary changes', '添加节假日': 'Add holiday', '临时调课日期': 'Adjustment date',
     '取消当天课程': 'Cancel class', '替换当天课程': 'Replace class', '原课程节次': 'Original period', '新课程节次': 'New period', '保存临时调课': 'Save temporary change',
-    '成绩百分比分布': 'Percentage grade distribution', '暂无可绘制的百分制成绩。': 'No percentage grades are available for the chart.', '节假日': 'Holiday', '临时调课': 'Temporary change', '移除': 'Remove'
+    '成绩百分比分布': 'Percentage grade distribution', '暂无可绘制的百分制成绩。': 'No percentage grades are available for the chart.', '节假日': 'Holiday', '临时调课': 'Temporary change', '移除': 'Remove',
+    '把学习安排与变化放在一起。': 'Plan your study and track what changed.', '搜索已读取内容，核对每个来源，再安排今天的重点。': 'Search captured content, check each source, and plan today.', '全局搜索': 'Global search', '作业、Teams 消息、老师反馈、成绩与附件文字': 'Assignments, Teams messages, feedback, grades, and attachment text', '搜索已读取内容': 'Search captured content', '今日学习计划': 'Today’s study plan', '项待办 · 拖动可调整顺序': ' tasks · drag to reorder', '根据今天课表避开上课时段，按截止日期、优先级和预计耗时排入空档。时间只是本机建议，可拖动并修改。': 'Avoids classes and schedules by due date, priority, and estimated effort. Times are local suggestions; drag to reorder or adjust.', '分钟': 'Minutes', '优先级': 'Priority', '高': 'High', '中': 'Medium', '低': 'Low', '今日暂未排入': 'Not scheduled today', '拖动以调整顺序': 'Drag to reorder', '先展示前 24 项；调整优先级或完成任务后，计划会重新排列。': 'Showing the first 24; the plan updates as priorities change or tasks are completed.', '同步可信度中心': 'Sync confidence', '“没有内容”表示本次成功读取且数量为零；登录或读取失败会单独显示。覆盖范围只代表已发现和已读取数据。': '“No content” means a successful read returned zero records. Sign-in and read failures are shown separately; coverage only reflects discovered and captured data.', '已读取内容': 'Content captured', '部分读取': 'Partially read', '缓存可能过期': 'Cache may be stale', '本次成功检查：没有内容': 'Checked successfully: no content', '本次未读取成功': 'Could not read this attempt', '最近尝试：': 'Last attempt: ', '最近有效数据：': 'Last useful data: ', '条已读记录': ' captured records', '个页面': ' pages', '个频道': ' channels', '项范围核对成功': ' coverage checks complete',
+    '变化收件箱': 'Change inbox', '只比较同一来源页面连续两次成功同步到的相同记录。首次读取、未加载页面和被权限挡住的内容不会被猜测。': 'Compares matching records across successful syncs of the same source page. First reads, unloaded pages, and permission-blocked content are not inferred.', '条近期变化': ' recent changes', '截止日期已调整': 'Due date changed', '截止日期说明已调整': 'Due date note changed', '作业要求已更新': 'Assignment requirements updated', '附件有增删或版本变化': 'Attachments or versions changed', '课程百分比成绩已更新': 'Course percentage updated', '作业得分已更新': 'Assignment score updated', '成绩等级已更新': 'Grade label updated', '正文内容已更新': 'Content updated', '标题已更新': 'Title updated', '提交状态已更新': 'Submission status updated', '暂时还没有可比较的变化。下一次成功同步后，截止日期、要求、附件和成绩更新会显示在这里。': 'No changes captured yet. Due dates, requirements, attachments, and grades will appear after a later successful sync.',
+    'EC 智能定位': 'EC locator', '输入你的姓名别名后，只标出原文精确匹配及其附近可识别的时间/地点，始终可回原文核对。': 'Add name aliases to find exact mentions and nearby time or location details. Always verify against the original.', '我的姓名 / 英文名': 'My name / aliases', '多个名字用逗号分隔': 'Separate names with commas', '保存到本机': 'Save on this Mac', '查看原文': 'View original', '附件中心': 'Attachment center', '最多显示 100 个已发现附件': 'Up to 100 discovered attachments', '同名附件会提示数量；离线预览依赖已读取的文字，完整文件仍需打开原始附件。': 'Duplicate names are grouped. Offline preview uses captured text; open the source for the full file.', '已离线缓存文字': 'Text cached for offline reading', '已提取（截断）': 'Text extracted (truncated)', '可打开原附件': 'Original file available', '仅发现名称': 'Name only', '查看已缓存文字': 'View cached text', '已记录版本标识': 'Version tracked', '已捕获 ': ' captured ', '个版本标识': ' version IDs',
+    '成绩目标模拟': 'Grade goal simulator', '模拟数据 · 不会改动学校成绩': 'Simulation · does not change school grades', '假设当前百分比是已完成部分的平均分，按剩余权重估算后续部分需要的分数；实际课程权重请以老师公布为准。': 'Assumes the current percentage is the completed-work average and estimates the score needed on remaining work. Use the teacher’s actual weighting when available.', '目标百分比': 'Target %', '剩余权重': 'Remaining weight %', '真实当前成绩': 'Real current grade', '按当前均分已达到目标': 'Target already reached at current average', '按此权重，目标将超过 100%，无法仅靠剩余部分达到': 'Target exceeds 100% under these assumptions', '剩余部分需达到 ': 'Need ', '当前没有已读取的课程': 'No captured class right now', '给自己一段安静的学习时间': 'Take a quiet moment to study', '最近截止日期': 'Coming deadlines', '退出专注': 'Exit focus', '专注模式': 'Focus mode', '专注': 'Focus',
+    '作业': 'Assignment', '消息': 'Message', '成绩': 'Grade', '反馈': 'Feedback', '组别 ': 'Group ', '原文时间 ': 'Source time ', '原文地点 ': 'Source location ', '成员原文 ': 'Members in source ', '附近没有明确的组别、时间、地点或成员字段': 'No explicit group, time, location, or member fields nearby', '新读取到记录（可能为新增，也可能是首次覆盖到此内容）': 'Newly captured record (may be new or newly covered)', 'EC 组别信息有变化': 'EC group details changed', 'EC 时间信息有变化': 'EC time details changed', 'EC 地点信息有变化': 'EC location details changed', 'EC 成员名单信息有变化': 'EC member list changed'
   });
   function isEnglish() { return state.settings.language === 'en-US'; }
   function t(value) { return isEnglish() && typeof value === 'string' ? (english[value] || scheduleEnglish[value] || value) : value; }
@@ -136,6 +156,7 @@
     trash: '<path d="M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7m4-7v7"/>',
     clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
     bell: '<path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9Z"/><path d="M10 21h4"/>',
+    search: '<circle cx="10.8" cy="10.8" r="6.8"/><path d="m16 16 5 5"/>',
     focus: '<path d="m12 3 2.75 5.57L21 9.48l-4.5 4.38 1.06 6.19L12 17.16l-5.56 2.89 1.06-6.19L3 9.48l6.25-.91L12 3Z"/>',
     alert: '<path d="M12 3 2 21h20L12 3Z"/><path d="M12 9v5m0 3h.01"/>'
   };
@@ -304,7 +325,7 @@
     if (start) start.value = customScheduleDraft.start;
     if (end) end.value = customScheduleDraft.end;
     const hint = document.getElementById('custom-time-hint');
-    if (hint) hint.textContent = period.start ? period.start + (period.end ? '–' + period.end : '') : '该节次暂无已读取的时间';
+    if (hint) hint.textContent = period.start ? period.start + (period.end ? '–' + period.end : '') : t('该节次暂无已读取的时间');
   }
   function customSyncFromTime() {
     const hint = document.getElementById('custom-time-hint');
@@ -313,21 +334,21 @@
     customScheduleDraft.start = start ? start.value : customScheduleDraft.start;
     customScheduleDraft.end = end ? end.value : customScheduleDraft.end;
     const a = customHm2min(customScheduleDraft.start);
-    if (a === null) { hint.textContent = '填入开始时间后会自动识别节次'; return; }
+    if (a === null) { hint.textContent = t('填入开始时间后会自动识别节次'); return; }
     const b = customHm2min(customScheduleDraft.end);
     if (b === null || b <= a) {
       customScheduleDraft.end = customMin2hm(a + 45);
       if (end) end.value = customScheduleDraft.end;
     }
     const hit = customBestPeriod(customScheduleDraft.start, customScheduleDraft.end);
-    hint.textContent = hit ? '将归入 ' + hit.period + (hit.start ? ' · ' + hit.start + '–' + hit.end : '') : '未匹配节次，将按开始时间插入';
+    hint.textContent = hit ? t('将归入 ') + hit.period + (hit.start ? ' · ' + hit.start + '–' + hit.end : '') : t('未匹配节次，将按开始时间插入');
   }
   function renderScheduleRules() {
     const holidays = state.settings.scheduleHolidays || [], overrides = state.settings.scheduleOverrides || [];
     const periods = customPeriods();
     const holidayRows = holidays.map(date => '<span class="schedule-rule-chip">' + esc(date) + '<button type="button" data-action="remove-holiday" data-date="' + esc(date) + '" aria-label="' + esc(t('移除')) + '">×</button></span>').join('');
     const overrideRows = overrides.map(item => '<div class="custom-lesson-row"><div><strong>' + esc(item.date + ' · ' + (item.action === 'cancel' ? t('取消当天课程') : item.title)) + '</strong><small>' + esc((item.targetPeriod || item.targetStart || '') + (item.period ? ' → ' + item.period : '') + (item.start ? ' · ' + item.start + (item.end ? '–' + item.end : '') : '') + (item.room ? ' · ' + item.room : '')) + '</small></div><button class="icon-button" type="button" data-action="remove-schedule-override" data-id="' + esc(item.id) + '" aria-label="' + esc(t('移除')) + '" title="' + esc(t('移除')) + '">' + icon('trash') + '</button></div>').join('');
-    return '<section class="card custom-schedule-card schedule-rules-card"><div class="card-header"><h2 class="card-title"><span class="icon">' + icon('settings') + '</span>' + t('节假日与临时调课') + '</h2></div><div class="custom-schedule-grid"><label><span>' + t('单周/双周基准周（周一）') + '</span><input id="schedule-week-anchor" type="date" value="' + esc(state.settings.scheduleWeekAnchor || '') + '"></label><label><span>' + t('添加节假日') + '</span><div class="inline-form"><input id="holiday-date" type="date"><button type="button" class="button button-light" data-action="add-holiday">' + t('添加节假日') + '</button></div></label></div>' + (holidayRows ? '<div class="schedule-rule-chips">' + holidayRows + '</div>' : '<p class="custom-schedule-note">尚未设置节假日；设置后当天常规课表和每周自编课程会隐藏。</p>') + '<form id="schedule-override-form" class="custom-schedule-form"><div class="custom-schedule-grid"><label><span>' + t('临时调课日期') + '</span><input id="override-date" type="date" required></label><label><span>操作</span><select id="override-action"><option value="replace">' + t('替换当天课程') + '</option><option value="cancel">' + t('取消当天课程') + '</option></select></label><label><span>' + t('原课程节次') + '</span><select id="override-target-period"><option value="">—</option>' + periods.map(item => '<option value="' + esc(item.period) + '">' + esc(item.period) + '</option>').join('') + '</select></label><label><span>' + t('新课程节次') + '</span><select id="override-period"><option value="">—</option>' + periods.map(item => '<option value="' + esc(item.period) + '">' + esc(item.period) + '</option>').join('') + '</select></label><label><span>' + t('课程名称') + '</span><input id="override-title" maxlength="300" placeholder="如：调课后的课程"></label><label><span>' + t('教室（可选）') + '</span><input id="override-room" maxlength="200"></label><label><span>' + t('开始时间') + '</span><input id="override-start" type="time"></label><label><span>' + t('结束时间') + '</span><input id="override-end" type="time"></label></div><button class="button button-light" type="submit">' + t('保存临时调课') + '</button></form>' + (overrideRows ? '<div class="custom-lesson-list"><div class="custom-schedule-label">' + t('临时调课') + ' ' + overrides.length + '</div>' + overrideRows + '</div>' : '') + '</section>';
+    return '<section class="card custom-schedule-card schedule-rules-card"><div class="card-header"><h2 class="card-title"><span class="icon">' + icon('settings') + '</span>' + t('节假日与临时调课') + '</h2></div><div class="custom-schedule-grid"><label><span>' + t('单周/双周基准周（周一）') + '</span><input id="schedule-week-anchor" type="date" value="' + esc(state.settings.scheduleWeekAnchor || '') + '"></label><label><span>' + t('添加节假日') + '</span><div class="inline-form"><input id="holiday-date" type="date"><button type="button" class="button button-light" data-action="add-holiday">' + t('添加节假日') + '</button></div></label></div>' + (holidayRows ? '<div class="schedule-rule-chips">' + holidayRows + '</div>' : '<p class="custom-schedule-note">' + t('尚未设置节假日；设置后当天常规课表和每周自编课程会隐藏。') + '</p>') + '<form id="schedule-override-form" class="custom-schedule-form"><div class="custom-schedule-grid"><label><span>' + t('临时调课日期') + '</span><input id="override-date" type="date" required></label><label><span>' + t('操作') + '</span><select id="override-action"><option value="replace">' + t('替换当天课程') + '</option><option value="cancel">' + t('取消当天课程') + '</option></select></label><label><span>' + t('原课程节次') + '</span><select id="override-target-period"><option value="">—</option>' + periods.map(item => '<option value="' + esc(item.period) + '">' + esc(item.period) + '</option>').join('') + '</select></label><label><span>' + t('新课程节次') + '</span><select id="override-period"><option value="">—</option>' + periods.map(item => '<option value="' + esc(item.period) + '">' + esc(item.period) + '</option>').join('') + '</select></label><label><span>' + t('课程名称') + '</span><input id="override-title" maxlength="300" placeholder="' + t('如：调课后的课程') + '"></label><label><span>' + t('教室（可选）') + '</span><input id="override-room" maxlength="200"></label><label><span>' + t('开始时间') + '</span><input id="override-start" type="time"></label><label><span>' + t('结束时间') + '</span><input id="override-end" type="time"></label></div><button class="button button-light" type="submit">' + t('保存临时调课') + '</button></form>' + (overrideRows ? '<div class="custom-lesson-list"><div class="custom-schedule-label">' + t('临时调课') + ' ' + overrides.length + '</div>' + overrideRows + '</div>' : '') + '</section>';
   }
   function renderCustomSchedule() {
     const periods = customPeriods(), days = [1, 2, 3, 4, 5, 6, 0], labels = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'];
@@ -473,6 +494,11 @@
   function postSender(post) { return post.author || t('发件人未标明'); }
   function postRecipient(post) { return post.recipient || t('收件人未标明'); }
   function postChannel(post) { return post.channel || t('频道未标明'); }
+  function teamsPosts(kind) {
+    const key = kind || '*';
+    if (!teamsPostsCache.has(key)) teamsPostsCache.set(key, Core.getTeamsPosts(state, kind));
+    return teamsPostsCache.get(key);
+  }
   function postRows(posts) {
     return posts.map(post => {
       const kind = ({ assignment: '作业消息', ec: 'EC 通知', general: '频道消息' }[post.kind] || '频道消息');
@@ -486,27 +512,79 @@
     return [...senders.entries()].sort((a, b) => a[0].localeCompare(b[0], 'zh-CN')).map(([sender, channels]) => '<section class="teams-recipient-group"><h2>' + (isEnglish() ? 'Sender: ' : '发件人：') + esc(sender) + '</h2>' + [...channels.entries()].sort((a, b) => Number(watched.has(b[0])) - Number(watched.has(a[0])) || a[0].localeCompare(b[0], 'zh-CN')).map(([channel, rows]) => '<div class="teams-channel-group"><div class="group-heading"><div><p>' + (isEnglish() ? 'Channel' : '频道') + '</p><h3>' + esc(channel) + '<span>' + rows.length + (isEnglish() ? ' item(s)' : ' 条') + '</span></h3></div>' + focusButton('toggle-focus-channel', channel, watched.has(channel), '频道：' + channel) + '</div>' + postRows(rows) + '</div>').join('') + '</section>').join('');
   }
   function renderTeams() {
-    const posts = Core.getTeamsPosts(state), watched = new Set(state.settings.focusTeamsChannels || []);
+    const posts = teamsPosts(), watched = new Set(state.settings.focusTeamsChannels || []);
     const kindVisible = posts.filter(post => teamsFilter === 'all' || post.kind === teamsFilter);
-    const visible = kindVisible.filter(post => teamsChannelFilter !== 'focus' || watched.has(postChannel(post)));
+    const filtered = kindVisible.filter(post => teamsChannelFilter !== 'focus' || watched.has(postChannel(post)));
+    const visible = filtered.slice(0, teamsVisibleLimit);
+    const remaining = Math.max(0, filtered.length - visible.length);
     const tasks = Core.getTasks(state).filter(task => task.source === 'teams' && !task.completed);
-    const controls = '<div class="page-tools teams-tools"><div class="filter-pills">' + [['all', '全部消息'], ['assignment', '作业消息'], ['general', '其他通知']].map(filter => '<button type="button" class="pill ' + (teamsFilter === filter[0] ? 'active' : '') + '" data-action="teams-filter" data-filter="' + filter[0] + '">' + filter[1] + '</button>').join('') + '</div><div class="filter-pills"><button type="button" class="pill ' + (teamsChannelFilter === 'all' ? 'active' : '') + '" data-action="teams-channel-filter" data-filter="all">全部频道</button><button type="button" class="pill ' + (teamsChannelFilter === 'focus' ? 'active' : '') + '" data-action="teams-channel-filter" data-filter="focus">特别关注</button></div><span class="subtle">' + visible.length + (isEnglish() ? ' captured message(s)' : ' 条已读取消息') + '</span></div>';
-    return heading('频道里的重要信息，在这里。', '按发件人和频道整理；特别关注仅影响 CampusDesk 的优先展示。', button(icon('link') + '打开 Teams', 'open-source', 'data-source="teams"')) + teamsGuide() + (tasks.length ? '<section class="card settings-section">' + cardHeader('tasks', 'Teams 待完成作业', goLink('tasks', '全部待办')) + taskRows(tasks, 5) + (tasks.length > 5 ? '<p class="gpa-note">另有 ' + (tasks.length - 5) + ' 项，可在待办中查看。</p>' : '') + '</section>' : '') + controls + '<section class="card teams-groups-card">' + (visible.length ? groupedTeamsPosts(visible) : empty('teams', teamsChannelFilter === 'focus' ? '还没有特别关注频道的已读取消息' : '还没有已读取的消息', teamsChannelFilter === 'focus' ? '在任意频道标题旁点“特别关注”，它会优先显示在这里。' : '连接学校 Microsoft 账号后，这里会自动汇总有权访问的频道消息。没有同步到消息不代表频道没有消息。')) + teamsWarning() + sourceFooter('teams') + '</section>';
+    const rangeText = isEnglish() ? 'Showing ' + visible.length + ' / ' + filtered.length + ' captured message(s)' : '显示 ' + visible.length + ' / ' + filtered.length + ' 条已读取消息';
+    const controls = '<div class="page-tools teams-tools"><div class="filter-pills">' + [['all', '全部消息'], ['assignment', '作业消息'], ['general', '其他通知']].map(filter => '<button type="button" class="pill ' + (teamsFilter === filter[0] ? 'active' : '') + '" data-action="teams-filter" data-filter="' + filter[0] + '">' + filter[1] + '</button>').join('') + '</div><div class="filter-pills"><button type="button" class="pill ' + (teamsChannelFilter === 'all' ? 'active' : '') + '" data-action="teams-channel-filter" data-filter="all">全部频道</button><button type="button" class="pill ' + (teamsChannelFilter === 'focus' ? 'active' : '') + '" data-action="teams-channel-filter" data-filter="focus">特别关注</button></div><span class="subtle">' + rangeText + '</span></div>';
+    const showMore = remaining ? '<div class="message-pagination">' + button(isEnglish() ? 'Show 40 more (' + remaining + ' remaining)' : '再显示 40 条（还剩 ' + remaining + ' 条）', 'teams-show-more', '', 'button-light') + '</div>' : '';
+    return heading('频道里的重要信息，在这里。', '按发件人和频道整理；特别关注仅影响 CampusDesk 的优先展示。', button(icon('link') + '打开 Teams', 'open-source', 'data-source="teams"')) + teamsGuide() + (tasks.length ? '<section class="card settings-section">' + cardHeader('tasks', 'Teams 待完成作业', goLink('tasks', '全部待办')) + taskRows(tasks, 5) + (tasks.length > 5 ? '<p class="gpa-note">另有 ' + (tasks.length - 5) + ' 项，可在待办中查看。</p>' : '') + '</section>' : '') + controls + '<section class="card teams-groups-card">' + (visible.length ? groupedTeamsPosts(visible) : empty('teams', teamsChannelFilter === 'focus' ? '还没有特别关注频道的已读取消息' : '还没有已读取的消息', teamsChannelFilter === 'focus' ? '在任意频道标题旁点“特别关注”，它会优先显示在这里。' : '连接学校 Microsoft 账号后，这里会自动汇总有权访问的频道消息。没有同步到消息不代表频道没有消息。')) + showMore + teamsWarning() + sourceFooter('teams') + '</section>';
   }
   function ecDate(post) { return post.publishedAt ? Core.today(new Date(post.publishedAt)) : ''; }
   function searchText(value) { return String(value || '').normalize('NFKC').toLocaleLowerCase().replace(/\s+/g,' ').trim(); }
+  function scheduleEcSearchChunk(callback) {
+    if (typeof window.requestIdleCallback === 'function') window.requestIdleCallback(callback, { timeout: 80 });
+    else window.setTimeout(() => callback({ timeRemaining: () => 8 }), 0);
+  }
+  function ensureEcSearchIndex(posts) {
+    if (ecSearchIndex) return;
+    const makeRow = post => {
+      const fields = [post.title, post.text, post.channel, post.author, ...(post.attachments || []).flatMap(file => [file.title, file.text])].map(searchText).filter(Boolean);
+      return { post, date: ecDate(post), fields };
+    };
+    // Keep tiny rosters instant; index larger histories in idle-time slices.
+    if (posts.length <= 12) {
+      ecSearchBuildProgress = posts.length;
+      ecSearchIndex = posts.map(makeRow);
+      return;
+    }
+    const token = ++ecSearchBuildToken;
+    ecSearchBuildProgress = 0;
+    const indexed = [];
+    const step = deadline => {
+      if (token !== ecSearchBuildToken) return;
+      let processed = 0;
+      while (ecSearchBuildProgress < posts.length && processed < 6 && (processed === 0 || deadline.timeRemaining() > 1)) {
+        const post = posts[ecSearchBuildProgress++];
+        indexed.push(makeRow(post));
+        processed++;
+      }
+      if (ecSearchBuildProgress >= posts.length) {
+        ecSearchIndex = indexed;
+        updateECResults();
+      } else {
+        const count = document.getElementById('ec-result-count');
+        const fill = document.getElementById('ec-search-progress-fill');
+        if (count) count.textContent = (isEnglish() ? 'Preparing search · ' : '正在准备搜索索引 · ') + ecSearchBuildProgress + ' / ' + posts.length;
+        if (fill) fill.style.width = (posts.length ? Math.round(ecSearchBuildProgress / posts.length * 100) : 100) + '%';
+        scheduleEcSearchChunk(step);
+      }
+    };
+    scheduleEcSearchChunk(step);
+  }
   function ecResultsHTML() {
-    const all = Core.getTeamsEC(state), query = searchText(ecQuery);
-    const matched = all.filter(post => !query || searchText([post.title,post.text,post.channel,post.author].concat((post.attachments || []).flatMap(item => [item.title,item.text])).join('\n')).includes(query));
-    const known = matched.filter(post => ecDate(post) && ecDateFilter !== 'unknown' && (ecDateFilter === 'all' || ecDate(post) === ecDateFilter));
-    const unknown = matched.filter(post => !ecDate(post));
-    const shown = known.length + unknown.length;
-    const countText = isEnglish() ? 'Showing ' + shown + ' / ' + all.length + ' captured notice(s)' + (unknown.length ? ' · ' + unknown.length + ' date-unconfirmed notice(s) kept visible' : '') : '显示 ' + shown + ' / ' + all.length + ' 条已读取通知' + (unknown.length ? ' · ' + unknown.length + ' 条日期未确认（保留显示）' : '');
-    return '<p id="ec-result-count" class="ec-result-count" role="status" aria-live="polite">' + countText + '</p>' + (known.length ? postRows(known) : '') + (unknown.length ? '<h3 class="ec-undated-heading">发布日期未确认</h3><p class="subtle">这些原文未因日期筛选被隐藏，不据此推断活动日期。</p>' + postRows(unknown) : '') + (!shown ? empty('ec', all.length ? '没有匹配的已读取通知' : '等待第一份 EC 通知', all.length ? '试试姓名的一部分、附件中的词语，或清除筛选。未匹配不代表不在名单中。' : '登录 Teams 并完成同步后，这里汇总已识别的 EC 原文。', all.length ? button('清除筛选','ec-clear') : teamsPrimaryButton()) : '');
+    const all = teamsPosts('ec'), query = searchText(ecQuery);
+    if (query && !ecSearchIndex) {
+      ensureEcSearchIndex(all);
+      if (!ecSearchIndex) return '<p id="ec-result-count" class="ec-result-count" role="status" aria-live="polite">' + (isEnglish() ? 'Preparing search · ' : '正在准备搜索索引 · ') + ecSearchBuildProgress + ' / ' + all.length + '</p><div class="ec-search-progress" aria-hidden="true"><span id="ec-search-progress-fill" style="width:' + (all.length ? Math.round(ecSearchBuildProgress / all.length * 100) : 100) + '%"></span></div>';
+    }
+    const rows = query ? ecSearchIndex.filter(row => row.fields.some(field => field.includes(query))) : all.map(post => ({ post, date: ecDate(post) }));
+    const knownRows = rows.filter(row => row.date && ecDateFilter !== 'unknown' && (ecDateFilter === 'all' || row.date === ecDateFilter));
+    const unknownRows = rows.filter(row => !row.date);
+    const shown = knownRows.length + unknownRows.length;
+    const visibleKnown = knownRows.slice(0, ecVisibleLimit);
+    const visibleUnknown = unknownRows.slice(0, Math.max(0, ecVisibleLimit - visibleKnown.length));
+    const visibleCount = visibleKnown.length + visibleUnknown.length;
+    const countText = isEnglish() ? 'Showing ' + visibleCount + ' / ' + all.length + ' matching notice(s)' + (unknownRows.length ? ' · ' + unknownRows.length + ' date-unconfirmed notice(s) kept visible' : '') : '显示 ' + visibleCount + ' / ' + all.length + ' 条匹配通知' + (unknownRows.length ? ' · ' + unknownRows.length + ' 条日期未确认（保留显示）' : '');
+    const more = shown > visibleCount ? '<div class="message-pagination">' + button(isEnglish() ? 'Show 40 more (' + (shown - visibleCount) + ' remaining)' : '再显示 40 条（还剩 ' + (shown - visibleCount) + ' 条）', 'ec-show-more', '', 'button-light') + '</div>' : '';
+    return '<p id="ec-result-count" class="ec-result-count" role="status" aria-live="polite">' + countText + '</p>' + (visibleKnown.length ? postRows(visibleKnown.map(row => row.post)) : '') + (visibleUnknown.length ? '<h3 class="ec-undated-heading">发布日期未确认</h3><p class="subtle">这些原文未因日期筛选被隐藏，不据此推断活动日期。</p>' + postRows(visibleUnknown.map(row => row.post)) : '') + more + (!shown ? empty('ec', all.length ? '没有匹配的已读取通知' : '等待第一份 EC 通知', all.length ? '试试姓名的一部分、附件中的词语，或清除筛选。未匹配不代表不在名单中。' : '登录 Teams 并完成同步后，这里汇总已识别的 EC 原文。', all.length ? button('清除筛选','ec-clear') : teamsPrimaryButton()) : '');
   }
   function updateECResults() { const target = document.getElementById('ec-results'); if (target) target.innerHTML = localizedHTML(ecResultsHTML); }
   function renderEC() {
-    const dates = [...new Set(Core.getTeamsEC(state).map(ecDate).filter(Boolean))].sort().reverse();
+    const dates = [...new Set(teamsPosts('ec').map(ecDate).filter(Boolean))].sort().reverse();
     return heading('English Corner，记得赴约。', '搜索已读取原文和附件文字，核对最新安排。', button(icon('link') + '打开 Teams', 'open-source', 'data-source="teams"')) + teamsGuide() + '<div class="info-note">先核对取消或变更通知，再查看对应日期的名单；旧名单不代表今天的安排。下面按通知的明确发布日期筛选，不推断活动日期或参与人员。附件提取文字可能不完整，未匹配到姓名不代表不在名单中，请核对原件。</div>' + '<section class="card"><div class="ec-filters"><label for="ec-search">姓名或全文<input id="ec-search" type="search" value="' + esc(ecQuery) + '" placeholder="搜索通知和已解析附件" autocomplete="off" maxlength="200" aria-controls="ec-results"></label><label for="ec-date-filter">通知发布日期<select id="ec-date-filter" aria-controls="ec-results"><option value="all"' + (ecDateFilter === 'all' ? ' selected' : '') + '>全部日期</option><option value="unknown"' + (ecDateFilter === 'unknown' ? ' selected' : '') + '>仅日期未确认</option>' + dates.map(date => '<option value="' + date + '"' + (ecDateFilter === date ? ' selected' : '') + '>' + date + '</option>').join('') + '</select></label>' + button('清除筛选','ec-clear') + '</div><div id="ec-results">' + ecResultsHTML() + '</div>' + teamsWarning() + sourceFooter('teams') + '</section>';
   }
   function renderClassicOverview() {
@@ -566,14 +644,211 @@
   }
   function renderSchedule() {
     const rows = Core.getSchedule(state, selectedDate);
-    return heading('为每一节课，留好位置。', '以北京时间展示课程。空白课节按你的设置显示为自习。') + (selectedDate === Core.today() ? renderClassClock() : '') + '<div class="page-tools"><div class="date-control"><button class="icon-button" type="button" data-action="prev-day" aria-label="前一天">' + icon('back') + '</button><label class="visually-hidden" for="schedule-date">课表日期</label><input id="schedule-date" type="date" value="' + esc(selectedDate) + '"><button class="icon-button" type="button" data-action="next-day" aria-label="后一天">' + icon('arrow') + '</button><span class="date-day">' + esc(dayLabel(selectedDate)) + '</span>' + button('今天', 'today') + '</div>' + button(icon('link') + '打开希悦课表', 'open-source', 'data-source="seiue"') + '</div><section class="card schedule-full">' + cardHeader('schedule', selectedDate === Core.today() ? '今日课程' : esc(selectedDate) + ' 的课程', '<span class="card-kicker">' + rows.length + ' 节已读取课程</span>') + (rows.length ? scheduleRows(rows, selectedDate) : noSchedule(selectedDate)) + sourceFooter('seiue') + '</section>' + renderCustomSchedule() + '<p class="footer-note">自习仅补充学校页面中能确认时间的空白课节，不推测未读取的课表。</p>';
+    return heading('为每一节课，留好位置。', '以北京时间展示课程。空白课节按你的设置显示为自习。') + (selectedDate === Core.today() ? renderClassClock() : '') + '<div class="page-tools"><div class="date-control"><button class="icon-button" type="button" data-action="prev-day" aria-label="前一天">' + icon('back') + '</button><label class="visually-hidden" for="schedule-date">课表日期</label><input id="schedule-date" type="date" value="' + esc(selectedDate) + '"><button class="icon-button" type="button" data-action="next-day" aria-label="后一天">' + icon('arrow') + '</button><span class="date-day">' + esc(dayLabel(selectedDate)) + '</span>' + button('今天', 'today') + '</div>' + button(icon('link') + '打开希悦课表', 'open-source', 'data-source="seiue"') + '</div>' + renderScheduleConflicts(rows, selectedDate) + '<section class="card schedule-full">' + cardHeader('schedule', selectedDate === Core.today() ? '今日课程' : esc(selectedDate) + ' 的课程', '<span class="card-kicker">' + rows.length + ' 节已读取课程</span>') + (rows.length ? scheduleRows(rows, selectedDate) : noSchedule(selectedDate)) + sourceFooter('seiue') + '</section>' + renderCustomSchedule() + '<p class="footer-note">自习仅补充学校页面中能确认时间的空白课节，不推测未读取的课表。</p>';
+  }
+  function renderScheduleConflicts(rows, date) {
+    const timed = rows.filter(row => row.start && row.end && /^\d{2}:\d{2}$/.test(row.start) && /^\d{2}:\d{2}$/.test(row.end)).map(row => ({ row, start: row.start, end: row.end })).sort((a, b) => a.start.localeCompare(b.start));
+    const conflicts = [];
+    for (let i = 0; i < timed.length; i++) for (let j = i + 1; j < timed.length && timed[j].start < timed[i].end; j++) {
+      if (timed[i].start < timed[j].end) conflicts.push([timed[i].row, timed[j].row]);
+    }
+    if (!conflicts.length) return '<section class="card conflict-card conflict-clear"><strong>' + (isEnglish() ? 'No schedule conflicts' : '未发现课程时间冲突') + '</strong><span>' + esc(date) + ' · ' + (isEnglish() ? 'checked captured, one-time and adjusted classes' : '已核对已读取课程、一次性课程和临时调课') + '</span></section>';
+    return '<section class="card conflict-card conflict-warning"><strong>' + (isEnglish() ? 'Schedule conflicts' : '发现时间冲突') + ' · ' + conflicts.length + '</strong><div>' + conflicts.map(pair => '<p>' + esc(pair[0].start + '–' + pair[0].end + ' ' + pair[0].title + ' ↔ ' + pair[1].start + '–' + pair[1].end + ' ' + pair[1].title) + '</p>').join('') + '</div><small>' + (isEnglish() ? 'Please verify the source schedule and your local rules.' : '请核对来源课表和本机调课规则。') + '</small></section>';
+  }
+  function escapeRegExp(value) { return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
+  function searchIndex() {
+    if (cachedSearchIndex) return cachedSearchIndex;
+    const rows = [];
+    for (const task of Core.getTasks(state)) rows.push({ kind: 'task', id: task.id, title: task.title, meta: [task.course, sourceName(task.source), task.dueAt ? fmtDate(task.dueAt) : ''].filter(Boolean).join(' · '), text: [task.requirements, task.status, ...(task.attachments || []).map(a => a.title + ' ' + (a.text || ''))].join(' '), source: task.source === 'teams' ? 'teams' : task.source === 'managebac' ? 'managebac' : '', url: task.url, task });
+    for (const post of teamsPosts()) rows.push({ kind: 'post', id: post.id, title: post.title, meta: ['Teams', post.author, post.recipient, post.channel, post.dateLabel].filter(Boolean).join(' · '), text: [post.text, ...(post.attachments || []).map(a => a.title + ' ' + (a.text || ''))].join(' '), source: 'teams', url: post.url, item: post });
+    for (const item of Core.getFeedback(state)) rows.push({ kind: 'feedback', id: item.id, title: item.teacher || '老师反馈', meta: [item.source === 'teams' ? 'Teams' : 'ManageBac', item.course, item.date].filter(Boolean).join(' · '), text: item.text, source: item.source, url: item.url, item });
+    for (const course of Core.getCourses(state)) rows.push({ kind: 'grade', id: course.id, title: course.name, meta: ['ManageBac', course.term, course.percentage == null ? '' : Number(course.percentage).toFixed(1) + '%'].filter(Boolean).join(' · '), text: course.name + ' ' + course.term, source: 'managebac', url: course.url, item: course });
+    for (const grade of Core.getTeamsGrades(state)) rows.push({ kind: 'grade', id: grade.id, title: grade.title || grade.gradeLabel || 'Teams 成绩', meta: ['Teams', grade.course, grade.date].filter(Boolean).join(' · '), text: [grade.gradeLabel, grade.rubric, grade.feedback].filter(Boolean).join(' '), source: 'teams', url: grade.url, item: grade });
+    const attachments = [];
+    for (const task of Core.getTasks(state)) for (const file of task.attachments || []) attachments.push({ file, course: task.course, source: task.source === 'teams' ? 'teams' : task.source === 'managebac' ? 'managebac' : '', owner: task.title, parentURL: task.url });
+    for (const post of teamsPosts()) for (const file of post.attachments || []) attachments.push({ file, course: post.channel || post.course, source: 'teams', owner: post.title, parentURL: post.url });
+    const seen = new Set();
+    for (const entry of attachments) {
+      const file = entry.file, key = [entry.source, file.id || file.url || file.title, entry.course].join('|');
+      if (seen.has(key)) continue; seen.add(key);
+      rows.push({ kind: 'attachment', id: file.id || file.url || file.title, title: file.title, meta: [entry.source === 'teams' ? 'Teams' : entry.source === 'managebac' ? 'ManageBac' : '', entry.course, entry.owner, file.mimeType].filter(Boolean).join(' · '), text: [file.text, file.error].filter(Boolean).join(' '), source: entry.source, url: file.url, parentURL: entry.parentURL, file });
+    }
+    cachedSearchIndex = rows;
+    return cachedSearchIndex;
+  }
+  function searchResultsHTML(query) {
+    const q = String(query || '').trim().toLocaleLowerCase();
+    if (!q) return '<p class="hub-hint">' + (isEnglish() ? 'Search assignments, messages, feedback, grades, and attachment text.' : '可搜索作业、Teams 消息、老师反馈、成绩和已提取的附件文字。') + '</p>';
+    const found = searchIndex().filter(item => (item.title + ' ' + item.meta + ' ' + item.text).toLocaleLowerCase().includes(q)).slice(0, 60);
+    if (!found.length) return '<p class="hub-hint">' + (isEnglish() ? 'No captured results. Unread pages are not searched.' : '没有匹配的已读取内容；尚未读取的页面不会出现在搜索结果里。') + '</p>';
+    return '<div class="hub-search-results">' + found.map(item => {
+      const fileURL = item.kind === 'attachment' ? (Core.safeAttachmentURL(item.url) || Core.safeURL(item.url, item.source) || '') : '';
+      const originalURL = item.kind === 'attachment' ? (item.parentURL || '') : item.url;
+      return '<article class="hub-search-result"><div><small>' + esc(item.meta || item.kind) + '</small><strong>' + esc(item.title || '未命名') + '</strong><p>' + esc(String(item.text || '').replace(/\s+/g, ' ').slice(0, 220)) + '</p></div><div class="hub-result-actions">' + (item.kind === 'task' ? '<button class="button button-light" type="button" data-action="task-detail" data-id="' + esc(item.id) + '">查看要求</button>' : '') + (fileURL ? '<button class="button button-light" type="button" data-action="' + (Core.safeAttachmentURL(fileURL) ? 'open-attachment' : 'open-source') + '" data-source="' + esc(item.source) + '" data-url="' + esc(fileURL) + '">打开附件</button>' : '') + (originalURL && item.source ? '<button class="icon-button" type="button" data-action="open-source" data-source="' + esc(item.source) + '" data-url="' + esc(originalURL) + '" aria-label="查看原始页面">' + icon('link') + '</button>' : '') + '</div></article>';
+    }).join('') + '</div>';
+  }
+  function taskPlan() {
+    const settings = state.settings, all = Core.getTasks(state).filter(task => !task.completed);
+    const order = new Map((settings.planOrder || []).map((id, index) => [id, index]));
+    all.sort((a, b) => {
+      const ao = order.has(a.id) ? order.get(a.id) : Infinity, bo = order.has(b.id) ? order.get(b.id) : Infinity;
+      if (ao !== bo) return ao - bo;
+      const ap = Number(settings.taskPriority[a.id]) || 2, bp = Number(settings.taskPriority[b.id]) || 2;
+      if (ap !== bp) return ap - bp;
+      const ad = Date.parse(a.dueAt) || Infinity, bd = Date.parse(b.dueAt) || Infinity;
+      if (ad !== bd) return ad - bd;
+      const af = (settings.focusSubjects || []).includes(a.course) ? 0 : 1, bf = (settings.focusSubjects || []).includes(b.course) ? 0 : 1;
+      return af - bf || a.title.localeCompare(b.title);
+    });
+    const nowDate = Core.today(), now = Core.clock(), [hh, mm] = now.split(':').map(Number);
+    const nowAt = Date.parse(nowDate + 'T' + String(Math.max(8, hh)).padStart(2, '0') + ':' + String(hh < 8 ? 0 : mm).padStart(2, '0') + ':00+08:00');
+    const endAt = Date.parse(nowDate + 'T22:00:00+08:00');
+    const classes = Core.getSchedule(state, nowDate).filter(row => row.start && row.end).map(row => ({ start: Date.parse(nowDate + 'T' + row.start + ':00+08:00'), end: Date.parse(nowDate + 'T' + row.end + ':00+08:00') })).sort((a, b) => a.start - b.start);
+    let cursor = nowAt;
+    return all.map(task => {
+      const duration = (Number(settings.taskMinutes[task.id]) || 30) * 60000;
+      let attempts = 0;
+      while (attempts++ < classes.length + 2) {
+        const overlap = classes.find(item => cursor < item.end && cursor + duration > item.start);
+        if (!overlap) break;
+        cursor = overlap.end + 10 * 60000;
+      }
+      const fits = cursor + duration <= endAt;
+      const slot = fits ? { start: cursor, end: cursor + duration } : null;
+      if (fits) cursor += duration + 10 * 60000;
+      return { task, slot, duration: duration / 60000 };
+    });
+  }
+  function renderPlanRows() {
+    const items = taskPlan();
+    if (!items.length) return '<p class="hub-hint">' + (isEnglish() ? 'No open tasks to schedule.' : '没有未完成待办，可以安心推进课程或休息。') + '</p>';
+    const visible = items.slice(0, 24);
+    return '<div class="hub-plan-list" id="hub-plan-list">' + visible.map((item, index) => {
+      const task = item.task, priority = Number(state.settings.taskPriority[task.id]) || 2, minutes = Number(state.settings.taskMinutes[task.id]) || 30;
+      const due = taskDue(task);
+      return '<article class="hub-plan-row" draggable="true" data-plan-task="' + esc(task.id) + '"><span class="hub-drag" aria-label="拖动以调整顺序">⠿</span><span class="hub-plan-index">' + (index + 1) + '</span><div class="hub-plan-main"><strong>' + esc(task.title) + '</strong><small>' + esc([task.course, item.slot ? fmtDate(item.slot.start, { hour: '2-digit', minute: '2-digit', hour12: false }) + '–' + fmtDate(item.slot.end, { hour: '2-digit', minute: '2-digit', hour12: false }) : (isEnglish() ? 'Unscheduled today' : '今日暂未排入'), due.label].filter(Boolean).join(' · ')) + '</small></div><label class="hub-plan-control"><span>分钟</span><select data-plan-minutes="' + esc(task.id) + '">' + [15, 30, 45, 60, 90, 120].map(value => '<option value="' + value + '"' + (minutes === value ? ' selected' : '') + '>' + value + '</option>').join('') + '</select></label><label class="hub-plan-control"><span>优先级</span><select data-plan-priority="' + esc(task.id) + '"><option value="1"' + (priority === 1 ? ' selected' : '') + '>高</option><option value="2"' + (priority === 2 ? ' selected' : '') + '>中</option><option value="3"' + (priority === 3 ? ' selected' : '') + '>低</option></select></label></article>';
+    }).join('') + '</div>' + (items.length > visible.length ? '<p class="hub-hint">' + (isEnglish() ? 'Showing the first 24 tasks; refine priority or complete tasks to refresh the plan.' : '先展示前 24 项；调整优先级或完成任务后，计划会重新排列。') + '</p>' : '');
+  }
+  function renderTrustCards() {
+    const sources = ['seiue', 'managebac', 'teams'];
+    const labels = { available: '已读取内容', partial: '部分读取', stale: '缓存可能过期', empty: '本次成功检查：没有内容', unread: '本次未读取成功', login_required: '需要重新登录', not_connected: '尚未同步' };
+    const en = { available: 'Content captured', partial: 'Partially read', stale: 'Cache may be stale', empty: 'Checked successfully: no content', unread: 'This attempt could not read content', login_required: 'Sign-in required', not_connected: 'Not synced' };
+    return '<div class="hub-trust-grid">' + sources.map(source => {
+      const status = Core.getSourceStatus(state, source), condition = status.condition || 'not_connected';
+      const latestAttempt = status.lastAttemptAt ? fmtDate(status.lastAttemptAt, { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false }) : (isEnglish() ? 'Never' : '尚无记录');
+      const lastContent = status.lastCapturedAt ? fmtDate(status.lastCapturedAt, { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false }) : (isEnglish() ? 'None' : '无');
+      let coverage = status.records + (isEnglish() ? ' captured records' : ' 条已读记录');
+      if (status.coverage && Number.isFinite(status.coverage.discovered)) {
+        const read = Number.isFinite(status.coverage.read) ? status.coverage.read : status.records;
+        coverage += ' · ' + read + '/' + status.coverage.discovered + (isEnglish() ? ' discovered' : ' 项已发现范围');
+      }
+      if (status.coverageLabel) coverage += ' · ' + status.coverageLabel;
+      if (source === 'teams') {
+        const counts = teamsAuto.counts || {};
+        coverage += ' · ' + (counts.channelsRead || 0) + '/' + (counts.channels || 0) + (isEnglish() ? ' channels' : ' 个频道');
+        if (teamsAuto.coverageItems && teamsAuto.coverageItems.length) coverage += ' · ' + teamsAuto.coverageItems.filter(item => item.status === 'complete').length + '/' + teamsAuto.coverageItems.length + (isEnglish() ? ' coverage checks complete' : ' 项范围核对成功');
+      } else if (status.snapshotCount > 1) coverage += ' · ' + status.snapshotCount + (isEnglish() ? ' pages' : ' 个页面');
+      const reasons = (status.warnings || []).slice(0, 2).join(' · ');
+      return '<article class="hub-trust-card ' + (['partial', 'stale', 'empty', 'unread', 'login_required', 'not_connected'].includes(condition) ? 'is-warning' : '') + '"><div class="hub-trust-top"><strong>' + esc(sourceName(source)) + '</strong><span class="hub-status-pill">' + esc(isEnglish() ? en[condition] || en.unread : labels[condition] || labels.unread) + '</span></div><p>' + (isEnglish() ? 'Last attempt: ' : '最近尝试：') + esc(latestAttempt) + '</p><p>' + (isEnglish() ? 'Last useful data: ' : '最近有效数据：') + esc(lastContent) + '</p><small>' + esc(coverage) + (reasons ? ' · ' + esc(reasons) : '') + '</small></article>';
+    }).join('') + '</div>';
+  }
+  function collectAttachments() {
+    const files = [];
+    for (const task of Core.getTasks(state)) for (const file of task.attachments || []) files.push({ file, course: task.course, source: task.source, parent: task.title, url: task.url });
+    for (const post of teamsPosts()) for (const file of post.attachments || []) files.push({ file, course: post.channel || post.course, source: 'teams', parent: post.title, url: post.url });
+    const seen = new Set();
+    return files.filter(item => { const key = [item.source, item.file.id || item.file.url || item.file.title, item.course].join('|'); if (seen.has(key)) return false; seen.add(key); return true; });
+  }
+  function renderAttachmentHub() {
+    const files = collectAttachments().slice(0, 100);
+    if (!files.length) return '<p class="hub-hint">' + (isEnglish() ? 'No captured attachments yet.' : '同步到带有附件的消息或作业后，这里会按课程和来源整理。') + '</p>';
+    const signatures = new Map();
+    for (const item of files) { const key = item.file.title.toLocaleLowerCase(); if (!signatures.has(key)) signatures.set(key, []); signatures.get(key).push(item); }
+    return '<div class="hub-attachment-grid">' + files.map(item => {
+      const file = item.file, status = file.text ? (file.truncated ? '已提取（截断）' : '已离线缓存文字') : file.url ? '可打开原附件' : '仅发现名称';
+      const siblings = signatures.get(file.title.toLocaleLowerCase()) || [], duplicates = siblings.length;
+      const versions = [...new Set(siblings.map(entry => entry.file.versionKey).filter(Boolean))];
+      const compareMap = new Map();
+      for (const entry of siblings) {
+        const signature = entry.file.versionKey || entry.file.text || '';
+        if (signature) compareMap.set(signature, entry);
+      }
+      const canOpenAttachment = Boolean(Core.safeAttachmentURL(file.url));
+      const directSource = item.source === 'managebac' && Core.safeURL(file.url, 'managebac') ? 'managebac' : 'teams';
+      const openURL = canOpenAttachment || directSource === 'managebac' ? file.url : item.url;
+      const openButton = openURL ? '<button class="icon-button" type="button" data-action="' + (canOpenAttachment ? 'open-attachment' : 'open-source') + '" data-source="' + directSource + '" data-url="' + esc(openURL) + '" aria-label="打开附件或原始页面">' + icon('link') + '</button>' : '';
+      const cachedText = file.text ? '<details class="hub-cached-text"><summary>' + (isEnglish() ? 'View cached text' : '查看已缓存文字') + '</summary><pre>' + esc(file.text.slice(0, 8000)) + (file.truncated ? '\n…' : '') + '</pre></details>' : '';
+      const versionNote = versions.length > 1 ? (isEnglish() ? versions.length + ' versions captured' : '已捕获 ' + versions.length + ' 个版本标识') : file.versionKey ? (isEnglish() ? 'Version tracked' : '已记录版本标识') : '';
+      const versionCompare = compareMap.size > 1 ? '<details class="hub-cached-text"><summary>' + (isEnglish() ? 'Compare captured versions' : '并列对照已缓存版本') + ' · ' + compareMap.size + '</summary><div class="hub-version-compare">' + [...compareMap.values()].slice(0, 4).map(entry => '<section><small>' + esc(entry.file.versionKey || '版本标识未提供') + '</small><pre>' + esc(String(entry.file.text || '没有可离线对照的文字').slice(0, 1200)) + '</pre></section>').join('') + '</div></details>' : '';
+      return '<article class="hub-attachment-card"><div class="hub-attachment-kind">' + esc((file.mimeType || file.title.split('.').pop() || 'FILE').toUpperCase().slice(0, 18)) + '</div><div><strong>' + esc(file.title) + '</strong><small>' + esc([item.course, sourceName(item.source), item.parent].filter(Boolean).join(' · ')) + '</small><p>' + esc(status + (duplicates > 1 ? ' · 同名 ' + duplicates + ' 份' : '') + (versionNote ? ' · ' + versionNote : '')) + '</p>' + cachedText + versionCompare + '</div>' + openButton + '</article>';
+    }).join('') + '</div>';
+  }
+  function ecIdentityMatches() {
+    const names = state.settings.ecIdentityNames || [];
+    if (!names.length) return [];
+    const matches = [];
+    for (const post of teamsPosts('ec')) {
+      const content = [post.title, post.text, ...(post.attachments || []).map(file => file.text || '')].join('\n');
+      const found = names.map(name => ({ name, index: findAliasIndex(content, name) })).find(item => item.name && item.index >= 0);
+      if (!found) continue;
+      const match = found.name, index = found.index, snippet = content.slice(Math.max(0, index - 100), Math.min(content.length, index + match.length + 150)).replace(/\s+/g, ' ');
+      const time = ((snippet.match(/(?:时间|集合时间|time)\s*[:：]?\s*([^，,。；;\n]{2,50})/i) || [])[1] || (snippet.match(/\b(?:[01]?\d|2[0-3])[:：][0-5]\d(?:\s*[-–—至]\s*(?:[01]?\d|2[0-3])[:：][0-5]\d)?\b/) || [])[0]);
+      const place = (snippet.match(/(?:地点|教室|位置|集合地点|at|room|location)\s*[:：]?\s*([^，,。；;\n]{2,50})/i) || [])[1];
+      const group = (snippet.match(/(?:组别|小组|团队|group)\s*[:：]?\s*([^，,。；;\n]{2,50})/i) || [])[1];
+      const members = (snippet.match(/(?:成员|参加人员|名单|participants?|attendees?)\s*[:：]?\s*([^。；;\n]{2,100})/i) || [])[1];
+      matches.push({ post, match, snippet, time: time || '', place: place || '', group: group || '', members: members || '' });
+    }
+    return matches;
+  }
+  function findAliasIndex(content, alias) {
+    const value = String(content || ''), name = String(alias || '').trim();
+    if (!name) return -1;
+    if (!/^[A-Za-z0-9][A-Za-z0-9 .'-]*$/.test(name)) return value.toLocaleLowerCase().indexOf(name.toLocaleLowerCase());
+    const match = new RegExp('(^|[^A-Za-z0-9])(' + escapeRegExp(name) + ')(?=$|[^A-Za-z0-9])', 'i').exec(value);
+    return match ? match.index + match[1].length : -1;
+  }
+  function renderECMatches() {
+    const matches = ecIdentityMatches();
+    if (!(state.settings.ecIdentityNames || []).length) return '<p class="hub-hint">' + (isEnglish() ? 'Add your name or aliases to find exact mentions in captured EC notices. A match does not verify attendance.' : '添加你的姓名或常用名字，可在已读取的 EC 通知与附件文字中定位原文提及；命中不等于确认参加或名单完整。') + '</p>';
+    if (!matches.length) return '<p class="hub-hint">' + (isEnglish() ? 'No exact name matches in the captured notices.' : '已读取内容中没有找到精确姓名匹配。图片或未提取的附件需要回原页核对。') + '</p>';
+    return '<div class="hub-search-results">' + matches.slice(0, 40).map(item => '<article class="hub-search-result"><div><small>' + esc(item.post.dateLabel || '发布日期待确认') + ' · ' + esc(item.post.channel || item.post.author || 'Teams') + '</small><strong>' + esc(item.post.title || 'EC 通知') + '</strong><p>' + esc(item.snippet) + '</p><small>' + esc([item.group && '组别 ' + item.group, item.time && '原文时间 ' + item.time, item.place && '原文地点 ' + item.place, item.members && '成员原文 ' + item.members].filter(Boolean).join(' · ') || '附近没有明确的组别、时间、地点或成员字段') + '</small></div><div class="hub-result-actions">' + (item.post.url ? '<button class="button button-light" type="button" data-action="open-source" data-source="teams" data-url="' + esc(item.post.url) + '">查看原文</button>' : '') + '</div></article>').join('') + '</div>';
+  }
+  function renderLearning() {
+    const changes = (state.changeLog || []).slice().sort((a, b) => Date.parse(b.capturedAt) - Date.parse(a.capturedAt)).slice(0, 60);
+    const names = state.settings.ecIdentityNames || [];
+    const nameValue = names.join(', ');
+    const openTasks = Core.getTasks(state).filter(task => !task.completed).length;
+    return heading('把学习安排与变化放在一起。', '搜索已读取内容，核对每个来源，再安排今天的重点。') +
+      '<section class="card hub-search-card">' + cardHeader('overview', '全局搜索') + '<label class="hub-search-label" for="hub-search">作业、Teams 消息、老师反馈、成绩与附件文字</label><input id="hub-search" type="search" value="' + esc(learningQuery) + '" placeholder="搜索已读取内容" autocomplete="off"><div id="hub-search-results">' + searchResultsHTML(learningQuery) + '</div></section>' +
+      '<section class="card hub-plan-card">' + cardHeader('tasks', '今日学习计划', '<span class="card-kicker">' + openTasks + ' 项待办 · 拖动可调整顺序</span>') + '<p class="hub-section-note">根据今天课表避开上课时段，按截止日期、优先级和预计耗时排入空档。时间只是本机建议，可拖动并修改。</p>' + renderPlanRows() + '</section>' +
+      '<section class="card hub-trust-section">' + cardHeader('cloud', '同步可信度中心') + '<p class="hub-section-note">“没有内容”表示本次成功读取且数量为零；登录或读取失败会单独显示。覆盖范围只代表已发现和已读取数据。</p>' + renderTrustCards() + '</section>' +
+      '<section class="card hub-change-section">' + cardHeader('refresh', '变化收件箱', '<span class="card-kicker">' + changes.length + (isEnglish() ? ' recent changes' : ' 条近期变化') + '</span>') + '<p class="hub-section-note">只比较同一来源页面连续两次成功同步到的相同记录。首次读取、未加载页面和被权限挡住的内容不会被猜测。</p>' + (changes.length ? '<div class="hub-change-list">' + changes.map(item => '<article class="hub-change-row"><span class="hub-change-source">' + esc(sourceName(item.source)) + '</span><div><strong>' + esc(item.title || item.category) + '</strong><small>' + esc([item.course, item.category, fmtDate(item.capturedAt, { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false })].filter(Boolean).join(' · ')) + '</small><p>' + esc(item.detail) + '</p></div>' + (item.url ? '<button class="icon-button" type="button" data-action="open-source" data-source="' + esc(item.source) + '" data-url="' + esc(item.url) + '" aria-label="打开原页面">' + icon('link') + '</button>' : '') + '</article>').join('') + '</div>' : '<p class="hub-hint">' + (isEnglish() ? 'No changes captured yet. Changes will appear after a later successful sync.' : '暂时还没有可比较的变化。下一次成功同步后，截止日期、要求、附件和成绩更新会显示在这里。') + '</p>') + '</section>' +
+      '<section class="card hub-ec-section">' + cardHeader('ec', 'EC 智能定位') + '<p class="hub-section-note">输入你的姓名别名后，只标出原文精确匹配及其附近可识别的时间/地点，始终可回原文核对。</p><div class="hub-identity-form"><label for="ec-identity-names">我的姓名 / 英文名</label><input id="ec-identity-names" value="' + esc(nameValue) + '" placeholder="多个名字用逗号分隔"><button class="button button-light" type="button" data-action="save-ec-identity">保存到本机</button></div><div id="ec-match-results">' + renderECMatches() + '</div></section>' +
+      '<section class="card hub-attachment-section">' + cardHeader('book', '附件中心', '<span class="card-kicker">最多显示 100 个已发现附件</span>') + '<p class="hub-section-note">同名附件会提示数量；离线预览依赖已读取的文字，完整文件仍需打开原始附件。</p>' + renderAttachmentHub() + '</section>';
+  }
+  function renderGradeGoalSimulation(courses) {
+    const eligible = courses.filter(course => course.percentage != null && Number.isFinite(Number(course.percentage)));
+    if (!eligible.length) return '';
+    const goals = state.settings.gradeGoals || {};
+    return '<section class="card grade-goal-card">' + cardHeader('grades', '成绩目标模拟', '<span class="card-kicker">模拟数据 · 不会改动学校成绩</span>') + '<p class="hub-section-note">假设当前百分比是已完成部分的平均分，按剩余权重估算后续部分需要的分数；实际课程权重请以老师公布为准。</p><div class="grade-goal-list">' + eligible.map(course => {
+      const saved = goals[course.id] || { target: 90, remainingWeight: 30 }, target = Number(saved.target), weight = Number(saved.remainingWeight), current = Number(course.percentage);
+      const required = (target - current * (1 - weight / 100)) / (weight / 100);
+      const outcome = required <= 0 ? (isEnglish() ? 'Target already reached' : '按当前均分已达到目标') : required > 100 ? (isEnglish() ? 'Target is above 100% under these assumptions' : '按此权重，目标将超过 100%，无法仅靠剩余部分达到') : (isEnglish() ? 'Need ' + required.toFixed(2) + '% on remaining work' : '剩余部分需达到 ' + required.toFixed(2) + '%');
+      return '<article class="grade-goal-row"><div class="grade-goal-course"><strong>' + esc(course.name) + '</strong><small>' + (isEnglish() ? 'Real current grade' : '真实当前成绩') + ' · ' + esc(current.toFixed(2)) + '%</small></div><label><span>' + (isEnglish() ? 'Target %' : '目标百分比') + '</span><input type="number" min="0" max="100" step="0.1" value="' + esc(target) + '" data-grade-target="' + esc(course.id) + '"></label><label><span>' + (isEnglish() ? 'Remaining weight %' : '剩余权重') + '</span><input type="number" min="1" max="100" step="1" value="' + esc(weight) + '" data-grade-weight="' + esc(course.id) + '"></label><p class="grade-goal-result">' + esc(outcome) + '</p></article>';
+    }).join('') + '</div></section>';
+  }
+  function renderFocusMode() {
+    const clock = Core.getClassClock(state), plan = taskPlan().slice(0, 3), rows = Core.getSchedule(state, Core.today());
+    const current = clock.current, next = clock.next;
+    const clockText = current ? (isEnglish() ? 'In class · ' : '正在上课 · ') + current.start + '–' + current.end : next ? (isEnglish() ? 'Next class · ' : '下一节课程 · ') + next.start + '–' + next.end : (isEnglish() ? 'No captured class right now' : '当前没有已读取的课程');
+    return '<section class="focus-view"><div class="focus-view-top"><span class="hub-kicker">' + (isEnglish() ? 'FOCUS SESSION' : '专注模式') + '</span><button class="button button-light" type="button" data-action="toggle-focus-mode">' + (isEnglish() ? 'Exit focus' : '退出专注') + '</button></div><p class="focus-date">' + esc(fmtDate(new Date(), { month: 'long', day: 'numeric', weekday: 'long' })) + '</p><h1>' + esc(current ? current.title : next ? next.title : (isEnglish() ? 'A quiet moment to study' : '给自己一段安静的学习时间')) + '</h1><p class="focus-subtitle">' + esc(clockText) + '</p><section class="focus-next-task"><small>' + (isEnglish() ? 'NEXT TASK' : '下一项任务') + '</small>' + (plan.length ? '<strong>' + esc(plan[0].task.title) + '</strong><p>' + esc((plan[0].task.course || sourceName(plan[0].task.source)) + ' · ' + (plan[0].slot ? fmtDate(plan[0].slot.start, { hour: '2-digit', minute: '2-digit', hour12: false }) : (isEnglish() ? 'Not scheduled today' : '今日暂未排入'))) + '</p>' : '<strong>' + (isEnglish() ? 'No open tasks' : '没有未完成任务') + '</strong>') + '</section><section class="focus-deadlines"><h2>' + (isEnglish() ? 'Coming deadlines' : '最近截止日期') + '</h2>' + (plan.length ? plan.map(item => '<div><span>' + esc(item.task.course || sourceName(item.task.source)) + '</span><strong>' + esc(item.task.title) + '</strong><small>' + esc(taskDue(item.task).label) + '</small></div>').join('') : '<p>—</p>') + '</section><small class="focus-course-count">' + rows.length + (isEnglish() ? ' captured classes today' : ' 节已读取课程') + '</small></section>';
   }
   function renderGrades() {
     const gpa = getGpaView();
     return heading('看见积累，也看见进步。', '先确认成绩来自哪一门课、哪一个学期，再理解 GPA。', button(icon('link') + '打开成绩页面', 'open-source', 'data-source="managebac"')) +
       '<div class="grade-top"><section class="card">' + cardHeader('grades', '学校 GPA', '<span class="card-kicker">学校公布</span>') + gpaValue(gpa.official && gpa.official.value, gpa.official ? gpa.official.scale : '—') + '<p class="gpa-note">' + (gpa.official ? esc(gpa.official.label || '来自已读取的学校页面，以正式成绩单为准。') : '尚未读取到学校公布的 GPA。这里不会用参考值替代。') + '</p></section><section class="card">' + cardHeader('grades', '参考 GPA', '<span class="card-kicker">非官方 · 4.0 制</span>') + gpaValue(gpa.estimate.value, '4.00') + '<p class="gpa-note">根据 ' + esc(gpa.estimate.count || 0) + ' 门可用课程等权估算' + (gpa.estimate.excluded ? '，另有 ' + esc(gpa.estimate.excluded) + ' 门未计入' : '') + '。</p></section></div>' +
       '<div class="info-note">参考换算：90–100 → 4.0；80–89.99 → 3.0；70–79.99 → 2.0；60–69.99 → 1.0；低于 60 → 0。仅使用能确认的当前学期课程总评，不把单次作业分数当总评；不含学分与 AP 加权，也不代表学校的换算规则。</div>' + renderGradePie(gpa.courses, gpa.official || gpa.estimate) + '<section class="card">' + cardHeader('book', '课程成绩', '<span class="card-kicker">' + gpa.courses.length + ' 门已读取课程</span>') +
-      (gpa.courses.length ? '<div style="overflow-x:auto"><table class="grade-table"><thead><tr><th>课程</th><th>学期</th><th>百分制总评</th><th>参考绩点</th><th></th></tr></thead><tbody>' + gpa.courses.map(c => '<tr><td class="course-name">' + esc(c.name) + '</td><td>' + esc(c.term || '未确认') + '</td><td class="num">' + (c.percentage == null ? '—' : esc(Number(c.percentage).toFixed(1)) + '%') + (c.percentage == null ? '' : '<span class="grade-bar"><span style="width:' + Math.max(0, Math.min(100, Number(c.percentage) || 0)) + '%"></span></span>') + '</td><td class="num">' + (c.gpaEligible === false || c.percentage == null ? '未计入' : Core.estimateGPA([c]).value == null ? '未计入' : Number(Core.estimateGPA([c]).value).toFixed(2)) + '</td><td>' + (c.url ? '<button type="button" class="icon-button" data-action="open-source" data-source="managebac" data-url="' + esc(c.url) + '" aria-label="打开课程成绩">' + icon('link') + '</button>' : '') + '</td></tr>').join('') + '</tbody></table></div>' : empty('grades', '你的成绩，值得准确地记录', '登录 ManageBac 并打开当前学期成绩页面。读取到课程总评后，参考 GPA 会自动计算。', button('打开 ManageBac', 'open-source', 'data-source="managebac"'))) + sourceFooter('managebac') + '</section>' + renderKlineChartHistory();
+      (gpa.courses.length ? '<div style="overflow-x:auto"><table class="grade-table"><thead><tr><th>课程</th><th>学期</th><th>百分制总评</th><th>参考绩点</th><th></th></tr></thead><tbody>' + gpa.courses.map(c => '<tr><td class="course-name">' + esc(c.name) + '</td><td>' + esc(c.term || '未确认') + '</td><td class="num">' + (c.percentage == null ? '—' : esc(Number(c.percentage).toFixed(1)) + '%') + (c.percentage == null ? '' : '<span class="grade-bar"><span style="width:' + Math.max(0, Math.min(100, Number(c.percentage) || 0)) + '%"></span></span>') + '</td><td class="num">' + (c.gpaEligible === false || c.percentage == null ? '未计入' : Core.estimateGPA([c]).value == null ? '未计入' : Number(Core.estimateGPA([c]).value).toFixed(2)) + '</td><td>' + (c.url ? '<button type="button" class="icon-button" data-action="open-source" data-source="managebac" data-url="' + esc(c.url) + '" aria-label="打开课程成绩">' + icon('link') + '</button>' : '') + '</td></tr>').join('') + '</tbody></table></div>' : empty('grades', '你的成绩，值得准确地记录', '登录 ManageBac 并打开当前学期成绩页面。读取到课程总评后，参考 GPA 会自动计算。', button('打开 ManageBac', 'open-source', 'data-source="managebac"'))) + sourceFooter('managebac') + '</section>' + renderGradeGoalSimulation(gpa.courses) + renderKlineChartHistory();
   }
   function gpaHistoryTimestamp(item) {
     const raw = String(item && (item.capturedAt || item.date) || '').trim();
@@ -602,37 +877,168 @@
     if (!history.length) return '';
     const palette = state.settings.gpaCandleColors === 'green-up' ? { up: '#4f8a70', down: '#c47768', label: '绿涨红跌' } : { up: '#c47768', down: '#4f8a70', label: '红涨绿跌' };
     const interval = GPA_KLINE_INTERVALS[gpaKlineIntervalIndex] || GPA_KLINE_INTERVALS[5], data = gpaKlineBuckets(history, interval.ms), tickLabels = GPA_KLINE_INTERVALS.map((item, index) => '<option value="' + index + '" label="' + item.short + '"></option>').join('');
-    return '<section class="card gpa-kline-card" style="margin-top:21px"><div class="card-header"><h2 class="card-title"><span class="icon">' + icon('clock') + '</span>本机 GPA K 线</h2><span class="card-kicker">' + interval.label + ' · ' + data.length + ' 个周期</span></div><div class="gpa-kline-time-control"><div class="gpa-kline-time-heading"><span>时间分度值</span><output id="gpa-kline-interval-output" for="gpa-kline-interval">' + interval.label + '</output></div><input id="gpa-kline-interval" type="range" min="0" max="' + (GPA_KLINE_INTERVALS.length - 1) + '" step="1" value="' + gpaKlineIntervalIndex + '" list="gpa-kline-interval-ticks" data-action="gpa-kline-interval" aria-label="选择 GPA K 线时间分度值"><datalist id="gpa-kline-interval-ticks">' + tickLabels + '</datalist><div class="gpa-kline-time-scale"><span>1 小时</span><span>1 天</span><span>30 天</span></div></div><div class="gpa-kline-plot"><div id="gpa-kline-chart" aria-label="GPA K 线图" style="width:100%;height:500px;min-height:420px"></div></div><div class="gpa-kline-legend"><span><i style="background:' + palette.up + '"></i>上涨柱</span><span><i style="background:' + palette.down + '"></i>下降柱</span><span><i class="line"></i>收盘折线</span><span>当前：' + interval.label + '</span><span>悬停查看开高低收</span></div><p class="gpa-note">时间分度值按首条 GPA 记录起算并聚合到固定窗口；柱顶显示收盘 GPA，折线连接各周期收盘值。下方同时显示成交量与 MACD 技术指标。</p></section>';
+    return '<section class="card gpa-kline-card" style="margin-top:21px"><div class="card-header"><h2 class="card-title"><span class="icon">' + icon('clock') + '</span>本机 GPA K 线</h2><span class="card-kicker">' + interval.label + ' · ' + data.length + ' 个周期</span></div><div class="gpa-kline-time-control"><div class="gpa-kline-time-heading"><span>时间分度值</span><output id="gpa-kline-interval-output" for="gpa-kline-interval">' + interval.label + '</output></div><input id="gpa-kline-interval" type="range" min="0" max="' + (GPA_KLINE_INTERVALS.length - 1) + '" step="1" value="' + gpaKlineIntervalIndex + '" list="gpa-kline-interval-ticks" data-action="gpa-kline-interval" aria-label="选择 GPA K 线时间分度值"><datalist id="gpa-kline-interval-ticks">' + tickLabels + '</datalist><div class="gpa-kline-time-scale"><span>1 小时</span><span>1 天</span><span>30 天</span></div></div><div class="gpa-kline-plot"><div id="gpa-kline-chart" aria-label="GPA K 线图" style="width:100%;height:500px;min-height:420px"></div></div><div class="gpa-kline-legend"><span><i style="background:' + palette.up + '"></i>上涨柱</span><span><i style="background:' + palette.down + '"></i>下降柱</span><span><i class="line"></i>收盘折线</span><span>当前：' + interval.label + '</span><span>' + (isEnglish() ? 'Hover to snap to the close line; show GPA only' : '悬停只吸附收盘折线并显示 GPA 数值，不吸附日期') + '</span></div><p class="gpa-note">时间分度值按首条 GPA 记录起算并聚合到固定窗口；柱顶显示收盘 GPA，折线连接各周期收盘值。下方同时显示成交量与 MACD 技术指标。</p></section>';
   }
   function ensureGpaValueOverlay(lib) {
     if (window.__campusGpaValueOverlay || !lib || typeof lib.registerOverlay !== 'function') return;
     lib.registerOverlay({ name: 'campus-gpa-value-label', totalStep: 2, needDefaultPointFigure: false, needDefaultXAxisFigure: false, needDefaultYAxisFigure: false, mode: 'normal', createPointFigures: ({ coordinates, overlay, bounding }) => {
       const point = coordinates && coordinates[0], label = overlay && overlay.extendData && overlay.extendData.label;
       if (!point || !label) return [];
-      const above = point.y - 11, labelY = above < 86 ? Math.min(point.y + 21, Math.max(96, (bounding && bounding.height || 500) - 20)) : above;
+      // No indicator legend lives inside this pane. Keep labels above their bars,
+      // with a small edge inset rather than moving them onto the candle bodies.
+      if (point.x < 20 || point.x > bounding.width - 20) return [];
+      const labelY = Math.max(12, Math.min(point.y - 14, bounding.height - 12));
       return [{ type: 'text', attrs: { x: point.x, y: labelY, text: label, width: 38, height: 17, align: 'center', baseline: 'middle' }, styles: { style: 'stroke_fill', color: '#2e6650', size: 10, weight: 600, borderColor: '#d3e4d7', borderSize: 1, borderRadius: 4, backgroundColor: '#ffffff' } }];
     } });
     window.__campusGpaValueOverlay = true;
   }
+  function zoomGpaKline(step) {
+    if (!gpaKlineChart) return;
+    const container = document.getElementById('gpa-kline-chart');
+    if (!container) return;
+    const chart = gpaKlineChart, width = Math.max(240, container.clientWidth - 80);
+    const space = step === 0 ? Math.max(48, Math.min(100, width / (chart.getDataList().length + 2))) : Math.max(48, Math.min(120, chart.getBarSpace().bar * (step > 0 ? 1.2 : 1 / 1.2)));
+    chart.setBarSpace(space);
+    if (step === 0) chart.setOffsetRightDistance(Math.max(48, (width - chart.getDataList().length * space) / 2));
+  }
+  function attachGpaLineSnap(chart, container) {
+    const plot = container.closest('.gpa-kline-plot') || container.parentElement;
+    if (!plot) return;
+    let badge = document.getElementById('gpa-kline-snap-value');
+    if (!badge) {
+      badge = document.createElement('span');
+      badge.id = 'gpa-kline-snap-value';
+      badge.className = 'gpa-kline-snap-value';
+      badge.hidden = true;
+      badge.setAttribute('aria-hidden', 'true');
+      plot.appendChild(badge);
+    } else if (badge.parentElement !== plot) plot.appendChild(badge);
+    const hide = () => { badge.hidden = true; };
+    if (container.dataset.gpaSnapLeave !== 'true') {
+      container.dataset.gpaSnapLeave = 'true';
+      container.addEventListener('mouseleave', hide);
+    }
+    chart.subscribeAction('onCrosshairChange', point => {
+      if (!point || point.paneId !== 'candle_pane' || !Number.isFinite(point.x) || !Number.isFinite(point.y)) {
+        hide();
+        return;
+      }
+      const bars = chart.getDataList();
+      let index = Number.isInteger(point.realDataIndex) ? point.realDataIndex : Number(point.dataIndex);
+      if (!Number.isInteger(index) || !bars[index] || bars[index].timestamp !== point.timestamp) index = bars.findIndex(bar => bar.timestamp === point.timestamp);
+      if (index < 0 || !bars[index]) { hide(); return; }
+      const pixelAt = dataIndex => {
+        const bar = bars[dataIndex];
+        if (!bar) return null;
+        const pixel = chart.convertToPixel({ timestamp: bar.timestamp, value: Number(bar.close) }, { paneId: 'candle_pane' });
+        return pixel && Number.isFinite(pixel.x) && Number.isFinite(pixel.y) ? { x: pixel.x, y: pixel.y, value: Number(bar.close) } : null;
+      };
+      const current = pixelAt(index), previous = pixelAt(index - 1), next = pixelAt(index + 1);
+      if (!current) { hide(); return; }
+      const [start, end] = point.x < current.x && previous ? [previous, current] : next ? [current, next] : [previous || current, current];
+      const ratio = end.x === start.x ? 0 : Math.max(0, Math.min(1, (point.x - start.x) / (end.x - start.x)));
+      const value = start.value + (end.value - start.value) * ratio;
+      const snappedY = start.y + (end.y - start.y) * ratio;
+      if (!Number.isFinite(value) || !Number.isFinite(snappedY)) { hide(); return; }
+      if (Math.abs(point.y - snappedY) > 0.5) chart.executeAction('onCrosshairChange', { x: point.x, y: snappedY, paneId: 'candle_pane' });
+      badge.textContent = 'GPA · ' + value.toFixed(2);
+      badge.hidden = false;
+      const plotRect = plot.getBoundingClientRect(), chartRect = container.getBoundingClientRect();
+      const localX = chartRect.left - plotRect.left + point.x;
+      const localY = chartRect.top - plotRect.top + snappedY;
+      const left = Math.max(8, Math.min(plot.clientWidth - (badge.offsetWidth || 82) - 8, localX + 12));
+      const top = Math.max(8, Math.min(plot.clientHeight - 24, localY - 14));
+      badge.style.left = left + 'px';
+      badge.style.top = top + 'px';
+    });
+  }
   function mountGpaKlineChart() {
     const container = document.getElementById('gpa-kline-chart'), lib = window.klinecharts;
     if (!container || !lib || typeof lib.init !== 'function') return;
+    if (!document.getElementById('gpa-kline-tools')) {
+      const toolbar = document.createElement('div');
+      toolbar.id = 'gpa-kline-tools';
+      toolbar.className = 'gpa-kline-tools';
+      toolbar.innerHTML = '<span>' + (isEnglish() ? 'Drag to pan · ⌘/Ctrl + scroll to zoom' : '拖动平移 · ⌘/Ctrl + 滚轮缩放') + '</span><div><button type="button" data-action="gpa-kline-zoom" data-step="-1" aria-label="' + (isEnglish() ? 'Zoom out' : '缩小 K 线') + '">−</button><button type="button" data-action="gpa-kline-zoom" data-step="1" aria-label="' + (isEnglish() ? 'Zoom in' : '放大 K 线') + '">+</button><button type="button" data-action="gpa-kline-zoom" data-step="0">' + (isEnglish() ? 'Reset view' : '重置视图') + '</button></div>';
+      container.parentElement.before(toolbar);
+    }
+    if (!container.dataset.gpaGestures) {
+      container.dataset.gpaGestures = 'true';
+      // The library guesses pan vs. zoom on EVERY trackpad event. Diagonal
+      // movement can switch modes mid-gesture. Zoom now requires explicit intent.
+      container.addEventListener('wheel', event => {
+        event.stopPropagation();
+        if (event.ctrlKey || event.metaKey) {
+          event.preventDefault();
+          if (event.deltaY) zoomGpaKline(event.deltaY < 0 ? 1 : -1);
+        } else if (Math.abs(event.deltaX) > Math.abs(event.deltaY)) {
+          event.preventDefault();
+          if (gpaKlineChart) gpaKlineChart.scrollByDistance(-event.deltaX);
+        }
+        // Plain vertical scrolling continues to move the page, not resize bars.
+      }, { capture: true, passive: false });
+    }
     const history = (state.gradeHistory || []).filter(h => h.value != null && Number.isFinite(Number(h.value))).slice().sort((a, b) => gpaHistoryTimestamp(a) - gpaHistoryTimestamp(b));
     if (!history.length) return;
     const palette = state.settings.gpaCandleColors === 'green-up' ? { up: '#4f8a70', down: '#c47768' } : { up: '#c47768', down: '#4f8a70' };
     const interval = GPA_KLINE_INTERVALS[gpaKlineIntervalIndex] || GPA_KLINE_INTERVALS[5], data = gpaKlineBuckets(history, interval.ms);
-    const chart = lib.init(container);
+    const chartKey = JSON.stringify([data, interval.ms, palette, isEnglish()]);
+    if (gpaKlineChart && gpaKlineChartKey === chartKey) { gpaKlineChart.resize(); return; }
+    if (gpaKlineChart) { lib.dispose(gpaKlineChart); gpaKlineChart = null; }
+    // Labels occupy 38px: even at maximum zoom-out each record must keep its
+    // own readable slot. Use the library's native limits, not an after-zoom reset.
+    const chart = lib.init(container, { layout: { barSpaceLimit: { min: 48, max: 120 }, yAxis: { scrollZoomEnabled: false, gap: { top: 0.18, bottom: 0.1 } } }, zoomAnchor: 'last_bar', locale: isEnglish() ? 'en-US' : 'zh-CN' });
     if (!chart) return;
+    // Native wheel, pinch and time-axis dragging all share this zoom switch.
+    // Keep panning enabled; only the dedicated controls may change candle width.
+    chart.setZoomEnabled(false);
     chart.setSymbol({ ticker: 'GPA', pricePrecision: 2, volumePrecision: 0 });
     chart.setPeriod(interval.chart);
-    chart.setStyles({ candle: { type: 'candle_solid', bar: { upColor: palette.up, downColor: palette.down, noChangeColor: '#8a9386', upBorderColor: palette.up, downBorderColor: palette.down, noChangeBorderColor: '#8a9386', upWickColor: palette.up, downWickColor: palette.down, noChangeWickColor: '#8a9386' }, priceMark: { high: { show: false }, low: { show: false }, last: { show: true, text: { show: true }, line: { show: true } } }, tooltip: { showRule: 'none' } }, indicator: { tooltip: { showRule: 'none' } }, grid: { show: true, horizontal: { show: true, color: '#e5ebe4', size: 1, style: 'dashed', dashedValue: [2, 2] }, vertical: { show: false } }, crosshair: { show: true, horizontal: { show: true, line: { color: '#83b79e', size: 1, style: 'dashed' } }, vertical: { show: true, line: { color: '#83b79e', size: 1, style: 'dashed' } } } });
-    chart.setDataLoader({ getBars: params => params.callback(data, { backward: false, forward: false }) });
+    chart.setStyles({ candle: { type: 'candle_solid', bar: { upColor: palette.up, downColor: palette.down, noChangeColor: '#8a9386', upBorderColor: palette.up, downBorderColor: palette.down, noChangeBorderColor: '#8a9386', upWickColor: palette.up, downWickColor: palette.down, noChangeWickColor: '#8a9386' }, priceMark: { high: { show: false }, low: { show: false }, last: { show: true, text: { show: true }, line: { show: true } } }, tooltip: { showRule: 'none' } }, indicator: { tooltip: { showRule: 'none' } }, grid: { show: true, horizontal: { show: true, color: '#e5ebe4', size: 1, style: 'dashed', dashedValue: [2, 2] }, vertical: { show: false } }, crosshair: { show: true, horizontal: { show: true, line: { color: '#83b79e', size: 1, style: 'dashed' } }, vertical: { show: true, line: { show: true, color: '#8592a0', size: 1, style: 'dashed' }, text: { show: false } } } });
+    const plotWidth = Math.max(240, container.clientWidth - 80);
+    const barSpace = Math.max(48, Math.min(100, plotWidth / (data.length + 2)));
+    chart.setBarSpace(barSpace);
+    chart.setLeftMinVisibleBarCount(Math.min(data.length, 4));
+    chart.setRightMinVisibleBarCount(Math.min(data.length, 4));
+    chart.setOffsetRightDistance(Math.max(48, (plotWidth - data.length * barSpace) / 2));
+    chart.setDataLoader({ getBars: params => params.callback(params.type === 'init' ? data : [], { backward: false, forward: false }) });
     try { ensureGpaValueOverlay(lib); data.forEach(bar => chart.createOverlay({ name: 'campus-gpa-value-label', paneId: 'candle_pane', lock: true, points: [{ timestamp: bar.timestamp, value: bar.high }], extendData: { label: Number(bar.close).toFixed(2) } })); } catch (_) { /* Labels are optional; the native crosshair remains available. */ }
     try { chart.createIndicator({ name: 'MA', calcParams: [1, 5, 10, 30, 60], precision: 2, paneId: 'candle_pane', styles: { lines: [{ color: '#607f6e', size: 2 }, { color: '#f0a23b', size: 1.4 }, { color: '#9d72b8', size: 1.4 }, { color: '#4f93d1', size: 1.4 }, { color: '#d95c91', size: 1.4 }] } }, false); } catch (_) { /* The candle chart remains usable if an older bundled build omits MA. */ }
     try { chart.createIndicator({ name: 'VOL', calcParams: [5, 10, 20], precision: 0, paneId: 'volume_pane' }, false); } catch (_) { /* Volume is an enhancement; the price chart remains usable. */ }
     try { chart.createIndicator({ name: 'MACD', calcParams: [12, 26, 9], precision: 2, paneId: 'macd_pane' }, false); } catch (_) { /* MACD is an enhancement; the price chart remains usable. */ }
+    attachGpaLineSnap(chart, container);
     chart.resize();
     gpaKlineChart = chart;
+    gpaKlineChartKey = chartKey;
+  }
+  function deferGpaChartDispose(chart, library) {
+    if (!chart || !library || typeof library.dispose !== 'function') return;
+    const dispose = () => { try { library.dispose(chart); } catch (_) { /* The chart host may already be detached. */ } };
+    if (typeof window.requestIdleCallback === 'function') window.requestIdleCallback(dispose, { timeout: 320 });
+    else window.setTimeout(dispose, 160);
+  }
+  function scheduleGpaChartMount() {
+    if (gpaChartMountScheduled || typeof window.requestAnimationFrame !== 'function') return;
+    gpaChartMountScheduled = true;
+    const mount = () => {
+      gpaChartMountScheduled = false;
+      if (page === 'grades' && !state.settings.focusMode) mountGpaKlineChart();
+    };
+    if (typeof window.requestIdleCallback === 'function') window.requestIdleCallback(mount, { timeout: 420 });
+    else window.requestAnimationFrame(mount);
+  }
+  function animatePageSwitch(content) {
+    if (!content || typeof content.animate !== 'function') return;
+    if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+    if (pageSwitchAnimation) pageSwitchAnimation.cancel();
+    pageSwitchAnimation = content.animate([
+      { opacity: 0.42, transform: 'translate3d(0, 16px, 0) scale(.986)' },
+      { opacity: 1, transform: 'translate3d(0, 0, 0) scale(1)' }
+    ], {
+      duration: 360,
+      easing: 'cubic-bezier(.16,1,.3,1)'
+    });
+    pageSwitchAnimation.onfinish = () => { pageSwitchAnimation = null; };
   }
   function renderHistory() {
     const history = (state.gradeHistory || []).filter(h => h.value != null && Number.isFinite(Number(h.value))).slice().sort((a, b) => String(a.capturedAt || a.date || '').localeCompare(String(b.capturedAt || b.date || '')));
@@ -756,14 +1162,27 @@
   }
   function navigate(target) {
     if (!pageNames[target]) return;
+    if (target === page) return;
     page = target;
     location.hash = target;
     render();
-    window.scrollTo({ top: 0, behavior: 'auto' });
+    if (window.scrollY > 0) window.scrollTo({ top: 0, behavior: 'auto' });
   }
   function renderNav() {
     const openCount = Core.getTasks(state).filter(t => !t.completed).length;
-    document.getElementById('nav').innerHTML = ['overview', 'schedule', 'grades', 'tasks', 'feedback', 'teams', 'ec'].map(key => '<button type="button" class="nav-item ' + (page === key ? 'active' : '') + '" data-page="' + key + '" ' + (page === key ? 'aria-current="page"' : '') + '><span class="icon">' + icon(key) + '</span>' + pageName(key) + (key === 'tasks' && openCount ? '<span class="nav-count">' + openCount + '</span>' : '') + '</button>').join('');
+    const nav = document.getElementById('nav');
+    const signature = (isEnglish() ? 'en-US' : 'zh-CN') + ':' + openCount;
+    if (nav.dataset.renderSignature !== signature) {
+      nav.innerHTML = ['overview', 'learning', 'schedule', 'grades', 'tasks', 'feedback', 'teams', 'ec'].map(key => '<button type="button" class="nav-item ' + (page === key ? 'active' : '') + '" data-page="' + key + '" ' + (page === key ? 'aria-current="page"' : '') + '><span class="icon">' + icon(key === 'learning' ? 'search' : key) + '</span>' + pageName(key) + (key === 'tasks' && openCount ? '<span class="nav-count">' + openCount + '</span>' : '') + '</button>').join('');
+      nav.dataset.renderSignature = signature;
+    }
+    for (const item of Array.from(nav.children || [])) {
+      if (!item || !item.dataset || !item.dataset.page) continue;
+      const active = item.dataset.page === page;
+      item.classList.toggle('active', active);
+      if (active) item.setAttribute('aria-current', 'page');
+      else item.removeAttribute('aria-current');
+    }
     document.querySelector('.settings-nav').classList.toggle('active', page === 'settings');
     document.getElementById('settings-icon').innerHTML = icon('settings');
   }
@@ -779,6 +1198,8 @@
     setText('settings-nav-label', t('连接与设置'));
     setText('breadcrumb-home', t('我的校园'));
     setText('sync-label', t('同步数据'));
+    const focusButton = document.getElementById('focus-button');
+    if (focusButton) { focusButton.innerHTML = icon('focus') + '<span>' + (isEnglish() ? (state.settings.focusMode ? 'Exit focus' : 'Focus') : (state.settings.focusMode ? '退出专注' : '专注模式')) + '</span>'; focusButton.setAttribute('aria-pressed', String(Boolean(state.settings.focusMode))); }
   }
   function updateStatus() {
     const busy = Object.values(statuses).some(s => s.busy);
@@ -834,24 +1255,44 @@
     window.scrollTo(saved.x,Math.max(0,y));
   }
   function render() {
+    cachedSearchIndex = null;
+    teamsPostsCache = new Map();
+    ecSearchIndex = null;
+    ecSearchBuildProgress = 0;
+    ecSearchBuildToken++;
+    const pageChanged = renderedPage !== null && renderedPage !== page;
     const saved = renderedPage === page ? readingState(document.getElementById('content')) : null;
     const graphConfigOpen = page === 'settings' && document.getElementById('graph-configuration') && document.getElementById('graph-configuration').open;
     const shell = document.getElementById('app-shell');
-    if (gpaKlineChart && window.klinecharts && typeof window.klinecharts.dispose === 'function') { window.klinecharts.dispose(gpaKlineChart); gpaKlineChart = null; }
-    if (shell) shell.dataset.dashboardTheme = state.settings.dashboardTheme || 'classic';
+    // Unrelated sync/status renders must not throw away the user's chart view.
+    const retainedChart = page === 'grades' && gpaKlineChart ? document.getElementById('gpa-kline-chart') : null;
+    if (!retainedChart && gpaKlineChart && window.klinecharts && typeof window.klinecharts.dispose === 'function') {
+      const oldChart = gpaKlineChart;
+      gpaKlineChart = null; gpaKlineChartKey = '';
+      deferGpaChartDispose(oldChart, window.klinecharts);
+    }
+    if (shell) { shell.dataset.dashboardTheme = state.settings.dashboardTheme || 'classic'; shell.dataset.focusMode = String(Boolean(state.settings.focusMode)); }
     renderNav();
     updateStaticChrome();
     document.getElementById('breadcrumb-page').textContent = pageName(page);
     document.getElementById('sidebar-clock').textContent = Core.clock();
     document.getElementById('sync-icon').innerHTML = icon('refresh');
-    document.getElementById('content').innerHTML = localizedHTML(({ overview: renderOverview, schedule: renderSchedule, grades: renderGrades, tasks: renderTasks, feedback: renderFeedback, teams: renderTeams, ec: renderEC, settings: renderSettings })[page]);
+    const pageRenderers = { overview: renderOverview, learning: renderLearning, schedule: renderSchedule, grades: renderGrades, tasks: renderTasks, feedback: renderFeedback, teams: renderTeams, ec: renderEC, settings: renderSettings };
+    const content = document.getElementById('content');
+    content.innerHTML = localizedHTML(state.settings.focusMode ? renderFocusMode : pageRenderers[page]);
+    if (pageChanged) animatePageSwitch(content);
+    if (retainedChart) {
+      const replacement = document.getElementById('gpa-kline-chart');
+      if (replacement) replacement.replaceWith(retainedChart);
+      else { window.klinecharts.dispose(gpaKlineChart); gpaKlineChart = null; gpaKlineChartKey = ''; }
+    }
     if (graphConfigOpen && document.getElementById('graph-configuration')) document.getElementById('graph-configuration').open = true;
     renderedPage = page;restoreReading(saved);
     const clock = updateClock();
     lastRenderedDay = Core.today();
     lastClockBoundary = clock.phase + ':' + (clock.current && clock.current.id || '') + ':' + (clock.next && clock.next.id || '');
     updateStatus(); updateMenu(clock);
-    if (page === 'grades') window.requestAnimationFrame(mountGpaKlineChart);
+    if (page === 'grades' && !state.settings.focusMode) scheduleGpaChartMount();
   }
   function shiftDate(direction) {
     const d = new Date(selectedDate + 'T12:00:00Z');
@@ -940,7 +1381,7 @@
   }
   function setGpaKlineInterval(value, shouldRender) {
     const index = Math.max(0, Math.min(GPA_KLINE_INTERVALS.length - 1, Number(value)));
-    if (!Number.isInteger(index)) return;
+    if (!Number.isInteger(index) || index === gpaKlineIntervalIndex) return;
     gpaKlineIntervalIndex = index;
     if (shouldRender !== false) render();
   }
@@ -950,6 +1391,13 @@
     if (target.dataset.page) { navigate(target.dataset.page); return; }
     const action = target.dataset.action;
     if (action === 'open-source') openSource(target.dataset.source, target.dataset.url);
+    else if (action === 'toggle-focus-mode') { state.settings.focusMode = !state.settings.focusMode; persist(); render(); toast(state.settings.focusMode ? '已进入专注模式。' : '已退出专注模式。'); }
+    else if (action === 'save-ec-identity') {
+      const input = document.getElementById('ec-identity-names');
+      const names = [...new Set(String(input && input.value || '').split(/[，,\n;]/).map(value => value.trim().slice(0, 100)).filter(Boolean))].slice(0, 10);
+      state.settings.ecIdentityNames = names; persist(); render(); toast(names.length ? '姓名匹配已保存在本机。' : '已清除姓名匹配。');
+    }
+    else if (action === 'gpa-kline-zoom') zoomGpaKline(Number(target.dataset.step));
     else if (action === 'dashboard-theme') {
       const theme = target.dataset.theme;
       if (!['classic', 'board'].includes(theme)) return;
@@ -1034,9 +1482,11 @@
       state.settings.focusTeamsChannels = exists ? values.filter(item => item !== value) : values.concat(value).slice(0, 100);
       persist(); render(); toast(exists ? '已取消关注频道：' + value : '已关注频道：' + value);
     }
-    else if (action === 'teams-filter') { teamsFilter = target.dataset.filter; render(); }
-    else if (action === 'teams-channel-filter') { teamsChannelFilter = target.dataset.filter === 'focus' ? 'focus' : 'all'; render(); }
-    else if (action === 'ec-clear') { ecQuery='';ecDateFilter='all';const search=document.getElementById('ec-search'),date=document.getElementById('ec-date-filter');if(search)search.value='';if(date)date.value='all';updateECResults();if(search)search.focus(); }
+    else if (action === 'teams-filter') { teamsFilter = target.dataset.filter; teamsVisibleLimit = MESSAGE_PAGE_SIZE; render(); }
+    else if (action === 'teams-channel-filter') { teamsChannelFilter = target.dataset.filter === 'focus' ? 'focus' : 'all'; teamsVisibleLimit = MESSAGE_PAGE_SIZE; render(); }
+    else if (action === 'teams-show-more') { teamsVisibleLimit += MESSAGE_PAGE_SIZE; render(); }
+    else if (action === 'ec-show-more') { ecVisibleLimit += MESSAGE_PAGE_SIZE; updateECResults(); }
+    else if (action === 'ec-clear') { ecQuery='';ecDateFilter='all';ecVisibleLimit=MESSAGE_PAGE_SIZE;const search=document.getElementById('ec-search'),date=document.getElementById('ec-date-filter');if(search)search.value='';if(date)date.value='all';updateECResults();if(search)search.focus(); }
     else if (action === 'add-task') { document.getElementById('task-form').reset(); openTaskDialog(); document.getElementById('task-title').focus(); }
     else if (action === 'close-task') closeTaskDialog();
     else if (action === 'toggle-task') {
@@ -1113,7 +1563,24 @@
   });
   document.addEventListener('change', event => {
     const el = event.target;
-    if (el.id === 'ec-date-filter') { ecDateFilter=/^(?:all|unknown|\d{4}-\d{2}-\d{2})$/.test(el.value)?el.value:'all';updateECResults(); }
+    if (el.id === 'ec-date-filter') { ecDateFilter=/^(?:all|unknown|\d{4}-\d{2}-\d{2})$/.test(el.value)?el.value:'all';ecVisibleLimit=MESSAGE_PAGE_SIZE;updateECResults(); }
+    else if (el.matches('[data-plan-minutes]')) {
+      const id = el.dataset.planMinutes, value = Number(el.value);
+      if (!id || ![15, 30, 45, 60, 90, 120].includes(value)) return;
+      state.settings.taskMinutes[id] = value; persist(); render();
+    }
+    else if (el.matches('[data-plan-priority]')) {
+      const id = el.dataset.planPriority, value = Number(el.value);
+      if (!id || ![1, 2, 3].includes(value)) return;
+      state.settings.taskPriority[id] = value; persist(); render();
+    }
+    else if (el.matches('[data-grade-target], [data-grade-weight]')) {
+      const id = el.dataset.gradeTarget || el.dataset.gradeWeight;
+      const targetInput = Array.from(document.querySelectorAll('[data-grade-target]')).find(input => input.dataset.gradeTarget === id), weightInput = Array.from(document.querySelectorAll('[data-grade-weight]')).find(input => input.dataset.gradeWeight === id);
+      const targetValue = Number(targetInput && targetInput.value), weightValue = Number(weightInput && weightInput.value);
+      if (!id || !Number.isFinite(targetValue) || targetValue < 0 || targetValue > 100 || !Number.isFinite(weightValue) || weightValue < 1 || weightValue > 100) { toast('目标成绩须为 0–100，剩余权重须为 1–100。'); render(); return; }
+      state.settings.gradeGoals[id] = { target: targetValue, remainingWeight: weightValue }; persist(); render();
+    }
     else if (el.id === 'schedule-date') { if (/^\d{4}-\d{2}-\d{2}$/.test(el.value)) { selectedDate = el.value; render(); } }
     else if (el.id === 'gpa-kline-interval') setGpaKlineInterval(el.value);
     else if (el.id === 'app-language') {
@@ -1126,7 +1593,7 @@
     else if (el.id === 'gpa-candle-colors') {
       if (!['red-up', 'green-up'].includes(el.value)) return;
       state.settings.gpaCandleColors = el.value; persist(); render();
-      toast(el.value === 'green-up' ? 'GPA K 线已设为绿涨红跌。' : 'GPA K 线已设为红涨绿跌。');
+      toast(t(el.value === 'green-up' ? 'GPA K 线已设为绿涨红跌。' : 'GPA K 线已设为红涨绿跌。'));
     }
     else if (el.id === 'teams-auto-discover') { state.settings.teamsAutoDiscover = Boolean(el.checked); persist(); render(); }
     else if (el.id === 'graph-include-chats') {
@@ -1163,13 +1630,19 @@
     }
   });
   document.addEventListener('input', event => {
+    if (event.target.id === 'hub-search') {
+      learningQuery = event.target.value.slice(0, 200);
+      const results = document.getElementById('hub-search-results');
+      if (results) results.innerHTML = localizedHTML(() => searchResultsHTML(learningQuery));
+      return;
+    }
     if (event.target.id === 'gpa-kline-interval') {
       const index = Number(event.target.value), interval = GPA_KLINE_INTERVALS[index];
       const output = document.getElementById('gpa-kline-interval-output');
       if (interval && output) output.value = interval.label;
       return;
     }
-    if (event.target.id === 'ec-search') { ecQuery=event.target.value.slice(0,200);updateECResults();return; }
+    if (event.target.id === 'ec-search') { ecQuery=event.target.value.slice(0,200);ecVisibleLimit=MESSAGE_PAGE_SIZE;updateECResults();return; }
     if (['custom-title', 'custom-room', 'custom-start', 'custom-end'].includes(event.target.id)) {
       customCaptureDraft();
       if (event.target.id === 'custom-start' || event.target.id === 'custom-end') customSyncFromTime();
@@ -1178,10 +1651,44 @@
     if (event.target.id !== 'graph-client-id' && event.target.id !== 'graph-tenant') return;
     graphConfigurationDraft = { clientId: document.getElementById('graph-client-id').value, tenant: document.getElementById('graph-tenant').value };
   });
+  document.addEventListener('dragstart', event => {
+    const row = event.target.closest && event.target.closest('.hub-plan-row');
+    if (!row) return;
+    draggingTaskID = row.dataset.planTask || '';
+    row.classList.add('is-dragging');
+    if (event.dataTransfer) { event.dataTransfer.effectAllowed = 'move'; event.dataTransfer.setData('text/plain', draggingTaskID); }
+  });
+  document.addEventListener('dragover', event => {
+    const row = event.target.closest && event.target.closest('.hub-plan-row');
+    if (!draggingTaskID || !row) return;
+    event.preventDefault();
+    document.querySelectorAll('.hub-plan-row.drop-before, .hub-plan-row.drop-after').forEach(node => node.classList.remove('drop-before', 'drop-after'));
+    const rect = row.getBoundingClientRect();
+    row.classList.add(event.clientY < rect.top + rect.height / 2 ? 'drop-before' : 'drop-after');
+  });
+  document.addEventListener('drop', event => {
+    const targetRow = event.target.closest && event.target.closest('.hub-plan-row');
+    if (!draggingTaskID || !targetRow) return;
+    event.preventDefault();
+    const ids = Array.from(document.querySelectorAll('.hub-plan-row')).map(node => node.dataset.planTask).filter(id => id && id !== draggingTaskID);
+    const targetID = targetRow.dataset.planTask;
+    let index = ids.indexOf(targetID);
+    if (index < 0) index = ids.length;
+    if (targetRow.classList.contains('drop-after')) index += 1;
+    ids.splice(index, 0, draggingTaskID);
+    state.settings.planOrder = ids.concat((state.settings.planOrder || []).filter(id => !ids.includes(id)));
+    draggingTaskID = ''; persist(); render();
+  });
+  document.addEventListener('dragend', () => {
+    draggingTaskID = '';
+    document.querySelectorAll('.hub-plan-row.is-dragging, .hub-plan-row.drop-before, .hub-plan-row.drop-after').forEach(node => node.classList.remove('is-dragging', 'drop-before', 'drop-after'));
+  });
   document.addEventListener('wheel', event => {
     const slider = event.target.closest && event.target.closest('#gpa-kline-interval');
     if (!slider) return;
     event.preventDefault();
+    if (!event.deltaY || Date.now() - gpaKlineWheelAt < 180) return;
+    gpaKlineWheelAt = Date.now();
     const current = Number(slider.value), next = current + (event.deltaY > 0 ? 1 : -1);
     if (next >= 0 && next < GPA_KLINE_INTERVALS.length) setGpaKlineInterval(next);
   }, { passive: false });
