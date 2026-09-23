@@ -31,6 +31,18 @@
     return schoolHomes();
   }
   function schoolHomes() { return Object.assign({}, configuredSchools); }
+  function normalizeSchoolHome(value, source) {
+    if (typeof value !== 'string' || value.length > 2048 || !['seiue', 'managebac'].includes(source)) return '';
+    let raw = value.trim();
+    if (!raw.includes('://')) raw = 'https://' + raw;
+    if (!/^https:\/\/[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?(?::443)?\/?$/i.test(raw)) return '';
+    try {
+      const url = new URL(raw), host = url.hostname.toLowerCase();
+      const suffixes = source === 'seiue' ? ['seiue.com'] : ['managebac.com', 'managebac.cn'];
+      if (host.length > 253 || !host.split('.').every(label => label.length <= 63 && /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(label))) return '';
+      return suffixes.some(suffix => host === suffix || host.endsWith('.' + suffix)) ? 'https://' + host + '/' : '';
+    } catch (_) { return ''; }
+  }
   configureSchools(initialSchoolConfig);
   const MAX_TEAMS_ROWS = 500;
   const MAX_GRAPH_ROWS = 3000;
@@ -205,7 +217,7 @@
       seiueURL: configuredSchools.seiue, managebacURL: configuredSchools.managebac, teamsPages: [], teamsNotifications: false,
       teamsBrowser: 'chrome', teamsBrowserAutomation: false, teamsMode: 'browser', teamsAutoDiscover: true, graphIncludeChats: true,
       reminderMinutes: 30, teamsDueOverrides: {}, dashboardTheme: 'classic', gpaCandleColors: 'red-up', language: 'zh-CN', focusSubjects: [], focusTeamsChannels: [], customLessons: [],
-      scheduleHolidays: [], scheduleWeekAnchor: '', scheduleOverrides: [], focusMode: false, planOrder: [], taskMinutes: {}, taskPriority: {}, gradeGoals: {}, ecIdentityNames: [] }, snapshots: { seiue: {}, managebac: {}, teams: {} },
+      scheduleHolidays: [], scheduleWeekAnchor: '', scheduleOverrides: [], focusMode: false, planOrder: [], taskMinutes: {}, taskPriority: {}, gradeGoals: {}, gpaTermDates: {}, ecIdentityNames: [] }, snapshots: { seiue: {}, managebac: {}, teams: {} },
       manualTasks: [], taskChecks: {}, feedbackRead: {}, gradeHistory: [], changeLog: [] };
   }
   function scheduleRow(row) {
@@ -283,6 +295,15 @@
     for (const field of ['isCurrentTerm', 'isCourseGrade', 'gpaEligible']) {
       if (row[field] !== undefined) result[field] = bool(row[field]);
     }
+    result.gradeComponents = array(row.gradeComponents, 'GPA 成绩组成', 100).map(component => {
+      record(component, 'GPA 成绩组成');
+      const componentName = str(component.name, 300);
+      if (!componentName) fail('GPA 成绩组成名称不能为空');
+      const weight = finite(component.weight, 0, 100, false);
+      if (weight <= 0) fail('GPA 成绩组成权重必须大于 0');
+      return { id: id(component.id, 'component-' + hash(name + componentName)), name: componentName,
+        percentage: finite(component.percentage, 0, 100, true), weight };
+    });
     return result;
   }
   function taskRow(row, manual) {
@@ -567,6 +588,17 @@
       }
       s.settings[key] = clean;
     }
+    if (settings.gpaTermDates !== undefined) {
+      const terms = record(settings.gpaTermDates, 'GPA 学期日期');
+      if (Object.keys(terms).length > 100) fail('GPA 学期日期过多');
+      for (const [term, value] of Object.entries(terms)) {
+        if (!term || term.length > 300 || BAD_KEYS.has(term)) fail('GPA 学期名称无效');
+        record(value, 'GPA 学期日期');
+        const start = dayKey(value.start), end = dayKey(value.end);
+        if (end <= start) fail('GPA 学期结束日期必须晚于开始日期');
+        s.settings.gpaTermDates[term] = { start, end };
+      }
+    }
     for (const [key, label] of [['focusSubjects', '特别关注学科'], ['focusTeamsChannels', '关注 Teams 频道']]) {
       const items = settings[key] === undefined ? [] : array(settings[key], label, 100).map(value => str(value, 300));
       if (items.some(value => !value)) fail(label + '不能为空');
@@ -731,15 +763,23 @@
       if (cohort) break;
     }
     const chosenTerm = cohort ? termKey(cohort.term) : null;
-    const seen = new Set(), result = [];
+    const seen = new Map(), result = [];
     for (const s of snapshots) for (const course of s.courses || []) {
       if (course.isCurrentTerm === false) continue;
       if (chosenTerm !== null && termKey(course.term) !== chosenTerm) continue;
       const key = course.id || course.name.toLowerCase();
-      if (seen.has(key)) continue;
-      seen.add(key);
-      result.push(Object.assign({}, course, { capturedAt: s.capturedAt, sourceURL: s.url,
-        gpaEligible: course.isCurrentTerm === true && course.isCourseGrade === true && course.gpaEligible !== false }));
+      const existingIndex = seen.get(key), existing = existingIndex === undefined ? null : result[existingIndex];
+      const row = Object.assign({}, existing || {}, course, { capturedAt: s.capturedAt, sourceURL: s.url });
+      if (existing && Number.isFinite(existing.percentage)) {
+        row.percentage = existing.percentage;
+        row.isCourseGrade = existing.isCourseGrade;
+      }
+      if (existing && (existing.gradeComponents || []).length) row.gradeComponents = existing.gradeComponents;
+      if (existing) { row.capturedAt = existing.capturedAt; row.sourceURL = existing.sourceURL; }
+      row.gpaEligible = row.isCurrentTerm === true && row.gpaEligible !== false &&
+        ((row.isCourseGrade === true && row.percentage !== null && row.percentage !== undefined) || (row.gradeComponents || []).length > 0);
+      if (existingIndex === undefined) { seen.set(key, result.length); result.push(row); }
+      else result[existingIndex] = row;
     }
     return result.sort((a, b) => a.name.localeCompare(b.name));
   }
@@ -752,6 +792,47 @@
     const grades = eligible.map(c => points(c.percentage)).filter(p => p !== null);
     return { value: grades.length ? Math.round(grades.reduce((a, b) => a + b, 0) / grades.length * 100) / 100 : null,
       count: grades.length, excluded: courses.length - grades.length, scale: 4, method: METHOD };
+  }
+  function semesterGPAForecast(courses, termDates, now) {
+    const start = termDates && termDates.start, end = termDates && termDates.end;
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(start || '') || !/^\d{4}-\d{2}-\d{2}$/.test(end || '') || end <= start) {
+      return { available: false, reason: 'dates', courses: [], count: 0 };
+    }
+    try { dayKey(start); dayKey(end); } catch (_) { return { available: false, reason: 'dates', courses: [], count: 0 }; }
+    const startMs = Date.parse(start + 'T00:00:00Z'), endMs = Date.parse(end + 'T00:00:00Z');
+    if (!Number.isFinite(startMs) || !Number.isFinite(endMs)) return { available: false, reason: 'dates', courses: [], count: 0 };
+    const current = now === undefined ? Date.now() : new Date(now).valueOf();
+    if (!Number.isFinite(current)) fail('GPA 预测时间无效');
+    const progress = Math.max(0, Math.min(1, (current - startMs) / (endMs - startMs)));
+    const eligible = courses.filter(course => course.gpaEligible !== false && course.isCurrentTerm !== false &&
+      (course.isCourseGrade !== false || (Array.isArray(course.gradeComponents) && course.gradeComponents.length > 0)));
+    const forecasts = [];
+    let missingComponents = 0, invalidWeights = 0;
+    for (const course of eligible) {
+      const components = Array.isArray(course.gradeComponents) ? course.gradeComponents : [];
+      const totalWeight = components.reduce((sum, component) => sum + (Number(component.weight) || 0), 0);
+      const graded = components.filter(component => component.percentage !== null && component.percentage !== undefined && Number.isFinite(Number(component.percentage)) && Number(component.weight) > 0);
+      const gradedWeight = graded.reduce((sum, component) => sum + Number(component.weight), 0);
+      if (!components.length || !gradedWeight) { missingComponents += 1; continue; }
+      if (totalWeight > 100.001 || graded.some(component => Number(component.weight) <= 0 || Number(component.weight) > 100 || Number(component.percentage) < 0 || Number(component.percentage) > 100)) { invalidWeights += 1; continue; }
+      const currentPercent = graded.reduce((sum, component) => sum + Number(component.percentage) * Number(component.weight), 0) / gradedWeight;
+      // Neutral scenario: ungraded components and the unrepresented share are
+      // projected at the student's weighted average on the components already graded.
+      const projectedPercent = (graded.reduce((sum, component) => sum + Number(component.percentage) * Number(component.weight), 0) + (100 - gradedWeight) * currentPercent) / 100;
+      forecasts.push({ id: course.id, name: course.name, currentPercent, projectedPercent,
+        currentGPA: points(currentPercent), projectedGPA: points(projectedPercent), gradedWeight,
+        representedWeight: Math.min(100, totalWeight), components: components.length });
+    }
+    const gpas = forecasts.map(course => course.projectedGPA).filter(value => value !== null);
+    const remainingGpas = forecasts.map(course => course.currentGPA).filter(value => value !== null);
+    const daysRemaining = Math.max(0, Math.ceil((endMs - Date.UTC(new Date(current).getUTCFullYear(), new Date(current).getUTCMonth(), new Date(current).getUTCDate())) / 86400000));
+    return { available: forecasts.length > 0, reason: forecasts.length ? null : missingComponents ? 'components' : invalidWeights ? 'weights' : 'components',
+      start, end, progress: Math.round(progress * 1000) / 10, daysRemaining, count: forecasts.length,
+      excluded: Math.max(0, eligible.length - forecasts.length), missingComponents, invalidWeights,
+      coverage: forecasts.length ? Math.round(forecasts.reduce((sum, course) => sum + course.gradedWeight, 0) / forecasts.length * 10) / 10 : 0,
+      remainingGPA: remainingGpas.length ? Math.round(remainingGpas.reduce((sum, value) => sum + value, 0) / remainingGpas.length * 100) / 100 : null,
+      projectedGPA: gpas.length ? Math.round(gpas.reduce((sum, value) => sum + value, 0) / gpas.length * 100) / 100 : null,
+      scale: 4, method: '已评分组成按学校页面中明确显示的权重加权；尚未评分的部分按该课程已评分组成的平均百分比作平稳情景；课程间等权。', courses: forecasts };
   }
   function getOfficialGPA(state) {
     for (const s of entries(state, 'managebac')) {
@@ -1060,7 +1141,7 @@
       sources: { seiue: getSourceStatus(state, 'seiue', date), managebac: getSourceStatus(state, 'managebac', date), teams: getSourceStatus(state, 'teams', date) },
       changes: state.changeLog.slice().sort((a, b) => Date.parse(b.capturedAt) - Date.parse(a.capturedAt)) };
   }
-  return Object.freeze({ VERSION, configureSchools, schoolHomes, emptyState, defaultState: emptyState, validateState, normalizeState: validateState,
-    mergeSnapshot, resetTeamsData, clearTeamsData: resetTeamsData, today, clock, getSchedule, getCourses, getTasks, getFeedback, getOfficialGPA, estimateGPA,
+  return Object.freeze({ VERSION, configureSchools, schoolHomes, normalizeSchoolHome, emptyState, defaultState: emptyState, validateState, normalizeState: validateState,
+    mergeSnapshot, resetTeamsData, clearTeamsData: resetTeamsData, today, clock, getSchedule, getCourses, getTasks, getFeedback, getOfficialGPA, estimateGPA, semesterGPAForecast,
     getNextClass, getClassClock, getSchedulePeriods, getTeamsPosts, getTeamsEC, getTeamsGrades, getSourceStatus, buildView, safeURL, safeAttachmentURL, gradePoints: points });
 });

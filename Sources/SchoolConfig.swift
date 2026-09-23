@@ -6,7 +6,29 @@ import Foundation
 struct CampusSchoolConfiguration {
     let homes: [String: String]
     static let sources = ["seiue", "managebac"]
-    static let help = "尚未配置学校登录地址。请在 Application Support/CampusDesk/SchoolConfig.json 中填写学校 HTTPS 根地址后重新打开应用；Teams 不受影响。"
+    static let help = "请在“连接与设置 → 学校连接”填写并保存学校网址，然后点击登录。"
+
+    static func normalizedInput(_ value: String, source: String) -> String? {
+        guard value.count <= 2048 else { return nil }
+        let raw = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        return validatedHome(raw.contains("://") ? raw : "https://" + raw, source: source)
+    }
+    static func save(_ values: [String: Any], to url: URL) throws -> CampusSchoolConfiguration {
+        var clean = [String: String]()
+        for source in sources {
+            guard let raw = values[source] as? String else { throw NSError(domain: "CampusDesk.SchoolConfig", code: 1) }
+            if raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { clean[source] = "" }
+            else {
+                guard let home = normalizedInput(raw, source: source) else { throw NSError(domain: "CampusDesk.SchoolConfig", code: 1) }
+                clean[source] = home
+            }
+        }
+        let data = try JSONSerialization.data(withJSONObject: clean, options: [.sortedKeys])
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        try data.write(to: url, options: .atomic)
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+        return Self(clean)
+    }
 
     init(_ values: [String: Any] = [:]) {
         var result = [String: String]()

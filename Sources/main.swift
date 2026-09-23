@@ -4,11 +4,11 @@ import WebKit
 let userSchoolConfigURL = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first?
     .appendingPathComponent("CampusDesk", isDirectory: true)
     .appendingPathComponent("SchoolConfig.json", isDirectory: false)
-let schoolEndpoints = CampusSchoolConfiguration.load(resources: Bundle.main.resourceURL, userConfig: userSchoolConfigURL)
-let sourceHomes = schoolEndpoints.homes.merging(["teams": "https://teams.microsoft.com/"]) { _, teams in teams }
-let sourceHosts: [String: [String]] = sourceHomes.reduce(into: [:]) { result, entry in
+var schoolEndpoints = CampusSchoolConfiguration.load(resources: Bundle.main.resourceURL, userConfig: userSchoolConfigURL)
+var sourceHomes: [String: String] { schoolEndpoints.homes.merging(["teams": "https://teams.microsoft.com/"]) { _, teams in teams } }
+var sourceHosts: [String: [String]] { sourceHomes.reduce(into: [:]) { result, entry in
     if let host = URL(string: entry.value)?.host { result[entry.key] = [host] }
-}.merging(["teams": ["teams.microsoft.com", "teams.cloud.microsoft"]]) { _, teams in teams }
+}.merging(["teams": ["teams.microsoft.com", "teams.cloud.microsoft"]]) { _, teams in teams } }
 let sourceLabels = ["seiue": "希悦", "managebac": "ManageBac", "teams": "Microsoft Teams"]
 let processPool = WKProcessPool()
 
@@ -810,8 +810,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
               let body = message.body as? [String: Any], let action = body["action"] as? String else { return }
         switch action {
         case "ready":
-            ready = true; emit(["type": "state", "state": state]); emitGraphStatus(); emitTeamsAutoStatus(); configureTimer()
+            ready = true; emit(["type": "schoolConfiguration", "config": schoolEndpoints.frontend]); emit(["type": "state", "state": state]); emitGraphStatus(); emitTeamsAutoStatus(); configureTimer()
             DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in self?.sync() }
+        case "saveSchoolConfiguration":
+            guard let config = body["config"] as? [String: Any], let target = userSchoolConfigURL else { return }
+            do {
+                let updated = try CampusSchoolConfiguration.save(config, to: target)
+                let previous = schoolEndpoints.frontend
+                for source in CampusSchoolConfiguration.sources where previous[source] != updated.frontend[source] {
+                    workers[source]?.cancel()
+                    browsers[source]?.web.stopLoading()
+                    browsers[source]?.window.close()
+                    browsers.removeValue(forKey: source)
+                }
+                schoolEndpoints = updated
+                emit(["type": "schoolConfiguration", "config": updated.frontend, "saved": true])
+            } catch {
+                emit(["type": "schoolConfigurationError"])
+            }
         case "saveState":
             if let candidate = body["state"] as? [String: Any], candidate["version"] as? Int == 1,
                JSONSerialization.isValidJSONObject(candidate) {

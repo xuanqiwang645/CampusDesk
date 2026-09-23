@@ -22,6 +22,7 @@ function harness({ native = true, hash = '#overview', saved = null, idle = false
     showModal() { this.open = true; } close() { this.open = false; } focus() {ctx.document.activeElement=this;} scrollIntoView() {}
     setSelectionRange(start,end,direction){this.selectionStart=start;this.selectionEnd=end;this.selectionDirection=direction;}
     contains(node){return node===this || this.children.includes(node && node.id);}
+    replaceWith(node){nodes.set(this.id,node);}
     querySelectorAll(selector){return this.children.map(id=>nodes.get(id)).filter(Boolean).filter(node=>selector==='details[id]'?node.tagName==='DETAILS':selector==='[data-preserve-scroll][id]'?Object.hasOwn(node.attributes,'data-preserve-scroll'):selector==='[data-reading-anchor][id]'?Object.hasOwn(node.attributes,'data-reading-anchor'):false);}
     getBoundingClientRect(){return {top:0,bottom:100};}
     reset() {} closest() { return this; } click() { if (this.events.click) this.events.click({ target: this, preventDefault() {} }); }
@@ -30,6 +31,7 @@ function harness({ native = true, hash = '#overview', saved = null, idle = false
     for (const match of html.matchAll(/<[a-z][^>]*\bid="([^"]+)"[^>]*>/gi)) {
       const node = new Element(match[1]), value = /\bvalue="([^"]*)"/.exec(match[0]);
       node.tagName=match[0].match(/^<([a-z]+)/i)[1].toUpperCase();for(const attribute of match[0].matchAll(/\s([\w-]+)(?:="([^"]*)")?/g))node.attributes[attribute[1]]=attribute[2] || '';
+      for (const [name, value] of Object.entries(node.attributes)) if (name.startsWith('data-')) node.dataset[name.slice(5).replace(/-([a-z])/g, (_, letter) => letter.toUpperCase())] = value;
       node.value = value ? value[1] : ''; node.checked = /\bchecked\b/.test(match[0]);
       nodes.set(node.id, node); if (owner) owner.children.push(node.id);
     }
@@ -58,7 +60,7 @@ function harness({ native = true, hash = '#overview', saved = null, idle = false
     input: (id, value) => { const element = nodes.get(id); assert.ok(element, id); element.value = value; for (const listener of listeners.input || []) listener({ target: element }); },
     runIdleStep: () => { const callback = idleQueue.shift(); if (callback) callback({ timeRemaining: () => 50 }); },
     drainIdle: () => { let steps = 0; while (idleQueue.length && steps++ < 1000) { const callback = idleQueue.shift(); callback({ timeRemaining: () => 50 }); } assert.ok(steps < 1000, 'idle work should finish'); },
-    submit: id => nodes.get(id).events.submit({ preventDefault() {} }),
+    submit: id => { const target = nodes.get(id), event = { target, preventDefault() {} }; if (target.events.submit) target.events.submit(event); for (const listener of listeners.submit || []) listener(event); },
     receive: event => { ctx.__eventJSON = JSON.stringify(event); vm.runInContext('CampusDesk.receive(JSON.parse(__eventJSON))', ctx); },
     tick: milliseconds => { instant += milliseconds; for (const timer of intervals) timer.cb(); },
     last: action => sent.filter(item => item.action === action).at(-1)
@@ -184,6 +186,62 @@ test('estimated GPA is always presented with two decimal places', () => {
   assert.match(app.node('content').innerHTML, />4\.00</);
 });
 
+test('semester forecast explains its assumptions and saves local term dates', () => {
+  const app = harness({ hash: '#grades' });
+  app.receive({ type: 'snapshot', snapshot: { source: 'managebac', url: 'https://example-school.managebac.cn/student/classes/7001/core_tasks', capturedAt: '2026-09-19T00:40:00Z', warnings: [], courses: [
+    { id: 'math', name: 'Synthetic Math', percentage: null, term: 'Current', isCurrentTerm: true, isCourseGrade: false,
+      gradeComponents: [{ id: 'essay', name: 'Synthetic essay', percentage: 85, weight: 60 }, { id: 'exam', name: 'Synthetic exam', percentage: null, weight: 40 }] }
+  ], tasks: [], feedback: [], officialGPA: null } });
+  app.click({ page: 'grades' });
+  assert.match(app.node('content').innerHTML, /学期 GPA 预测/);
+  assert.match(app.node('content').innerHTML, /学期日期对学生端通常不可见/);
+  assert.match(app.node('content').innerHTML, /请补充学期起止日期/);
+  assert.match(app.node('content').innerHTML, /type="text" id="gpa-term-start"[^>]*placeholder="YYYY-MM-DD"/);
+  assert.match(app.node('content').innerHTML, /日期格式：YYYY-MM-DD/);
+  const savesBeforeInvalidDates = app.sent.filter(item => item.action === 'saveState').length;
+  app.node('gpa-term-start').value = '2026-02-31'; app.node('gpa-term-end').value = '2026-12-31';
+  app.node('gpa-term-dates-form').dataset.term = 'current';
+  app.submit('gpa-term-dates-form');
+  assert.equal(app.sent.filter(item => item.action === 'saveState').length, savesBeforeInvalidDates);
+  assert.equal(app.node('toast').textContent, '请按 YYYY-MM-DD 填写有效的学期日期。');
+  app.node('gpa-term-start').value = '2026-09-01'; app.node('gpa-term-end').value = '2026-12-31';
+  app.node('gpa-term-dates-form').dataset.term = 'current';
+  app.submit('gpa-term-dates-form');
+  assert.deepEqual(app.last('saveState').state.settings.gpaTermDates.current, { start: '2026-09-01', end: '2026-12-31' });
+  assert.match(app.node('content').innerHTML, /剩余部分参考 GPA/);
+  assert.match(app.node('content').innerHTML, /3\.00 \/ 4\.00/);
+});
+
+test('semester date drafts survive background sync, blur, navigation and clearing before explicit save', () => {
+  const app = harness({ hash: '#grades' });
+  const snapshot = { source: 'managebac', url: 'https://example-school.managebac.cn/grades', capturedAt: '2026-09-19T00:40:00Z', warnings: [], courses: [
+    { id: 'math', name: 'Math', percentage: 85, term: 'Current', isCurrentTerm: true, isCourseGrade: true }
+  ], tasks: [], feedback: [], officialGPA: null };
+  app.receive({ type: 'snapshot', snapshot });
+  const start = app.node('gpa-term-start'), end = app.node('gpa-term-end');
+  start.focus(); app.input(start.id, '2026-09-01');
+  end.focus(); app.input(end.id, '2026-12-'); end.setSelectionRange(8, 8);
+  app.receive({ type: 'snapshot', snapshot: teamsSnapshot() });
+  assert.equal(app.node(start.id).value, '2026-09-01');
+  assert.equal(app.node(end.id).value, '2026-12-');
+  assert.equal(app.node(start.id), start, 'sync retains the actual editing controls');
+  assert.equal(app.node(end.id), end);
+  assert.equal(app.ctx.document.activeElement, end);
+  assert.equal(end.selectionStart, 8);
+  assert.deepEqual(app.last('saveState').state.settings.gpaTermDates, {}, 'drafts are not committed by background sync');
+  app.input(start.id, '');
+  app.click({ page: 'overview' }); app.click({ page: 'grades' });
+  assert.equal(app.node(start.id).value, '');
+  assert.equal(app.node(end.id).value, '2026-12-');
+  app.node(start.id).focus(); app.input(start.id, '2026-09-01');
+  app.node(end.id).focus(); app.input(end.id, '2026-12-31');
+  app.submit('gpa-term-dates-form');
+  assert.deepEqual(app.last('saveState').state.settings.gpaTermDates.current, { start: '2026-09-01', end: '2026-12-31' });
+  app.receive({ type: 'snapshot', snapshot });
+  assert.equal(app.node(start.id).value, '2026-09-01');
+  assert.equal(app.node(end.id).value, '2026-12-31');
+});
+
 test('tasks group by subject and Teams group by sender/channel with local focus controls', () => {
   const app = harness(); app.receive({ type: 'snapshot', snapshot: teamsSnapshot([task(), task({ id: 'math-work', title: 'Math work', course: 'Math' })]) }); app.receive({ type: 'snapshot', snapshot: { source: 'managebac', url: 'https://example-school.managebac.cn/tasks', capturedAt: '2026-09-19T00:42:00Z', warnings: [], courses: [], tasks: [{ id: 'biology-work', title: 'Biology work', course: 'Biology', dueAt: null, dueLabel: '', status: 'open', url: 'https://example-school.managebac.cn/tasks' }], feedback: [], officialGPA: null } });
   assert.match(app.node('content').innerHTML, /Teams 作业/); assert.match(app.node('content').innerHTML, /ManageBac 作业/); assert.match(app.node('content').innerHTML, /task-source-grid/);
@@ -199,6 +257,35 @@ test('tasks group by subject and Teams group by sender/channel with local focus 
   app.click({ action: 'toggle-focus-channel', value: 'HOMEWORK' });
   assert.deepEqual(app.last('saveState').state.settings.focusTeamsChannels, ['HOMEWORK']);
   app.click({ action: 'teams-channel-filter', filter: 'focus' }); assert.match(app.node('content').innerHTML, /HOMEWORK/); assert.doesNotMatch(app.node('content').innerHTML, /ENGLISH CORNER ROSTER/);
+});
+
+test('new users can edit school addresses through sync and activate them only after native persistence', () => {
+  const app = harness({ hash: '#settings' });
+  app.receive({ type: 'schoolConfiguration', config: { seiue: '', managebac: '' } });
+  assert.equal(app.node('seiue-url').value, '');
+  assert.equal(app.node('managebac-url').value, '');
+  assert.equal(Object.hasOwn(app.node('seiue-url').attributes, 'readonly'), false);
+  app.node('seiue-url').focus(); app.input('seiue-url', 'new-school.seiue.com');
+  app.node('managebac-url').focus(); app.input('managebac-url', 'https://new-school.managebac.cn/');
+  app.receive({ type: 'snapshot', snapshot: teamsSnapshot() });
+  assert.equal(app.node('seiue-url').value, 'new-school.seiue.com');
+  assert.equal(app.node('managebac-url').value, 'https://new-school.managebac.cn/');
+  app.submit('school-configuration-form');
+  const config = app.last('saveSchoolConfiguration').config;
+  assert.deepEqual(config, { seiue: 'https://new-school.seiue.com/', managebac: 'https://new-school.managebac.cn/' });
+  assert.equal(app.ctx.CampusCore.schoolHomes().seiue, '', 'do not claim success before disk acknowledgement');
+  app.receive({ type: 'schoolConfigurationError' });
+  assert.match(app.node('toast').textContent, /未能保存/);
+  app.submit('school-configuration-form');
+  app.receive({ type: 'schoolConfiguration', config, saved: true });
+  assert.equal(app.ctx.CampusCore.safeURL(config.seiue, 'seiue'), config.seiue);
+  assert.equal(app.last('saveState').state.settings.managebacURL, config.managebac);
+  assert.match(app.node('toast').textContent, /学校网址已保存在本机/);
+  const before = app.sent.filter(item => item.action === 'saveSchoolConfiguration').length;
+  app.input('managebac-url', 'https://managebac.cn.evil.invalid/');
+  app.submit('school-configuration-form');
+  assert.equal(app.sent.filter(item => item.action === 'saveSchoolConfiguration').length, before);
+  assert.equal(app.ctx.CampusCore.schoolHomes().managebac, config.managebac);
 });
 
 test('boot migrates old local state, renders new pages, and browser source opening never claims connection', () => {

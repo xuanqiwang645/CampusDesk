@@ -42,6 +42,16 @@ test('malformed or overbroad configured endpoints fail closed', () => {
   assert.equal(Core.safeURL('https://teams.microsoft.com/', 'teams'), 'https://teams.microsoft.com/');
 });
 
+test('school address entry accepts bare domains without changing the active allowlist', () => {
+  Core.configureSchools({});
+  assert.equal(Core.normalizeSchoolHome(' new-school.seiue.com ', 'seiue'), 'https://new-school.seiue.com/');
+  assert.equal(Core.normalizeSchoolHome('HTTPS://NEW-SCHOOL.MANAGEBAC.COM:443/', 'managebac'), 'https://new-school.managebac.com/');
+  for (const value of ['http://new-school.seiue.com', 'https://seiue.com.evil.invalid/', 'https://new-school.seiue.com/?token=secret', 'https://user:pass@new-school.seiue.com/', 'https://new-school.seiue.com:8080/', 'https://new-school.managebac.cn/']) {
+    assert.equal(Core.normalizeSchoolHome(value, 'seiue'), '');
+  }
+  assert.deepEqual(Core.schoolHomes(), { seiue: '', managebac: '' });
+});
+
 test('blank or changed config preserves cached school and Teams data without enabling school reads', () => {
   const old = { seiue: 'https://example-school.seiue.com/', managebac: 'https://example-school.managebac.cn/' };
   Core.configureSchools(old);

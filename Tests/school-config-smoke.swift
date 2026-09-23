@@ -33,6 +33,22 @@ struct SchoolConfigurationSmoke {
         for value in invalid { check(CampusSchoolConfiguration.validatedHome(value, source: "seiue") == nil, "Reject invalid configuration") }
         check(CampusSchoolConfiguration.validatedHome("https://example-school.managebac.cn/", source: "seiue") == nil, "Wrong provider rejected")
         check(CampusSchoolConfiguration(["seiue": 123, "teams": "https://evil.invalid/"]).homes.isEmpty, "Wrong types and unknown keys ignored")
+        let entered = ["seiue": " new-school.seiue.com ", "managebac": "https://new-school.managebac.com/"]
+        let saved = try! CampusSchoolConfiguration.save(entered, to: local)
+        check(saved.homes["seiue"] == "https://new-school.seiue.com/", "Normalize bare entered school domain")
+        check(CampusSchoolConfiguration.load(resources: resources, userConfig: local).frontend == saved.frontend, "Saved settings survive a new launch and override bundled settings")
+        let permissions = (try! FileManager.default.attributesOfItem(atPath: local.path))[.posixPermissions] as? NSNumber
+        check(permissions?.intValue == 0o600, "Saved config is private")
+        do {
+            _ = try CampusSchoolConfiguration.save(["seiue": "https://seiue.com.evil.invalid/", "managebac": ""], to: local)
+            check(false, "Reject invalid host on save")
+        } catch { check(CampusSchoolConfiguration.load(resources: resources, userConfig: local).frontend == saved.frontend, "Failed save keeps previous config") }
+        do {
+            _ = try CampusSchoolConfiguration.save(entered, to: resources)
+            check(false, "A disk failure must not return success")
+        } catch { check(true, "Disk error is propagated to UI") }
+        let cleared = try! CampusSchoolConfiguration.save(["seiue": "", "managebac": entered["managebac"]!], to: local)
+        check(cleared.homes["seiue"] == nil && cleared.homes["managebac"] != nil, "Unused provider can be cleared independently")
         print("PASS: \(passed) native school-configuration checks")
     }
 }

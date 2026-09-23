@@ -76,6 +76,60 @@ test('GPA bands include each exact boundary and exclude assignment grades', () =
   assert.equal(result.count, 2);
 });
 
+test('semester GPA forecast uses explicit weighted components and a local term timeline', () => {
+  const courses = [
+    { id: 'math', name: 'Synthetic Math', term: 'Synthetic Fall', isCurrentTerm: true, isCourseGrade: false,
+      gradeComponents: [{ id: 'essay', name: 'Essay', percentage: 80, weight: 60 }, { id: 'quiz', name: 'Quiz', percentage: 90, weight: 40 }] },
+    { id: 'english', name: 'Synthetic English', term: 'Synthetic Fall', isCurrentTerm: true, isCourseGrade: false,
+      gradeComponents: [{ id: 'presentation', name: 'Presentation', percentage: 95, weight: 50 }, { id: 'exam', name: 'Exam', percentage: null, weight: 50 }] }
+  ];
+  const result = Core.semesterGPAForecast(courses, { start: '2026-09-01', end: '2026-12-31' }, '2026-10-16T12:00:00Z');
+  assert.equal(result.available, true);
+  assert.equal(result.progress, 37.6);
+  assert.equal(result.daysRemaining, 76);
+  assert.equal(result.count, 2);
+  assert.equal(result.coverage, 75);
+  assert.equal(result.remainingGPA, 3.5);
+  assert.equal(result.projectedGPA, 3.5);
+  assert.equal(result.courses[0].currentPercent, 84);
+  assert.equal(result.courses[1].projectedPercent, 95);
+});
+
+test('semester GPA forecast declines to estimate without dates, weighted grades, or valid weights', () => {
+  assert.equal(Core.semesterGPAForecast([], {}, '2026-10-16').reason, 'dates');
+  assert.equal(Core.semesterGPAForecast([{ name: 'No component' }], { start: '2026-09-01', end: '2026-12-31' }, '2026-10-16').reason, 'components');
+  assert.equal(Core.semesterGPAForecast([{ name: 'Bad weights', gradeComponents: [
+    { name: 'A', percentage: 90, weight: 70 }, { name: 'B', percentage: 80, weight: 40 }
+  ] }], { start: '2026-09-01', end: '2026-12-31' }, '2026-10-16').reason, 'weights');
+  assert.equal(Core.semesterGPAForecast([], { start: '2026-02-30', end: '2026-12-31' }, '2026-10-16').reason, 'dates');
+});
+
+test('local semester dates and course component grades survive state validation', () => {
+  const state = Core.emptyState();
+  state.settings.gpaTermDates['Synthetic Fall'] = { start: '2026-09-01', end: '2026-12-31' };
+  const restored = Core.validateState(state);
+  assert.deepEqual(restored.settings.gpaTermDates['Synthetic Fall'], { start: '2026-09-01', end: '2026-12-31' });
+  const snapshot = Core.validateState(Core.mergeSnapshot(restored, managebac({ courses: [{ id: 'science', name: 'Synthetic Science', percentage: null,
+    term: 'Synthetic Fall', isCurrentTerm: true, isCourseGrade: false, gradeComponents: [{ id: 'lab', name: 'Lab', percentage: 87, weight: 25 }] }] })));
+  assert.deepEqual(Core.getCourses(snapshot)[0].gradeComponents, [{ id: 'lab', name: 'Lab', percentage: 87, weight: 25 }]);
+  assert.throws(() => Core.validateState(Object.assign(Core.emptyState(), { settings: Object.assign(Core.emptyState().settings, { gpaTermDates: { 'Bad Term': { start: '2026-09-01', end: '2026-09-01' } } }) })), /学期结束日期/);
+});
+
+test('a component-only ManageBac page augments rather than shadows the latest course total', () => {
+  let state = Core.mergeSnapshot(Core.emptyState(), managebac({ capturedAt: '2026-09-18T00:00:00Z', courses: [
+    { id: 'math', name: 'Synthetic Math', percentage: 86, term: 'First Semester (current)', isCurrentTerm: true, isCourseGrade: true }
+  ] }));
+  state = Core.mergeSnapshot(state, managebac({ url: 'https://example-school.managebac.cn/student/classes/7001/core_tasks', capturedAt: '2026-09-18T01:00:00Z', courses: [
+    { id: 'math', name: 'Synthetic Math', percentage: null, term: 'First Semester', isCurrentTerm: true, isCourseGrade: false,
+      gradeComponents: [{ id: 'lab', name: 'Lab', percentage: 91, weight: 30 }] }
+  ] }));
+  const course = Core.getCourses(state)[0];
+  assert.equal(course.percentage, 86);
+  assert.equal(course.isCourseGrade, true);
+  assert.equal(course.gradeComponents[0].percentage, 91);
+  assert.equal(course.gpaEligible, true);
+});
+
 test('historical terms and unconfirmed grades do not enter current GPA', () => {
   let state = Core.mergeSnapshot(Core.emptyState(), managebac({ courses: [
     { id: 'history', name: 'History', percentage: 0, term: 'Old Term', isCurrentTerm: false, isCourseGrade: true },

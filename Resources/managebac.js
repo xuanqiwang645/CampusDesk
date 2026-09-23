@@ -36,6 +36,41 @@
     const valueNumber = Number(match[1]);
     return valueNumber >= 0 && valueNumber <= 100 ? valueNumber : null;
   }
+  function componentPercentage(value) {
+    if (typeof value === 'number') return Number.isFinite(value) && value >= 0 && value <= 100 ? value : null;
+    const input = clean(value);
+    const percent = input.match(/(?:^|[^\d.])(\d{1,3}(?:\.\d+)?)\s*%/);
+    if (percent) {
+      const number = Number(percent[1]);
+      return number >= 0 && number <= 100 ? number : null;
+    }
+    const ratio = input.match(/^\s*(\d+(?:\.\d+)?)\s*\/\s*(\d+(?:\.\d+)?)\s*$/);
+    if (ratio && Number(ratio[2]) > 0 && Number(ratio[1]) <= Number(ratio[2])) return Number((Number(ratio[1]) / Number(ratio[2]) * 100).toFixed(4));
+    return null;
+  }
+  function componentWeight(value) {
+    const input = clean(value);
+    const match = input.match(/^\s*(\d{1,3}(?:\.\d+)?)\s*%?\s*$/);
+    if (!match) return null;
+    const number = Number(match[1]);
+    return number > 0 && number <= 100 ? number : null;
+  }
+  function isPercentageWeightHeader(value) {
+    return /(?:(?:weight|weighting).*(?:%|percent)|(?:%|percent).*(?:weight|weighting)|(?:权重|比重).*(?:%|百分比)|(?:%|百分比).*(?:权重|比重))/i.test(clean(value));
+  }
+  function parseGradeComponents(rows) {
+    const result = [], seen = new Set();
+    for (const row of rows || []) {
+      const name = clean(row && row.name), weight = componentWeight(row && row.weight);
+      const percentage = row && row.percentage == null ? null : componentPercentage(row && row.percentage);
+      if (!name || weight == null) continue;
+      const key = name.toLowerCase() + '|' + weight + '|' + percentage;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      result.push({ id:'component-' + result.length + '-' + encodeURIComponent(name).slice(0, 80), name, percentage, weight });
+    }
+    return result.slice(0,100);
+  }
   function taskStatus(item) {
     // A pending dropbox badge can coexist with a recorded quiz grade.
     if (item.points && /\d\s*\/\s*\d/.test(item.points)) return 'graded';
@@ -66,13 +101,43 @@
       loginText: text(first(doc, 'main, #main-content, body')).slice(0, 1800),
       term: text(first(doc, 'select#term option:checked')),
       recognized: all(doc, 'main h2, #main-content h2').some(x => /^(?:All Tasks|Task Details|所有任务|任务详情)$/i.test(text(x))),
-      links: [], overallRows: [], tasks: [], feedback: [], gpaRows: []
+      links: [], overallRows: [], tasks: [], feedback: [], gpaRows: [], gradeComponents: []
     };
     for (const a of all(doc, 'a[href]')) {
       if (!visible(a)) continue;
       const href = safeURL(a.getAttribute('href'), url);
       if (href) page.links.push({url:href, title:text(a)});
     }
+    // Only capture a grade component when the rendered table labels both its
+    // assessment/category and an explicit weight column. Assignment marks alone
+    // are never promoted to weighted course components.
+    const tables = all(doc, 'main table, #main-content table, main [role="table"], #main-content [role="table"]');
+    for (const table of tables) {
+      if (!visible(table)) continue;
+      const tableRows = all(table, 'tr, [role="row"]');
+      const header = tableRows.find(row => all(row, 'th, [role="columnheader"]').length >= 2);
+      if (!header) continue;
+      const headers = all(header, 'th, td, [role="columnheader"], [role="cell"]').map(text);
+      const nameIndex = headers.findIndex(value => /^(?:category|component|assessment|criterion|类别|分类|组成|项目)$/i.test(value));
+      const weightIndex = headers.findIndex(isPercentageWeightHeader);
+      const gradeIndex = headers.findIndex(value => /(?:average|percentage|grade|score|mark|result|成绩|分数|平均|百分比)/i.test(value) && !/(?:weight|weighting|权重|比重)/i.test(value));
+      if (nameIndex < 0 || weightIndex < 0 || gradeIndex < 0) continue;
+      for (const row of tableRows) {
+        if (row === header || !visible(row)) continue;
+        const cells = all(row, 'th, td, [role="cell"]');
+        if (Math.max(nameIndex, weightIndex, gradeIndex) >= cells.length) continue;
+        const name = text(cells[nameIndex]), weight = componentWeight(text(cells[weightIndex]));
+        if (!name || weight == null || /^(?:total|overall|总计|总评)$/i.test(name)) continue;
+        page.gradeComponents.push({ name, weight, percentage:componentPercentage(text(cells[gradeIndex])) });
+      }
+    }
+    for (const node of all(doc, '[data-grade-component][data-grade-weight]')) {
+      if (!visible(node)) continue;
+      const rawPercentage = node.getAttribute('data-grade-percentage'), numericPercentage = Number(rawPercentage);
+      page.gradeComponents.push({ name:node.getAttribute('data-grade-component'), weight:node.getAttribute('data-grade-weight'),
+        percentage:rawPercentage !== null && rawPercentage.trim() !== '' && Number.isFinite(numericPercentage) ? numericPercentage : rawPercentage });
+    }
+    page.gradeComponents = parseGradeComponents(page.gradeComponents);
     // Only explicit sidebar overall rows are eligible for whole-course grades.
     for (const label of all(doc, 'aside strong, [role="complementary"] strong, .list-item strong')) {
       if (!visible(label) || !/^(?:Overall|Overall Grade|Term Overall|总评|总成绩)$/i.test(text(label))) continue;
@@ -120,7 +185,7 @@
     let path = ''; try { path = new URL(page.url).pathname; } catch (_) {}
     result.loginRequired = Boolean(page.hasPassword || /\/(?:login|sign_in|signin|sessions)(?:\/|$)/i.test(path));
     if (result.loginRequired) { result.warnings.push('ManageBac 需要在应用内登录。'); return result; }
-    if (/\/core_tasks(?:\/\d+)?\/?$/.test(path) && page.recognized === false) {
+    if (/\/core_tasks(?:\/\d+)?\/?$/.test(path) && page.recognized === false && !(page.gradeComponents || []).length) {
       result.parseError = true;
       result.warnings.push('任务页面尚未完整加载或页面布局发生变化，保留上次同步结果。');
       return result;
@@ -147,7 +212,7 @@
       const distinct = [...new Set(values)];
       const percentage = distinct.length === 1 ? distinct[0] : null;
       result.courses.push({id:currentID,name:clean(page.heading) || 'ManageBac 课程',percentage,term,
-        isCurrentTerm:currentTerm,isCourseGrade:percentage!==null,url:page.url});
+        isCurrentTerm:currentTerm,isCourseGrade:percentage!==null,url:page.url,gradeComponents:parseGradeComponents(page.gradeComponents || [])});
       if (distinct.length > 1) result.warnings.push('发现不一致的课程总评，已跳过该课程的 GPA 估算。');
       if (!term) result.warnings.push('页面未显示学期，课程分数暂不用于 GPA 估算。');
     }
@@ -185,7 +250,7 @@
     const currentURL = url || documentToRead.location.href;
     return fromProjection(collect(documentToRead,currentURL));
   }
-  const api = {extract,collect,fromProjection,overallPercentage,taskStatus,exactDate,safeURL};
+  const api = {extract,collect,fromProjection,overallPercentage,parseGradeComponents,componentPercentage,componentWeight,isPercentageWeightHeader,taskStatus,exactDate,safeURL};
   if (typeof module === 'object' && module.exports) module.exports = api;
   if (root) root.CampusManageBac = api;
 })(typeof window !== 'undefined' ? window : null);

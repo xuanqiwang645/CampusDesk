@@ -49,6 +49,36 @@ test('a synthetic zero overall remains a real course grade', () => {
   assert.equal(result.courses[0].isCourseGrade, true);
 });
 
+test('weighted grade components require an explicit weight and never infer an IB grade as a percent', () => {
+  assert.equal(mb.isPercentageWeightHeader('Category weight (%)'), true);
+  assert.equal(mb.isPercentageWeightHeader('Weight percentage'), true);
+  assert.equal(mb.isPercentageWeightHeader('Weight'), false);
+  assert.equal(mb.isPercentageWeightHeader('Absolute weighting'), false);
+  assert.deepEqual(mb.parseGradeComponents([
+    { name: 'Synthetic essays', weight: '40%', percentage: '18 / 20' },
+    { name: 'Synthetic exams', weight: '60', percentage: '84.5%' },
+    { name: 'Ungraded component', weight: '20%', percentage: '' },
+    { name: 'IB criterion', weight: '10%', percentage: '6' },
+    { name: 'No weight', percentage: '99%' }
+  ]), [
+    { id: 'component-0-Synthetic%20essays', name: 'Synthetic essays', percentage: 90, weight: 40 },
+    { id: 'component-1-Synthetic%20exams', name: 'Synthetic exams', percentage: 84.5, weight: 60 },
+    { id: 'component-2-Ungraded%20component', name: 'Ungraded component', percentage: null, weight: 20 },
+    { id: 'component-3-IB%20criterion', name: 'IB criterion', percentage: null, weight: 10 }
+  ]);
+});
+
+test('captured course components remain distinct from the course overall grade', () => {
+  const page = clone(); page.gradeComponents = [{ name: 'Synthetic labs', percentage: 88, weight: 35 }];
+  page.overallRows = [];
+  const result = mb.fromProjection(page, timestamp);
+  assert.equal(result.courses[0].percentage, null);
+  assert.equal(result.courses[0].isCourseGrade, false);
+  assert.deepEqual(result.courses[0].gradeComponents.map(({ name, percentage, weight }) => ({ name, percentage, weight })), [
+    { name: 'Synthetic labs', percentage: 88, weight: 35 }
+  ]);
+});
+
 test('assignment points and non-overall percentages never become course GPA', () => {
   const page = clone(); page.overallRows = [{ label: 'Practice quiz', value: '93%' }, { label: 'Points', value: '14 / 25' }];
   const result = mb.fromProjection(page, timestamp);
