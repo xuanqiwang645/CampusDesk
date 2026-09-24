@@ -7,3 +7,7 @@
 
 .board-source-groups .task-source-section{padding-top:13px}.board-source-groups .task-source-heading{padding-bottom:9px}.board-source-groups .task-source-heading h2{font-size:15px}.board-source-groups .task-source-subjects{padding-left:10px}.board-source-groups .task-subject-group{padding:12px 0}.board-source-groups .group-heading h2{font-size:14px}.board-source-groups .board-task-grid{margin-top:8px}
 .board-source-groups .task-source-grid{gap:14px}.board-source-groups .task-source-grid>.task-source-manual{padding-top:13px}.board-source-groups .task-source-grid .board-task-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+.board-kpi-grid{grid-template-columns:repeat(6,minmax(0,1fr))}
+.board-kpi-gpa-linear{border-color:rgba(81,121,169,.24)}
+@media(max-width:1180px){.board-kpi-grid{grid-template-columns:repeat(3,minmax(0,1fr))}}
+@media(max-width:760px){.board-kpi-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}

@@ -45,9 +45,11 @@
   let graphConfigurationDraft = null;
   const gpaTermDateDrafts = new Map();
   let schoolConfigurationDraft = null, schoolSavePending = false;
+  let quickConnectionSource = null, pendingQuickConnection = null;
+  let pendingSchoolCalendarPDF = null;
   let teamsAuto = { running: false, phase: 'idle', message: '登录 Teams 后自动发现频道和聊天。', counts: {}, warnings: [], coverageItems: [] };
-  let gpaKlineChart = null;
-  let gpaKlineChartKey = '';
+  const gpaKlineCharts = { banded: null, linear: null };
+  const gpaKlineChartKeys = { banded: '', linear: '' };
   let gpaKlineWheelAt = -Infinity;
   const GPA_KLINE_INTERVALS = [
     { ms: 60 * 60 * 1000, label: '1 小时', short: '1h', chart: { type: 'hour', span: 1 } },
@@ -70,6 +72,16 @@
   const pageNames = { overview: '总览', learning: '学习中心', schedule: '课程表', grades: '成绩与 GPA', tasks: '待办事项', feedback: '老师反馈', teams: 'Teams 消息', ec: 'English Corner', settings: '连接与设置' };
   // Only CampusDesk's own fixed labels are translated. School data stays exactly as received.
   const english = Object.freeze({
+    '取消': 'Cancel', '正在同步…': 'Syncing…',
+    '快捷连接': 'Quick connect', '登录后自动同步': 'Sync automatically after sign-in', '连接选项': 'Connection options', '登录并同步': 'Sign in & sync', '重新登录': 'Sign in again', '立即同步': 'Sync now', '设置并登录': 'Set up & sign in', '打开网站': 'Open website', '保存并登录': 'Save & sign in', '连接设置与退出': 'Connection settings & sign out',
+    '登录会话保存在这台 Mac；学校要求验证时需重新登录。': 'Your session stays on this Mac. Sign in again when your school requires verification.',
+    '填写学校网址，在学校原页面完成登录，CampusDesk 识别到课程后会自动同步。': 'Enter your school URL and sign in on the school website. CampusDesk starts syncing once it recognizes your courses.',
+    '可直接粘贴学校登录页或课程页链接。': 'You can paste a school sign-in or course page URL.',
+    '选择已登录学校账号的浏览器。首次连接按 Mac 提示授权，并在浏览器“显示 → 开发者”中允许来自 Apple 事件的 JavaScript。': 'Choose the browser with your school account. On first connection, approve the Mac permission prompt and enable Allow JavaScript from Apple Events under View → Developer in the browser.',
+    '允许读取并自动同步 Teams': 'Allow reading and automatic Teams sync',
+    '登录在学校或微软页面完成；CampusDesk 不保存账号密码。': 'Sign in on the school or Microsoft website. CampusDesk does not store your password.',
+    '请先勾选允许读取并自动同步 Teams。': 'Select permission to read and automatically sync Teams first.',
+    '登录入口始终可用，已登录的浏览器会继续使用现有会话。': 'Sign-in stays available during sync. An already signed-in browser reuses its session.',
     '总览': 'Overview', '学习中心': 'Study Center', '课程表': 'Schedule', '成绩与 GPA': 'Grades & GPA', '待办事项': 'To-Do', '老师反馈': 'Teacher Feedback', 'Teams 消息': 'Teams Messages', '连接与设置': 'Connections & Settings', '希悦': 'Seiue',
     '学习，一目了然': 'Study, in view', '我的校园': 'My Campus', '北京时间': 'Beijing time', '把今天留给重要的事。': 'Make today count.', '同步数据': 'Sync data', '尚未同步': 'Not synced',
     '界面语言': 'Interface language', '选择 CampusDesk 的界面语言。课程、作业、消息、附件和学校原文保持原样，不会被翻译。': 'Choose the CampusDesk interface language. Courses, assignments, messages, attachments, and school content stay exactly as received.', '简体中文': 'Simplified Chinese',
@@ -80,7 +92,7 @@
     '上课日期': 'Class date', '操作': 'Action', '如：晨会、社团': 'e.g. morning meeting or club', '如：操场': 'e.g. playground', '如：调课后的课程': 'e.g. adjusted class name', '选择节次后自动带出时间': 'Choose a period to fill in the times', '填入开始时间后会自动识别节次': 'A period is suggested after you enter the start time', '将归入 ': 'Assigned to ', '未匹配节次，将按开始时间插入': 'No period match; will be placed by start time', '该节次暂无已读取的时间': 'No captured time is available for this period', '尚未设置节假日；设置后当天常规课表和每周自编课程会隐藏。': 'No holidays set. Adding one hides regular and weekly custom classes for that date.',
     '希悦网址': 'Seiue URL', '学校 ManageBac 网址': 'School ManageBac URL', '导出或恢复本机数据': 'Export or restore local data', '构建时配置；未配置时不会连接。': 'Configured at build time; no connection is made when it is empty.', '构建时配置；仅允许指定学校的精确地址。': 'Configured at build time; only the approved school address is allowed.',
     'Teams 作业提醒': 'Teams assignment reminders', '截止前系统通知': 'System notifications before due dates', '提前多久提醒': 'Reminder lead time',
-    '课程成绩': 'Course grades', '学校 GPA': 'School GPA', '参考 GPA': 'Estimated GPA', '今日课程': 'Today\'s classes', '全部待办': 'All to-dos', '添加待办': 'Add to-do', '查看全部': 'View all',
+    '课程成绩': 'Course grades', '学校 GPA': 'School GPA', '参考 GPA': 'Estimated GPA', '分档 GPA': 'Banded GPA', '线性折算 GPA': 'Linear GPA', '线性绩点': 'Linear points', '今日课程': 'Today\'s classes', '全部待办': 'All to-dos', '添加待办': 'Add to-do', '查看全部': 'View all',
     'Teams 作业': 'Teams assignments', 'ManageBac 作业': 'ManageBac assignments', '个人待办': 'Personal to-dos', '作业来源': 'Assignment source', '学科': 'Subject', '特别关注': 'Favorite', '已关注': 'Following',
     '未完成': 'Open', '已逾期': 'Overdue', '已完成': 'Completed', '全部': 'All', '全部学科': 'All subjects', '全部频道': 'All channels', '全部消息': 'All messages', '作业消息': 'Assignment messages', '其他通知': 'Other notifications',
     '打开 Teams': 'Open Teams', '登录／打开 Teams': 'Sign in / Open Teams', '打开 ManageBac': 'Open ManageBac', '打开希悦课表': 'Open schedule', '查看要求': 'View requirements', '查看原文 ↗': 'View original ↗', '查看 Teams 原文 ↗': 'View Teams original ↗',
@@ -94,6 +106,7 @@
     '现在没有待完成的事项': 'Nothing is due right now', '等待处理的任务': 'Tasks waiting for you', '优先回到原页面核对': 'Check the source page first', '有明确截止时间': 'With confirmed due dates', '仅本机勾选记录': 'Local completion records only', '等待成绩同步': 'Waiting for grade sync', '登录希悦并打开课表后，这里会显示当天课程。': 'Sign in to Seiue and open the schedule to see today\'s classes here.', '卡片只整理已经读取到的课程、成绩和作业；点击学校任务可查看原文要求。': 'Cards organize only captured schedules, grades, and assignments; open school tasks to read the original requirements.', '标为已完成：': 'Mark complete: ', '标为未完成：': 'Mark incomplete: ',
     '集中处理最重要的事': 'Focus on what matters most', '今日提示': 'Today\'s note', '信息以原平台为准': 'The source platform is authoritative', '等待课表同步': 'Waiting for schedule sync', '节已读取课程': 'captured classes', '7 天内': 'Within 7 days', 'CAMPUSDESK · 学习看板': 'CAMPUSDESK · STUDY BOARD', '今天，稳稳推进。': 'Today, make steady progress.', '把今天的课程和待办排得清清楚楚。': 'Keep today\'s classes and to-dos clear and organized.',
     '今天，也有条不紊。': 'Today, steady and organized.', '课程、成绩和待办，在这里从容安排。': 'Schedule, grades, and to-dos, organized in one place.', '完整课表': 'Full schedule', '先把你的课程表接进来': 'Connect your schedule first', '在应用中登录希悦并打开课程表，这里的每一天就有了安排。': 'Sign in to Seiue and open your schedule to plan each day here.', '打开希悦': 'Open Seiue', '成绩详情': 'Grade details', '非官方 · 等权参考': 'Unofficial · equally weighted', '门可用课程': ' available courses', '90 / 80 / 70 / 60 分 → 4 / 3 / 2 / 1，不含 AP 加权。': '90 / 80 / 70 / 60 points → 4 / 3 / 2 / 1. AP weighting is not included.', '不含 AP 加权。': 'AP weighting is not included.', '待办一览': 'To-do overview', '今日截止': 'Due today', '接下来要做': 'Up next', '完成勾选仅保存在本机': 'Completion checks stay on this Mac', '不代表已向学校提交': 'They do not submit work to school', '老师的反馈': 'Teacher feedback', '等待新的反馈': 'Waiting for new feedback', '同步后汇总已读取的老师评语。仅覆盖已读取页面。': 'Captured teacher feedback appears after sync; coverage is limited to pages read.', '个附件': ' attachment(s)', '打开学校任务': 'Open school task',
+    '课表日期': 'Schedule date', '校历事件': 'School calendar events', '导入校历': 'Import school calendar', '选择 .ics 校历文件': 'Choose an .ics calendar file', '尚未导入校历': 'No school calendar imported', '导入后会在总览和课程表中显示当天校历事件。': 'Imported events appear on the overview and schedule for their date.', '再次导入会替换当前本机校历。': 'Importing again replaces the calendar saved on this Mac.', '清除校历': 'Remove calendar', '全天': 'All day', '跨日': 'Multi-day', '导入于': 'Imported', '今天没有校历事件': 'No calendar events today', '没有校历事件': 'No calendar events for this date', '已导入校历：': 'Imported calendar: ', '请选择 .ics 格式的校历文件。': 'Choose a calendar file in .ics format.', '校历文件超过 5 MB': 'Calendar file exceeds 5 MB.', '校历文件不是有效的 UTF-8 文本': 'Calendar file is not valid UTF-8 text.', '无法读取校历文件': 'Could not read calendar file.', '校历文件过大，请选择 5 MB 以内的文件。': 'Calendar file is too large; choose a file under 5 MB.', '校历已导入，共 ': 'Calendar imported: ', ' 条事件。': ' event(s).', '导入会替换当前本机校历，确定继续吗？': 'Importing replaces the calendar saved on this Mac. Continue?', '确定清除本机导入的校历吗？': 'Remove the calendar saved on this Mac?', '校历已清除。': 'Calendar removed.', '校历导入失败：': 'Could not import calendar: ', '校历只保存在本机，不会上传。': 'The school calendar stays on this Mac and is never uploaded.',
     '课表日期': 'Schedule date', '自习仅补充学校页面中能确认时间的空白课节，不推测未读取的课表。': 'Self-study only fills confirmed open periods; it does not infer an unread schedule.', '勾选仅更新本机待办状态，不会提交作业、回复老师或修改 ManageBac / Teams。学科特别关注只保存在本机。': 'Checks only update local to-do status; they never submit work, reply to teachers, or modify ManageBac / Teams. Subject favorites stay on this Mac.',
     '发件人未标明': 'Sender unknown', '收件人未标明': 'Recipient unknown', '频道未标明': 'Channel unknown', '作业消息': 'Assignment message', 'EC 通知': 'EC notice', '频道消息': 'Channel message', '发送者未标明': 'Sender unknown', '发布日期未确认': 'Publication date unconfirmed', 'English Corner 通知': 'English Corner notice', '本条消息未读取到文字，请打开原页面。': 'This message has no captured text; open the original page.', '查看未完成范围': 'View incomplete coverage',
     'Teams 自动同步 · 0.4.0': 'Teams automatic sync · 0.4.0', '登录 Teams 后自动发现频道和聊天。': 'Sign in to Teams to automatically discover channels and chats.', '立即自动同步': 'Sync now', '优先读取 EC': 'Prioritize EC', '停止本轮': 'Stop this run', '连接设置': 'Connection settings', 'Teams 待完成作业': 'Teams open assignments', '自动发现账号可见页面，优先读取 EC；无需逐页关注。应用运行、Mac 唤醒且联网时按设置周期更新。学校要求重新验证时需要你登录。正式作业、成绩及全部历史尚未验证，不会当作已完整同步。': 'Automatically discovers pages visible to your account, prioritizing EC; no page-by-page following is needed. The app updates on schedule while running, awake, and online. Sign in again when the school asks. Assignments, grades, and full history are not yet verified as complete.', '查看未完成范围（': 'View incomplete coverage (', '范围（': 'coverage (', '正文尚未读取': 'Text not captured', '仅覆盖已加载消息': 'Only loaded messages are covered',
@@ -119,11 +132,11 @@
     'EC 智能定位': 'EC locator', '输入你的姓名别名后，只标出原文精确匹配及其附近可识别的时间/地点，始终可回原文核对。': 'Add name aliases to find exact mentions and nearby time or location details. Always verify against the original.', '我的姓名 / 英文名': 'My name / aliases', '多个名字用逗号分隔': 'Separate names with commas', '保存到本机': 'Save on this Mac', '查看原文': 'View original', '附件中心': 'Attachment center', '最多显示 100 个已发现附件': 'Up to 100 discovered attachments', '同名附件会提示数量；离线预览依赖已读取的文字，完整文件仍需打开原始附件。': 'Duplicate names are grouped. Offline preview uses captured text; open the source for the full file.', '已离线缓存文字': 'Text cached for offline reading', '已提取（截断）': 'Text extracted (truncated)', '可打开原附件': 'Original file available', '仅发现名称': 'Name only', '查看已缓存文字': 'View cached text', '已记录版本标识': 'Version tracked', '已捕获 ': ' captured ', '个版本标识': ' version IDs',
     '成绩目标模拟': 'Grade goal simulator', '模拟数据 · 不会改动学校成绩': 'Simulation · does not change school grades', '假设当前百分比是已完成部分的平均分，按剩余权重估算后续部分需要的分数；实际课程权重请以老师公布为准。': 'Assumes the current percentage is the completed-work average and estimates the score needed on remaining work. Use the teacher’s actual weighting when available.', '目标百分比': 'Target %', '剩余权重': 'Remaining weight %', '真实当前成绩': 'Real current grade', '按当前均分已达到目标': 'Target already reached at current average', '按此权重，目标将超过 100%，无法仅靠剩余部分达到': 'Target exceeds 100% under these assumptions', '剩余部分需达到 ': 'Need ', '当前没有已读取的课程': 'No captured class right now', '给自己一段安静的学习时间': 'Take a quiet moment to study', '最近截止日期': 'Coming deadlines', '退出专注': 'Exit focus', '专注模式': 'Focus mode', '专注': 'Focus',
     '学期 GPA 预测': 'Semester GPA forecast', '自动估算 · 本机保存': 'Estimate · saved on this Mac', '学期开始日期': 'Semester start date', '学期结束日期': 'Semester end date', '保存学期时间': 'Save semester dates', 'ManageBac 当前学期': 'Current ManageBac term', '尚未确认当前学期': 'Current term not confirmed', '先读取 ManageBac 当前学期课程。': 'Read courses for the current ManageBac term first.', '请补充学期起止日期。': 'Add the semester start and end dates.', '尚未读取到带明确权重的成绩组成。': 'No grade components with explicit weights have been captured.', '剩余部分参考 GPA': 'Estimated GPA for remaining work', '学期进度': 'Semester progress', '剩余天数': 'Days remaining', '已评分权重覆盖': 'Graded weight coverage', '门课程可预测': ' course(s) forecastable', '平稳情景': 'steady-performance scenario', '请先在 ManageBac 打开课程成绩/任务页并同步；只有页面明确显示的成绩和权重才会参与计算。': 'Open and sync the course grades/tasks in ManageBac first. Only scores and weights explicitly shown on the page are used.', '学期日期对学生端通常不可见，请按学校校历填写；不会根据作业截止日推算。': 'Term dates are usually hidden from student accounts. Enter them from the school calendar; assignment due dates are not used as a substitute.', '日期格式：YYYY-MM-DD（年-月-日）。': 'Date format: YYYY-MM-DD (year-month-day).', '请按 YYYY-MM-DD 填写有效的学期日期。': 'Enter valid semester dates in YYYY-MM-DD format.', '学期结束日期必须晚于开始日期。': 'End date must be later than start date.', '估算假设：未评分组成按本课程已评分组成的加权平均延续；课程之间等权。不是学校 GPA，也不保证实际结果。': 'Assumption: ungraded components continue at the course’s current weighted average; courses are equally weighted. This is not an official GPA or a guarantee.', '已评分组成': 'graded components', '总权重超出 100% 或成绩无效，已排除': 'excluded: invalid grades or total weights above 100%', '门课程因组成数据不完整或权重无效，未计入。': 'course(s) excluded because components or weights are missing or invalid.', '保存有效的学期日期。': 'Enter valid semester dates.',
-    '作业': 'Assignment', '消息': 'Message', '成绩': 'Grade', '反馈': 'Feedback', '组别 ': 'Group ', '原文时间 ': 'Source time ', '原文地点 ': 'Source location ', '成员原文 ': 'Members in source ', '附近没有明确的组别、时间、地点或成员字段': 'No explicit group, time, location, or member fields nearby', '新读取到记录（可能为新增，也可能是首次覆盖到此内容）': 'Newly captured record (may be new or newly covered)', 'EC 组别信息有变化': 'EC group details changed', 'EC 时间信息有变化': 'EC time details changed', 'EC 地点信息有变化': 'EC location details changed', 'EC 成员名单信息有变化': 'EC member list changed'
+    '作业': 'Assignment', '消息': 'Message', '成绩': 'Grade', '反馈': 'Feedback', '组别 ': 'Group ', '原文时间 ': 'Source time ', '原文地点 ': 'Source location ', '成员原文 ': 'Members in source ', '附近没有明确的组别、时间、地点或成员字段': 'No explicit group, time, location, or member fields nearby', '新读取到记录（可能为新增，也可能是首次覆盖到此内容）': 'First captured; verify whether new or newly covered', 'EC 组别信息有变化': 'EC group details changed', 'EC 时间信息有变化': 'EC time details changed', 'EC 地点信息有变化': 'EC location details changed', 'EC 成员名单信息有变化': 'EC member list changed', '成绩组成、类别权重或类别均分已更新': 'Grade components, category weights, or averages changed', '来源已明确移除此记录': 'The source explicitly removed this record'
   });
   const visualEnglish = Object.freeze({
     '<th>课程</th>': '<th>Course</th>', '<th>学期</th>': '<th>Term</th>',
-    '<th>百分制总评</th>': '<th>Overall grade (%)</th>', '<th>参考绩点</th>': '<th>Reference GPA</th>',
+    '<th>百分制总评</th>': '<th>Overall grade (%)</th>', '<th>参考绩点</th>': '<th>Reference GPA</th>', '<th>线性绩点</th>': '<th>Linear GPA</th>',
     '<td>未确认</td>': '<td>Unconfirmed</td>', 'class="num">未计入</td>': 'class="num">Excluded</td>',
     'aria-label="打开课程成绩"': 'aria-label="Open course grades"',
     '打开课程成绩': 'Open course grades',
@@ -152,7 +165,12 @@
     '学校网址未能保存，请检查网址及本机磁盘写入权限后重试。': 'Could not save school addresses. Check the addresses and local disk write access, then retry.'
   });
   function isEnglish() { return state.settings.language === 'en-US'; }
-  function t(value) { return isEnglish() && typeof value === 'string' ? (english[value] || scheduleEnglish[value] || visualEnglish[value] || schoolEnglish[value] || value) : value; }
+  function t(value) {
+    if (!isEnglish() || typeof value !== 'string') return value;
+    const termWarning = /^学期标签“(.+)”没有明确标注为当前学期；该课程暂不计入当前 GPA，请确认学期选择。$/.exec(value);
+    if (termWarning) return 'Term label “' + termWarning[1] + '” is not explicitly marked current; this course is excluded from current GPA until you confirm the selected term.';
+    return english[value] || scheduleEnglish[value] || visualEnglish[value] || schoolEnglish[value] || value;
+  }
   function localizedRuntimeText(value) {
     const text = String(value || '');
     if (!isEnglish()) return text;
@@ -192,6 +210,7 @@
   const icons = {
     overview: '<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>',
     schedule: '<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M7 3v4m10-4v4M3 10h18m-13 4h3m3 0h3m-9 3h3"/>',
+    pin: '<path d="M20 10c0 5-8 12-8 12S4 15 4 10a8 8 0 1 1 16 0Z"/><circle cx="12" cy="10" r="2.5"/>',
     grades: '<path d="M4 20V10m6 10V4m6 16v-7m5 7H2"/>',
     tasks: '<rect x="3" y="3" width="18" height="18" rx="3"/><path d="m7 12 3 3 7-7"/>',
     feedback: '<path d="M21 11a8 8 0 0 1-8 8H7l-4 3v-8a8 8 0 0 1 8-10h2a8 8 0 0 1 8 7Z"/><path d="M7 10h9m-9 4h6"/>',
@@ -266,6 +285,52 @@
     }
     render();
     if (saved) toast(t('学校网址已保存在本机，可以登录了。'));
+    if (saved && pendingQuickConnection) {
+      const source = pendingQuickConnection; pendingQuickConnection = null;
+      closeDialog('quick-connect-dialog'); send('connectSchool', { source });
+    }
+  }
+  function startQuickConnection(source, options = false) {
+    if (!['seiue', 'managebac', 'teams'].includes(source)) return;
+    if (!native) { toast(t('请在 Mac 应用中使用自动同步。')); return; }
+    if (!options && source !== 'teams' && sourceURL(source)) { send('connectSchool', { source }); return; }
+    if (!options && source === 'teams' && state.settings.teamsMode === 'graph') { navigate('settings'); document.getElementById('teams-settings')?.scrollIntoView(); return; }
+    if (!options && source === 'teams' && state.settings.teamsBrowserAutomation && state.settings.teamsAutoDiscover) { send('teams-auto-login'); return; }
+    quickConnectionSource = source;
+    const teams = source === 'teams';
+    document.getElementById('quick-connect-content').innerHTML = '<form id="quick-connect-form" novalidate><div class="dialog-heading"><h2 id="quick-connect-title">' + esc(sourceName(source)) + ' · ' + t('快捷连接') + '</h2>' + button('取消', 'close-quick-connect') + '</div><p class="settings-intro">' + t(teams ? '选择已登录学校账号的浏览器。首次连接按 Mac 提示授权，并在浏览器“显示 → 开发者”中允许来自 Apple 事件的 JavaScript。' : '填写学校网址，在学校原页面完成登录，CampusDesk 识别到课程后会自动同步。') + '</p>' + (teams
+      ? '<label for="quick-connect-browser">' + t('用于 Teams 的浏览器') + '</label><select id="quick-connect-browser"><option value="chrome" ' + (state.settings.teamsBrowser !== 'edge' ? 'selected' : '') + '>Google Chrome</option><option value="edge" ' + (state.settings.teamsBrowser === 'edge' ? 'selected' : '') + '>Microsoft Edge</option></select><label class="quick-connect-consent"><input id="quick-connect-consent" type="checkbox" ' + (state.settings.teamsBrowserAutomation ? 'checked' : '') + '><span>' + t('允许读取并自动同步 Teams') + '</span></label>'
+      : '<label for="quick-connect-url">' + t(source === 'seiue' ? '希悦网址' : '学校 ManageBac 网址') + '</label><input id="quick-connect-url" type="text" inputmode="url" autocomplete="url" spellcheck="false" value="' + esc(sourceURL(source)) + '" placeholder="https://school.' + (source === 'seiue' ? 'seiue.com' : 'managebac.cn') + '"><p class="field-hint">' + t('可直接粘贴学校登录页或课程页链接。') + '</p>') + '<p id="quick-connect-error" class="source-warning" role="alert"></p><p class="settings-intro">' + t('登录在学校或微软页面完成；CampusDesk 不保存账号密码。') + '</p><div class="dialog-actions"><button id="quick-connect-submit" class="button button-primary" type="submit">' + t(teams ? '登录并同步' : '保存并登录') + '</button></div></form>';
+    document.getElementById('quick-connect-dialog').showModal();
+    document.getElementById(teams ? 'quick-connect-browser' : 'quick-connect-url').focus();
+  }
+  function quickConnectionError(message) {
+    const error = document.getElementById('quick-connect-error');
+    if (error) error.textContent = t(message);
+    const submit = document.getElementById('quick-connect-submit');
+    if (submit) submit.disabled = false;
+  }
+  function submitQuickConnection() {
+    const source = quickConnectionSource;
+    if (!source || schoolSavePending) return;
+    if (source === 'teams') {
+      if (!document.getElementById('quick-connect-consent').checked) { quickConnectionError('请先勾选允许读取并自动同步 Teams。'); return; }
+      state.settings.teamsBrowser = document.getElementById('quick-connect-browser').value === 'edge' ? 'edge' : 'chrome';
+      state.settings.teamsMode = 'browser'; state.settings.teamsBrowserAutomation = true; state.settings.teamsAutoDiscover = true;
+      persist(); closeDialog('quick-connect-dialog'); render(); send('teams-auto-login'); return;
+    }
+    const raw = document.getElementById('quick-connect-url').value.trim();
+    let home = '';
+    try {
+      const url = new URL(raw.includes('://') ? raw : 'https://' + raw);
+      if (raw.length <= 2048 && url.protocol === 'https:' && !url.username && !url.password) home = Core.normalizeSchoolHome(url.origin, source);
+    } catch (_) {}
+    if (!home) { quickConnectionError('请输入对应平台的学校首页网址，例如 https://school.seiue.com 或 https://school.managebac.cn。'); return; }
+    if (home === sourceURL(source)) { closeDialog('quick-connect-dialog'); send('connectSchool', { source }); return; }
+    const config = Object.assign({}, Core.schoolHomes(), { [source]: home });
+    pendingQuickConnection = source; schoolSavePending = true;
+    document.getElementById('quick-connect-submit').disabled = true;
+    send('saveSchoolConfiguration', { config });
   }
   function sourceURL(source) { return source === 'teams' ? 'https://teams.microsoft.com/v2/' : Core.schoolHomes()[source] || ''; }
   function teamsBrowserName() { return state.settings.teamsBrowser === 'edge' ? 'Microsoft Edge' : 'Google Chrome'; }
@@ -448,6 +513,8 @@
     }).join('') + '</div>';
   }
   function noSchedule(date) {
+    const calendarRule = Core.schoolCalendarScheduleRule(state, date);
+    if (calendarRule && calendarRule.kind === 'holiday') return empty('schedule', isEnglish() ? 'School holiday' : '校历假期', isEnglish() ? 'Regular classes are hidden for this date. Check Seiue if the school changes the schedule.' : '这一天的常规课程已按导入的校历隐藏；如学校临时调整，请核对希悦课表。', button('打开希悦', 'open-source', 'data-source="seiue"', 'button-light'));
     const status = sourceStatus('seiue');
     const connected = Boolean(status.lastCapturedAt);
     return empty('schedule', connected ? '这一天暂无已读取的课程' : '先把你的课程表接进来', connected ? '可能没有课程，也可能尚未读取这一天。打开希悦核对并切换到对应日期，再同步。' : '在应用中登录希悦并打开课程表，这里的每一天就有了安排。', button('打开希悦', 'open-source', 'data-source="seiue"', 'button-light'));
@@ -455,8 +522,8 @@
   function getGpaView() {
     const official = Core.getOfficialGPA(state);
     const courses = Core.getCourses(state);
-    const estimate = Core.estimateGPA(courses);
-    return { official: official, estimate: estimate, courses: courses };
+    const estimate = Core.estimateGPA(courses), linear = Core.estimateLinearGPA(courses);
+    return { official: official, estimate: estimate, linear: linear, courses: courses };
   }
   function gpaTermKey(value) { return String(value || '').toLowerCase().replace(/\s*\((?:current|current term)\)\s*/g, '').trim(); }
   function gpaValue(value, scale) { return '<div class="gpa-value">' + (value == null || !Number.isFinite(Number(value)) ? '—' : Number(value).toFixed(2)) + '<small>/ ' + esc(scale || '4.00') + '</small></div>'; }
@@ -661,6 +728,37 @@
     const dates = [...new Set(teamsPosts('ec').map(ecDate).filter(Boolean))].sort().reverse();
     return heading('English Corner，记得赴约。', '搜索已读取原文和附件文字，核对最新安排。', button(icon('link') + '打开 Teams', 'open-source', 'data-source="teams"')) + teamsGuide() + '<div class="info-note">先核对取消或变更通知，再查看对应日期的名单；旧名单不代表今天的安排。下面按通知的明确发布日期筛选，不推断活动日期或参与人员。附件提取文字可能不完整，未匹配到姓名不代表不在名单中，请核对原件。</div>' + '<section class="card"><div class="ec-filters"><label for="ec-search">姓名或全文<input id="ec-search" type="search" value="' + esc(ecQuery) + '" placeholder="搜索通知和已解析附件" autocomplete="off" maxlength="200" aria-controls="ec-results"></label><label for="ec-date-filter">通知发布日期<select id="ec-date-filter" aria-controls="ec-results"><option value="all"' + (ecDateFilter === 'all' ? ' selected' : '') + '>全部日期</option><option value="unknown"' + (ecDateFilter === 'unknown' ? ' selected' : '') + '>仅日期未确认</option>' + dates.map(date => '<option value="' + date + '"' + (ecDateFilter === date ? ' selected' : '') + '>' + date + '</option>').join('') + '</select></label>' + button('清除筛选','ec-clear') + '</div><div id="ec-results">' + ecResultsHTML() + '</div>' + teamsWarning() + sourceFooter('teams') + '</section>';
   }
+  function calendarEventRows(date, compact) {
+    const events = Core.getSchoolCalendarEvents(state, date);
+    if (!events.length) return '<div class="empty small-empty"><h3>' + t(date === Core.today() ? '今天没有校历事件' : '没有校历事件') + '</h3></div>';
+    return '<div class="school-calendar-event-list' + (compact ? ' compact' : '') + '">' + events.map(event => {
+      const time = event.allDay ? t('全天') : ((event.displayStartTime || event.startTime || '—') + (event.displayEndTime || event.endTime ? '–' + (event.displayEndTime || event.endTime) : ''));
+      const dates = event.occurrenceDate !== date || event.durationDays > 1 ? '<small>' + esc(event.occurrenceDate) + (event.durationDays > 1 ? ' · ' + t('跨日') : '') + '</small>' : '';
+      return '<article class="school-calendar-event"><span class="school-calendar-event-time">' + esc(time) + '</span><div><strong>' + esc(event.title) + '</strong>' + (event.location ? '<small>' + icon('pin') + esc(event.location) + '</small>' : '') + (event.description ? '<p>' + esc(event.description) + '</p>' : '') + dates + '</div></article>';
+    }).join('') + '</div>';
+  }
+  function renderSchoolCalendar(date, full) {
+    const calendar = state.schoolCalendar || { fileName: '', importedAt: '', events: [] };
+    const rule = Core.schoolCalendarScheduleRule(state, date);
+    const controls = '<div class="calendar-import-actions"><button type="button" class="button button-light" data-action="import-school-calendar">' + icon('plus') + t('导入校历') + '</button>' + (calendar.events.length ? '<button type="button" class="text-button" data-action="clear-school-calendar">' + t('清除校历') + '</button>' : '') + '</div>';
+    const status = calendar.events.length ? '<p class="school-calendar-status">' + esc(t('已导入校历：') + calendar.fileName) + ' · ' + calendar.events.length + ' ' + t('条事件。') + (calendar.importedAt ? ' · ' + t('导入于') + ' ' + esc(lastUpdated(calendar.importedAt)) : '') + '</p>' : '<div class="empty small-empty"><h3>' + t('尚未导入校历') + '</h3><p>' + t('导入后会在总览和课程表中显示当天校历事件。') + '</p><p>' + t('再次导入会替换当前本机校历。') + '</p></div>';
+    const weekday = rule && rule.kind === 'makeup' ? (isEnglish() ? ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'][rule.weekday] : '周' + ['日','一','二','三','四','五','六'][rule.weekday]) : '';
+    let ruleText = '';
+    if (rule && rule.kind === 'makeup') {
+      const substituted = Core.getSchedule(state, date).filter(row => row.calendarSubstitute);
+      ruleText = isEnglish() ? 'Make-up day: recurring custom classes follow ' + weekday + '.' : '调休识别：每周自编课程按' + weekday + '显示。';
+      if (substituted.length) {
+        const sourceDate = substituted[0].calendarSourceDate;
+        ruleText += isEnglish() ? ' No same-day Seiue timetable was found; ' + substituted.length + ' school class(es) were provisionally copied from ' + sourceDate + '. Verify before relying on them.' : '当天未找到希悦课表，已按 ' + sourceDate + ' 的课表临时代入 ' + substituted.length + ' 节，请核对后使用。';
+      } else ruleText += isEnglish() ? ' School classes require a timetable for this date.' : '学校课程仍需希悦当天课表确认。';
+    } else if (rule) {
+      ruleText = isEnglish() ? 'Holiday: regular classes are hidden; date-specific custom classes remain visible.' : '假期识别：常规课程已隐藏；指定日期的自编课程仍显示。';
+      const conflict = Core.schoolCalendarScheduleConflict(state, date);
+      if (conflict) ruleText += isEnglish() ? ' Conflict: Seiue still lists ' + conflict.count + ' class(es) on this date; hidden according to the imported calendar. Please verify.' : '数据冲突：希悦仍记录当天 ' + conflict.count + ' 节课，但当前按导入校历隐藏，请核实是否为临时补课。';
+    }
+    const ruleNote = ruleText ? '<p class="school-calendar-rule">' + esc(ruleText) + '</p>' : '';
+    return '<section class="card school-calendar-card' + (full ? ' schedule-full' : '') + '">' + cardHeader('schedule', (isEnglish() ? 'School calendar events' : '校历事件') + ' · ' + esc(date), controls) + '<p class="school-calendar-local-note">' + t('校历只保存在本机，不会上传。') + '</p>' + status + ruleNote + (calendar.events.length ? calendarEventRows(date, !full) : '') + '</section>';
+  }
   function renderClassicOverview() {
     const today = Core.today(), classes = Core.getSchedule(state, today), tasks = Core.getTasks(state), feedback = Core.getFeedback(state);
     const openTasks = tasks.filter(t => !t.completed), overdue = openTasks.filter(t => taskDue(t).overdue).length;
@@ -674,8 +772,8 @@
     return heading('今天，也有条不紊。', topText, '<div class="date-stamp">' + esc(fmtDate(date, { year: 'numeric', month: 'long', day: 'numeric', weekday: 'long' })) + '<span>BEIJING · ' + esc(Core.clock()) + '</span></div>') +
       (!native ? '<div class="browser-banner">你正在使用网页预览。个人待办可以本地保存；学校登录与自动同步需要打开 CampusDesk Mac 应用。</div>' : '') +
       (!connected ? '<div class="connect-banner"><div class="banner-icon">' + icon('cloud') + '</div><div class="banner-copy"><h3>连接校园，开始你的第一天</h3><p>连接希悦、ManageBac 和 Teams，把课表、作业和通知放在一起。</p></div><div class="banner-actions">' + button('连接希悦', 'open-source', 'data-source="seiue"', 'button-primary') + button('连接 ManageBac', 'open-source', 'data-source="managebac"') + teamsPrimaryButton() + '</div></div>' : '') +
-      renderClassClock() + '<div class="overview-grid"><section class="card schedule-card">' + cardHeader('schedule', '今日课程', goLink('schedule', '完整课表')) + (classes.length ? scheduleRows(classes, today) : noSchedule(today)) + sourceFooter('seiue') + '</section>' +
-      '<section class="card gpa-card">' + cardHeader('grades', gpa.official ? '学校 GPA' : '参考 GPA', goLink('grades', '成绩详情')) + '<div class="gpa-row">' + gpaValue(displayGpa && displayGpa.value, displayGpa && displayGpa.scale) + '<div class="gpa-detail">' + (gpa.official ? '学校页面显示的 GPA<br>' + esc(gpa.official.label || '') : '非官方 · 等权参考<br>' + esc(gpa.estimate.count || 0) + ' 门可用课程') + '</div></div><p class="gpa-note">' + (gpa.official ? '以学校正式成绩单为准。' : '90 / 80 / 70 / 60 分 → 4 / 3 / 2 / 1，不含 AP 加权。') + '</p></section>' +
+      renderClassClock() + '<div class="overview-grid"><section class="card schedule-card">' + cardHeader('schedule', '今日课程', goLink('schedule', '完整课表')) + (classes.length ? scheduleRows(classes, today) : noSchedule(today)) + sourceFooter('seiue') + '</section>' + renderSchoolCalendar(today, false) +
+      '<section class="card gpa-card">' + cardHeader('grades', gpa.official ? '学校 GPA' : '参考 GPA', goLink('grades', '成绩详情')) + '<div class="gpa-row">' + gpaValue(displayGpa && displayGpa.value, displayGpa && displayGpa.scale) + '<div class="gpa-detail">' + (gpa.official ? '学校页面显示的 GPA<br>' + esc(gpa.official.label || '') : '非官方 · 等权参考<br>' + esc(gpa.estimate.count || 0) + ' 门可用课程') + '</div></div><p class="gpa-note">' + (gpa.official ? '以学校正式成绩单为准。' : '90 / 80 / 70 / 60 分 → 4 / 3 / 2 / 1，不含 AP 加权。') + '</p><div class="gpa-method-pair"><span>' + (isEnglish() ? 'Banded GPA' : '分档 GPA') + ' ' + gpaValue(gpa.estimate.value, '4.00') + '</span><span>' + (isEnglish() ? 'Linear GPA' : '线性折算 GPA') + ' ' + gpaValue(gpa.linear.value, '4.00') + '</span></div></section>' +
       '<section class="card task-summary-card">' + cardHeader('tasks', '待办一览', goLink('tasks', '全部待办')) + '<div class="task-stats"><div class="stat"><span class="stat-number">' + openTasks.length + '</span><span class="stat-name">未完成</span></div><div class="stat"><span class="stat-number">' + dueToday + '</span><span class="stat-name">今日截止</span></div><div class="stat overdue"><span class="stat-number">' + overdue + '</span><span class="stat-name">已逾期</span></div></div></section></div>' +
       '<div class="overview-bottom"><section class="card overview-task-sources">' + cardHeader('tasks', '接下来要做', button(icon('plus') + '添加待办', 'add-task', '', 'button-plain')) + (openTasks.length ? taskPreview : '<div class="empty small-empty"><h3>给重要的事留一个位置</h3><p>学校任务会在同步后出现，也可以先添加自己的待办。</p></div>') + '<div class="section-foot"><span>完成勾选仅保存在本机</span><span>不代表已向学校提交</span></div></section><section class="card feedback-preview">' + cardHeader('feedback', '老师的反馈', goLink('feedback', '查看全部')) + (feedback.length ? feedbackRows(feedback, 1) : '<div class="empty small-empty"><h3>等待新的反馈</h3><p>同步后汇总已读取的老师评语。仅覆盖已读取页面。</p></div>') + sourceFooter('managebac') + '</section></div>';
   }
@@ -707,10 +805,10 @@
     const topText = course.current ? (isEnglish() ? 'Current class: ' + course.current.title + ' ends at ' + (course.current.end || 'the end of class') + '.' : '正在上 ' + course.current.title + '，' + (course.current.end || '课后') + ' 结束。') : course.next ? (isEnglish() ? 'Next: ' + course.next.title + ' starts at ' + (course.next.start || 'TBD') + '.' : '下一节 ' + course.next.title + '，' + (course.next.start || '时间待定') + ' 开始。') : t('把今天的课程和待办排得清清楚楚。');
     const classPreview = classes.slice(0, 3).map(item => '<div class="board-class-row"><span>' + esc(item.start || '—') + '</span><strong>' + esc(item.title || '自习课') + '</strong><small>' + esc(item.room || '地点待确认') + '</small></div>').join('');
     const boardClock = '<div class="board-header-clock">' + renderClassClock() + '</div>';
-    const metrics = '<div class="board-kpi-grid"><article class="board-kpi board-kpi-open"><span>未完成</span><strong>' + openTasks.length + '</strong><small>等待处理的任务</small></article><article class="board-kpi board-kpi-overdue"><span>已逾期</span><strong>' + overdue + '</strong><small>优先回到原页面核对</small></article><article class="board-kpi board-kpi-week"><span>7 天内</span><strong>' + nextWeek + '</strong><small>有明确截止时间</small></article><article class="board-kpi board-kpi-done"><span>已完成</span><strong>' + completed + '</strong><small>仅本机勾选记录</small></article><article class="board-kpi board-kpi-gpa"><span>' + (gpa.official ? '学校 GPA' : '参考 GPA') + '</span><strong>' + (displayGpa && displayGpa.value != null ? esc(Number(displayGpa.value).toFixed(2)) : '—') + '</strong><small>' + (displayGpa && displayGpa.scale ? '/ ' + esc(displayGpa.scale) : '等待成绩同步') + '</small></article></div>';
+    const metrics = '<div class="board-kpi-grid"><article class="board-kpi board-kpi-open"><span>未完成</span><strong>' + openTasks.length + '</strong><small>等待处理的任务</small></article><article class="board-kpi board-kpi-overdue"><span>已逾期</span><strong>' + overdue + '</strong><small>优先回到原页面核对</small></article><article class="board-kpi board-kpi-week"><span>7 天内</span><strong>' + nextWeek + '</strong><small>有明确截止时间</small></article><article class="board-kpi board-kpi-done"><span>已完成</span><strong>' + completed + '</strong><small>仅本机勾选记录</small></article><article class="board-kpi board-kpi-gpa"><span>' + (gpa.official ? '学校 GPA' : '参考 GPA') + '</span><strong>' + (displayGpa && displayGpa.value != null ? esc(Number(displayGpa.value).toFixed(2)) : '—') + '</strong><small>' + (displayGpa && displayGpa.scale ? '/ ' + esc(displayGpa.scale) : '等待成绩同步') + '</small></article><article class="board-kpi board-kpi-gpa-linear"><span>' + t('线性折算 GPA') + '</span><strong>' + (gpa.linear.value == null ? '—' : gpa.linear.value.toFixed(2)) + '</strong><small>/ 4.00 · ' + (isEnglish() ? 'Unofficial' : '非官方') + '</small></article></div>';
     const boardTasks = taskSourceSections(openTasks, rows => boardTaskCards(rows, 6));
     const taskSection = '<section class="board-task-section"><div class="board-section-heading"><div><p>全部待办</p><h2>集中处理最重要的事</h2></div><div>' + button(icon('plus') + '添加待办', 'add-task', '', 'button-primary') + button('查看全部', 'go-tasks', '', 'button-light') + '</div></div><div class="board-source-groups">' + (openTasks.length ? boardTasks : boardTaskCards(openTasks)) + '</div>' + (openTasks.length > 15 ? '<p class="board-more">另有 ' + (openTasks.length - 15) + ' 项，前往“待办事项”查看。</p>' : '') + '</section>';
-    const side = '<aside class="board-side-column"><section class="board-mini-card"><p>今日课程</p><h2>' + (classes.length ? classes.length + ' 节已读取课程' : '等待课表同步') + '</h2>' + (classPreview || '<p class="board-muted">登录希悦并打开课表后，这里会显示当天课程。</p>') + '</section><section class="board-mini-card board-tip"><p>今日提示</p><h2>信息以原平台为准</h2><span>卡片只整理已经读取到的课程、成绩和作业；点击学校任务可查看原文要求。</span></section></aside>';
+    const side = '<aside class="board-side-column"><section class="board-mini-card"><p>今日课程</p><h2>' + (classes.length ? classes.length + ' 节已读取课程' : '等待课表同步') + '</h2>' + (classPreview || '<p class="board-muted">登录希悦并打开课表后，这里会显示当天课程。</p>') + '</section>' + renderSchoolCalendar(today, false) + '<section class="board-mini-card board-tip"><p>今日提示</p><h2>信息以原平台为准</h2><span>卡片只整理已经读取到的课程、成绩和作业；点击学校任务可查看原文要求。</span></section></aside>';
     return '<section class="board-panel"><div class="board-hero"><div><p class="board-eyebrow">CAMPUSDESK · 学习看板</p><h1>今天，稳稳推进。</h1><p>' + esc(topText) + '</p></div><div class="board-hero-actions"><span>' + esc(fmtDate(new Date(), { month: 'long', day: 'numeric', weekday: 'long' })) + '</span>' + button(icon('settings') + '面板样式', 'appearance-settings', '', 'button-light') + '</div></div>' + boardClock + metrics + '<div class="board-layout">' + taskSection + side + '</div></section>';
   }
   function renderOverview() {
@@ -718,7 +816,7 @@
   }
   function renderSchedule() {
     const rows = Core.getSchedule(state, selectedDate);
-    return heading('为每一节课，留好位置。', '以北京时间展示课程。空白课节按你的设置显示为自习。') + (selectedDate === Core.today() ? renderClassClock() : '') + '<div class="page-tools"><div class="date-control"><button class="icon-button" type="button" data-action="prev-day" aria-label="前一天">' + icon('back') + '</button><label class="visually-hidden" for="schedule-date">课表日期</label><input id="schedule-date" type="date" value="' + esc(selectedDate) + '"><button class="icon-button" type="button" data-action="next-day" aria-label="后一天">' + icon('arrow') + '</button><span class="date-day">' + esc(dayLabel(selectedDate)) + '</span>' + button('今天', 'today') + '</div>' + button(icon('link') + '打开希悦课表', 'open-source', 'data-source="seiue"') + '</div>' + renderScheduleConflicts(rows, selectedDate) + '<section class="card schedule-full">' + cardHeader('schedule', selectedDate === Core.today() ? '今日课程' : esc(selectedDate) + ' 的课程', '<span class="card-kicker">' + rows.length + ' 节已读取课程</span>') + (rows.length ? scheduleRows(rows, selectedDate) : noSchedule(selectedDate)) + sourceFooter('seiue') + '</section>' + renderCustomSchedule() + '<p class="footer-note">自习仅补充学校页面中能确认时间的空白课节，不推测未读取的课表。</p>';
+    return heading('为每一节课，留好位置。', '以北京时间展示课程。空白课节按你的设置显示为自习。') + (selectedDate === Core.today() ? renderClassClock() : '') + '<div class="page-tools"><div class="date-control"><button class="icon-button" type="button" data-action="prev-day" aria-label="前一天">' + icon('back') + '</button><label class="visually-hidden" for="schedule-date">课表日期</label><input id="schedule-date" type="date" value="' + esc(selectedDate) + '"><button class="icon-button" type="button" data-action="next-day" aria-label="后一天">' + icon('arrow') + '</button><span class="date-day">' + esc(dayLabel(selectedDate)) + '</span>' + button('今天', 'today') + '</div>' + button(icon('link') + '打开希悦课表', 'open-source', 'data-source="seiue"') + '</div>' + renderScheduleConflicts(rows, selectedDate) + '<section class="card schedule-full">' + cardHeader('schedule', selectedDate === Core.today() ? '今日课程' : esc(selectedDate) + ' 的课程', '<span class="card-kicker">' + rows.length + ' 节已读取课程</span>') + (rows.length ? scheduleRows(rows, selectedDate) : noSchedule(selectedDate)) + sourceFooter('seiue') + '</section>' + renderSchoolCalendar(selectedDate, true) + renderCustomSchedule() + '<p class="footer-note">自习仅补充学校页面中能确认时间的空白课节，不推测未读取的课表。</p>';
   }
   function renderScheduleConflicts(rows, date) {
     const timed = rows.filter(row => row.start && row.end && /^\d{2}:\d{2}$/.test(row.start) && /^\d{2}:\d{2}$/.test(row.end)).map(row => ({ row, start: row.start, end: row.end })).sort((a, b) => a.start.localeCompare(b.start));
@@ -925,9 +1023,9 @@
   function renderGrades() {
     const gpa = getGpaView();
     return heading('看见积累，也看见进步。', '先确认成绩来自哪一门课、哪一个学期，再理解 GPA。', button(icon('link') + '打开成绩页面', 'open-source', 'data-source="managebac"')) +
-      '<div class="grade-top"><section class="card">' + cardHeader('grades', '学校 GPA', '<span class="card-kicker">学校公布</span>') + gpaValue(gpa.official && gpa.official.value, gpa.official ? gpa.official.scale : '—') + '<p class="gpa-note">' + (gpa.official ? esc(gpa.official.label || '来自已读取的学校页面，以正式成绩单为准。') : '尚未读取到学校公布的 GPA。这里不会用参考值替代。') + '</p></section><section class="card">' + cardHeader('grades', '参考 GPA', '<span class="card-kicker">非官方 · 4.0 制</span>') + gpaValue(gpa.estimate.value, '4.00') + '<p class="gpa-note">' + esc(gpaEstimateCaption(gpa.estimate)) + '</p></section></div>' +
-      '<div class="info-note">参考换算：90–100 → 4.0；80–89.99 → 3.0；70–79.99 → 2.0；60–69.99 → 1.0；低于 60 → 0。仅使用能确认的当前学期课程总评，不把单次作业分数当总评；不含学分与 AP 加权，也不代表学校的换算规则。</div>' + renderGradePie(gpa.courses, gpa.official || gpa.estimate) + '<section class="card">' + cardHeader('book', '课程成绩', '<span class="card-kicker">' + gpa.courses.length + ' 门已读取课程</span>') +
-      (gpa.courses.length ? '<div style="overflow-x:auto"><table class="grade-table"><thead><tr><th>课程</th><th>学期</th><th>百分制总评</th><th>参考绩点</th><th></th></tr></thead><tbody>' + gpa.courses.map(c => '<tr><td class="course-name">' + esc(c.name) + '</td><td>' + esc(c.term || '未确认') + '</td><td class="num">' + (c.percentage == null ? '—' : esc(Number(c.percentage).toFixed(1)) + '%') + (c.percentage == null ? '' : '<span class="grade-bar"><span style="width:' + Math.max(0, Math.min(100, Number(c.percentage) || 0)) + '%"></span></span>') + '</td><td class="num">' + (c.gpaEligible === false || c.percentage == null ? '未计入' : Core.estimateGPA([c]).value == null ? '未计入' : Number(Core.estimateGPA([c]).value).toFixed(2)) + '</td><td>' + (c.url ? '<button type="button" class="icon-button" data-action="open-source" data-source="managebac" data-url="' + esc(c.url) + '" aria-label="打开课程成绩">' + icon('link') + '</button>' : '') + '</td></tr>').join('') + '</tbody></table></div>' : empty('grades', '你的成绩，值得准确地记录', '登录 ManageBac 并打开当前学期成绩页面。读取到课程总评后，参考 GPA 会自动计算。', button('打开 ManageBac', 'open-source', 'data-source="managebac"'))) + sourceFooter('managebac') + '</section>' + renderGradeGoalSimulation(gpa.courses) + renderSemesterGpaForecast(gpa.courses) + renderKlineChartHistory();
+      '<div class="grade-top dual-estimates"><section class="card">' + cardHeader('grades', '学校 GPA', '<span class="card-kicker">学校公布</span>') + gpaValue(gpa.official && gpa.official.value, gpa.official ? gpa.official.scale : '—') + '<p class="gpa-note">' + (gpa.official ? esc(gpa.official.label || '来自已读取的学校页面，以正式成绩单为准。') : '尚未读取到学校公布的 GPA。这里不会用参考值替代。') + '</p></section><section class="card">' + cardHeader('grades', '分档 GPA', '<span class="card-kicker">非官方 · 4.0 制</span>') + gpaValue(gpa.estimate.value, '4.00') + '<p class="gpa-note">' + esc(gpaEstimateCaption(gpa.estimate)) + '</p></section><section class="card">' + cardHeader('grades', '线性折算 GPA', '<span class="card-kicker">' + (isEnglish() ? 'Unofficial · 4.0 scale' : '非官方 · 4.0 制') + '</span>') + gpaValue(gpa.linear.value, '4.00') + '<p class="gpa-note">' + esc(gpaEstimateCaption(gpa.linear)) + '</p></section></div>' +
+      '<div class="info-note">' + (isEnglish() ? 'Banded: 90/80/70/60 → 4/3/2/1, below 60 → 0. Linear: each course percentage ÷ 100 × 4; then average eligible courses without rounding individual points. Both use confirmed current-term course grades, exclude missing courses and AP weighting, and are not official school GPA.' : '分档：90/80/70/60 分 → 4/3/2/1，低于 60 分为 0。线性：每科百分制总评 ÷ 100 × 4，先按课程等权平均，最后显示两位小数。两种结果都只使用可确认的当前学期课程总评，排除缺失课程，不含 AP 加权，也不是学校官方 GPA。') + '</div>' + renderGradePie(gpa.courses, gpa.official || gpa.estimate) + '<section class="card">' + cardHeader('book', '课程成绩', '<span class="card-kicker">' + gpa.courses.length + ' 门已读取课程</span>') +
+      (gpa.courses.length ? '<div style="overflow-x:auto"><table class="grade-table"><thead><tr><th>课程</th><th>学期</th><th>百分制总评</th><th>参考绩点</th><th>线性绩点</th><th></th></tr></thead><tbody>' + gpa.courses.map(c => '<tr><td class="course-name">' + esc(c.name) + '</td><td>' + esc(c.term || '未确认') + '</td><td class="num">' + (c.percentage == null ? '—' : esc(Number(c.percentage).toFixed(1)) + '%') + (c.percentage == null ? '' : '<span class="grade-bar"><span style="width:' + Math.max(0, Math.min(100, Number(c.percentage) || 0)) + '%"></span></span>') + '</td><td class="num">' + (c.gpaEligible === false || c.percentage == null ? '未计入' : Core.estimateGPA([c]).value == null ? '未计入' : Number(Core.estimateGPA([c]).value).toFixed(2)) + '</td><td class="num">' + (Core.estimateLinearGPA([c]).value == null ? '未计入' : Core.estimateLinearGPA([c]).value.toFixed(2)) + '</td><td>' + (c.url ? '<button type="button" class="icon-button" data-action="open-source" data-source="managebac" data-url="' + esc(c.url) + '" aria-label="打开课程成绩">' + icon('link') + '</button>' : '') + '</td></tr>').join('') + '</tbody></table></div>' : empty('grades', '你的成绩，值得准确地记录', '登录 ManageBac 并打开当前学期成绩页面。读取到课程总评后，参考 GPA 会自动计算。', button('打开 ManageBac', 'open-source', 'data-source="managebac"'))) + sourceFooter('managebac') + '</section>' + renderGradeGoalSimulation(gpa.courses) + renderSemesterGpaForecast(gpa.courses) + renderKlineChartHistory('banded') + renderKlineChartHistory('linear');
   }
   function gpaHistoryTimestamp(item) {
     const raw = String(item && (item.capturedAt || item.date) || '').trim();
@@ -951,13 +1049,22 @@
       return { timestamp: anchor + Number(key) * intervalMs, open, high: Math.max.apply(null, values.concat(open)), low: Math.min.apply(null, values.concat(open)), close, volume: groupedRows.reduce((sum, row) => sum + (Number(row.item.count) || 0), 0), periodKey: key, sourceCount: groupedRows.length };
     });
   }
-  function renderKlineChartHistory() {
-    const history = (state.gradeHistory || []).filter(h => h.value != null && Number.isFinite(Number(h.value))).slice().sort((a, b) => gpaHistoryTimestamp(a) - gpaHistoryTimestamp(b));
-    if (!history.length) return '';
+  function gpaChartHistory(mode) {
+    const field = mode === 'linear' ? 'linearValue' : 'value';
+    return (state.gradeHistory || []).filter(h => h[field] != null && Number.isFinite(Number(h[field])))
+      .map(h => Object.assign({}, h, { value: Number(h[field]) }))
+      .sort((a, b) => gpaHistoryTimestamp(a) - gpaHistoryTimestamp(b));
+  }
+  function renderKlineChartHistory(mode) {
+    const history = gpaChartHistory(mode);
+    if (!history.length && mode === 'banded') return '';
     const palette = state.settings.gpaCandleColors === 'green-up' ? { up: '#4f8a70', down: '#c47768', label: '绿涨红跌' } : { up: '#c47768', down: '#4f8a70', label: '红涨绿跌' };
     const interval = GPA_KLINE_INTERVALS[gpaKlineIntervalIndex] || GPA_KLINE_INTERVALS[5], data = gpaKlineBuckets(history, interval.ms), tickLabels = GPA_KLINE_INTERVALS.map((item, index) => '<option value="' + index + '" label="' + item.short + '"></option>').join('');
     const intervalLabel = gpaIntervalLabel(interval), shortLabel = gpaIntervalLabel(GPA_KLINE_INTERVALS[0]), dayLabel = gpaIntervalLabel(GPA_KLINE_INTERVALS[5]), longLabel = gpaIntervalLabel(GPA_KLINE_INTERVALS[GPA_KLINE_INTERVALS.length - 1]);
-    return '<section class="card gpa-kline-card" style="margin-top:21px"><div class="card-header"><h2 class="card-title"><span class="icon">' + icon('clock') + '</span>' + (isEnglish() ? 'Local GPA candlestick chart' : '本机 GPA K 线') + '</h2><span class="card-kicker">' + intervalLabel + ' · ' + data.length + (isEnglish() ? ' periods' : ' 个周期') + '</span></div><div class="gpa-kline-time-control"><div class="gpa-kline-time-heading"><span>' + (isEnglish() ? 'Time interval' : '时间分度值') + '</span><output id="gpa-kline-interval-output" for="gpa-kline-interval">' + intervalLabel + '</output></div><input id="gpa-kline-interval" type="range" min="0" max="' + (GPA_KLINE_INTERVALS.length - 1) + '" step="1" value="' + gpaKlineIntervalIndex + '" list="gpa-kline-interval-ticks" data-action="gpa-kline-interval" aria-label="' + (isEnglish() ? 'Choose GPA chart interval' : '选择 GPA K 线时间分度值') + '"><datalist id="gpa-kline-interval-ticks">' + tickLabels + '</datalist><div class="gpa-kline-time-scale"><span>' + shortLabel + '</span><span>' + dayLabel + '</span><span>' + longLabel + '</span></div></div><div class="gpa-kline-plot"><div id="gpa-kline-chart" aria-label="GPA candlestick chart" style="width:100%;height:500px;min-height:420px"></div></div><div class="gpa-kline-legend"><span><i style="background:' + palette.up + '"></i>' + (isEnglish() ? 'Rising candles' : '上涨柱') + '</span><span><i style="background:' + palette.down + '"></i>' + (isEnglish() ? 'Falling candles' : '下降柱') + '</span><span><i class="line"></i>' + (isEnglish() ? 'Close line' : '收盘折线') + '</span><span>' + (isEnglish() ? 'Current: ' : '当前：') + intervalLabel + '</span><span>' + (isEnglish() ? 'Hover to snap to the close line; show GPA only' : '悬停只吸附收盘折线并显示 GPA 数值，不吸附日期') + '</span></div><p class="gpa-note">' + (isEnglish() ? 'Records are grouped into fixed intervals from the first GPA entry. Candle tops show the close GPA; the line connects period closes. Volume and MACD appear below.' : '时间分度值按首条 GPA 记录起算并聚合到固定窗口；柱顶显示收盘 GPA，折线连接各周期收盘值。下方同时显示成交量与 MACD 技术指标。') + '</p></section>';
+    const linear = mode === 'linear', chartId = linear ? 'gpa-kline-linear-chart' : 'gpa-kline-chart';
+    const title = linear ? (isEnglish() ? 'Linear GPA candlestick chart' : '线性折算 GPA K 线') : (isEnglish() ? 'Banded GPA candlestick chart' : '分档 GPA K 线');
+    const emptyHistory = isEnglish() ? 'Older records contain only banded GPA. The linear chart begins with the next ManageBac grade sync; past linear values are not invented.' : '旧历史仅保存分档 GPA。下次同步 ManageBac 成绩后开始记录线性 K 线；不会用分档值伪造旧数据。';
+    return '<section class="card gpa-kline-card" style="margin-top:21px"><div class="card-header"><h2 class="card-title"><span class="icon">' + icon('clock') + '</span>' + title + '</h2><span class="card-kicker">' + intervalLabel + ' · ' + data.length + (isEnglish() ? ' periods' : ' 个周期') + '</span></div>' + (linear ? '' : '<div class="gpa-kline-time-control"><div class="gpa-kline-time-heading"><span>' + (isEnglish() ? 'Time interval · both charts' : '时间分度值 · 两张图同步') + '</span><output id="gpa-kline-interval-output" for="gpa-kline-interval">' + intervalLabel + '</output></div><input id="gpa-kline-interval" type="range" min="0" max="' + (GPA_KLINE_INTERVALS.length - 1) + '" step="1" value="' + gpaKlineIntervalIndex + '" list="gpa-kline-interval-ticks" data-action="gpa-kline-interval" aria-label="' + (isEnglish() ? 'Choose GPA chart interval' : '选择 GPA K 线时间分度值') + '"><datalist id="gpa-kline-interval-ticks">' + tickLabels + '</datalist><div class="gpa-kline-time-scale"><span>' + shortLabel + '</span><span>' + dayLabel + '</span><span>' + longLabel + '</span></div></div>') + (data.length ? '<div class="gpa-kline-plot"><div id="' + chartId + '" aria-label="' + title + '" style="width:100%;height:500px;min-height:420px"></div></div><div class="gpa-kline-legend"><span><i style="background:' + palette.up + '"></i>' + (isEnglish() ? 'Rising candles' : '上涨柱') + '</span><span><i style="background:' + palette.down + '"></i>' + (isEnglish() ? 'Falling candles' : '下降柱') + '</span><span><i class="line"></i>' + (isEnglish() ? 'Close line' : '收盘折线') + '</span><span>' + (isEnglish() ? 'Hover to snap to the close line; show GPA only' : '悬停只吸附收盘折线并显示 GPA 数值，不吸附日期') + '</span></div>' : '<div class="info-note">' + emptyHistory + '</div>') + '<p class="gpa-note">' + (isEnglish() ? 'Each candle uses local grade-history records for this method. The close line and labels show GPA; the shared interval controls both charts.' : '每根柱仅使用对应算法的本机成绩记录；折线和柱头显示 GPA，时间分度值同时控制两张图。') + '</p></section>';
   }
   function gpaIntervalLabel(interval) { return isEnglish() ? interval.short : interval.label; }
   function ensureGpaValueOverlay(lib) {
@@ -973,11 +1080,12 @@
     } });
     window.__campusGpaValueOverlay = true;
   }
-  function zoomGpaKline(step) {
-    if (!gpaKlineChart) return;
-    const container = document.getElementById('gpa-kline-chart');
+  function zoomGpaKline(step, mode) {
+    mode = mode === 'linear' ? 'linear' : 'banded';
+    if (!gpaKlineCharts[mode]) return;
+    const container = document.getElementById(mode === 'linear' ? 'gpa-kline-linear-chart' : 'gpa-kline-chart');
     if (!container) return;
-    const chart = gpaKlineChart, width = Math.max(240, container.clientWidth - 80);
+    const chart = gpaKlineCharts[mode], width = Math.max(240, container.clientWidth - 80);
     const space = step === 0 ? Math.max(48, Math.min(100, width / (chart.getDataList().length + 2))) : Math.max(48, Math.min(120, chart.getBarSpace().bar * (step > 0 ? 1.2 : 1 / 1.2)));
     chart.setBarSpace(space);
     if (step === 0) chart.setOffsetRightDistance(Math.max(48, (width - chart.getDataList().length * space) / 2));
@@ -990,7 +1098,7 @@
     const layer = document.createElement('div');
     layer.className = 'gpa-kline-hover';
     layer.setAttribute('aria-hidden', 'true');
-    layer.innerHTML = '<i class="gpa-hover-horizontal"></i><i class="gpa-hover-vertical"></i><i class="gpa-hover-dot"></i><span id="gpa-kline-snap-value" class="gpa-kline-snap-value"></span>';
+    layer.innerHTML = '<i class="gpa-hover-horizontal"></i><i class="gpa-hover-vertical"></i><i class="gpa-hover-dot"></i><span class="gpa-kline-snap-value"' + (container.id === 'gpa-kline-chart' ? ' id="gpa-kline-snap-value"' : '') + '></span>';
     container.appendChild(layer);
     const badge = layer.querySelector('span');
     const hide = () => { layer.hidden = true; badge.hidden = true; };
@@ -1055,14 +1163,16 @@
     };
     chart._campusHoverCleanup = container._gpaSnapCleanup;
   }
-  function mountGpaKlineChart() {
-    const container = document.getElementById('gpa-kline-chart'), lib = window.klinecharts;
+  function mountGpaKlineChart(mode) {
+    mode = mode === 'linear' ? 'linear' : 'banded';
+    const container = document.getElementById(mode === 'linear' ? 'gpa-kline-linear-chart' : 'gpa-kline-chart'), lib = window.klinecharts;
     if (!container || !lib || typeof lib.init !== 'function') return;
-    if (!document.getElementById('gpa-kline-tools')) {
+    const toolsId = mode === 'linear' ? 'gpa-kline-linear-tools' : 'gpa-kline-tools';
+    if (!document.getElementById(toolsId)) {
       const toolbar = document.createElement('div');
-      toolbar.id = 'gpa-kline-tools';
+      toolbar.id = toolsId;
       toolbar.className = 'gpa-kline-tools';
-      toolbar.innerHTML = '<span>' + (isEnglish() ? 'Drag to pan · ⌘/Ctrl + scroll to zoom' : '拖动平移 · ⌘/Ctrl + 滚轮缩放') + '</span><div><button type="button" data-action="gpa-kline-zoom" data-step="-1" aria-label="' + (isEnglish() ? 'Zoom out' : '缩小 K 线') + '">−</button><button type="button" data-action="gpa-kline-zoom" data-step="1" aria-label="' + (isEnglish() ? 'Zoom in' : '放大 K 线') + '">+</button><button type="button" data-action="gpa-kline-zoom" data-step="0">' + (isEnglish() ? 'Reset view' : '重置视图') + '</button></div>';
+      toolbar.innerHTML = '<span>' + (isEnglish() ? 'Drag to pan · ⌘/Ctrl + scroll to zoom' : '拖动平移 · ⌘/Ctrl + 滚轮缩放') + '</span><div><button type="button" data-action="gpa-kline-zoom" data-mode="' + mode + '" data-step="-1" aria-label="' + (isEnglish() ? 'Zoom out' : '缩小 K 线') + '">−</button><button type="button" data-action="gpa-kline-zoom" data-mode="' + mode + '" data-step="1" aria-label="' + (isEnglish() ? 'Zoom in' : '放大 K 线') + '">+</button><button type="button" data-action="gpa-kline-zoom" data-mode="' + mode + '" data-step="0">' + (isEnglish() ? 'Reset view' : '重置视图') + '</button></div>';
       container.parentElement.before(toolbar);
     }
     if (!container.dataset.gpaGestures) {
@@ -1073,21 +1183,21 @@
         event.stopPropagation();
         if (event.ctrlKey || event.metaKey) {
           event.preventDefault();
-          if (event.deltaY) zoomGpaKline(event.deltaY < 0 ? 1 : -1);
+          if (event.deltaY) zoomGpaKline(event.deltaY < 0 ? 1 : -1, mode);
         } else if (Math.abs(event.deltaX) > Math.abs(event.deltaY)) {
           event.preventDefault();
-          if (gpaKlineChart) gpaKlineChart.scrollByDistance(-event.deltaX);
+          if (gpaKlineCharts[mode]) gpaKlineCharts[mode].scrollByDistance(-event.deltaX);
         }
         // Plain vertical scrolling continues to move the page, not resize bars.
       }, { capture: true, passive: false });
     }
-    const history = (state.gradeHistory || []).filter(h => h.value != null && Number.isFinite(Number(h.value))).slice().sort((a, b) => gpaHistoryTimestamp(a) - gpaHistoryTimestamp(b));
+    const history = gpaChartHistory(mode);
     if (!history.length) return;
     const palette = state.settings.gpaCandleColors === 'green-up' ? { up: '#4f8a70', down: '#c47768' } : { up: '#c47768', down: '#4f8a70' };
     const interval = GPA_KLINE_INTERVALS[gpaKlineIntervalIndex] || GPA_KLINE_INTERVALS[5], data = gpaKlineBuckets(history, interval.ms);
     const chartKey = JSON.stringify([data, interval.ms, palette, isEnglish()]);
-    if (gpaKlineChart && gpaKlineChartKey === chartKey) { gpaKlineChart.resize(); return; }
-    if (gpaKlineChart) { if (gpaKlineChart._campusHoverCleanup) gpaKlineChart._campusHoverCleanup(); lib.dispose(gpaKlineChart); gpaKlineChart = null; }
+    if (gpaKlineCharts[mode] && gpaKlineChartKeys[mode] === chartKey) { gpaKlineCharts[mode].resize(); return; }
+    if (gpaKlineCharts[mode]) { if (gpaKlineCharts[mode]._campusHoverCleanup) gpaKlineCharts[mode]._campusHoverCleanup(); lib.dispose(gpaKlineCharts[mode]); gpaKlineCharts[mode] = null; }
     // Labels occupy 38px: even at maximum zoom-out each record must keep its
     // own readable slot. Use the library's native limits, not an after-zoom reset.
     const chart = lib.init(container, { layout: { barSpaceLimit: { min: 48, max: 120 }, yAxis: { scrollZoomEnabled: false, gap: { top: 0.18, bottom: 0.1 } } }, zoomAnchor: 'last_bar', locale: isEnglish() ? 'en-US' : 'zh-CN' });
@@ -1112,8 +1222,8 @@
     attachGpaLineSnap(chart, container);
     chart.setStyles({ crosshair: { show: false } });
     chart.resize();
-    gpaKlineChart = chart;
-    gpaKlineChartKey = chartKey;
+    gpaKlineCharts[mode] = chart;
+    gpaKlineChartKeys[mode] = chartKey;
   }
   function deferGpaChartDispose(chart, library) {
     if (!chart || !library || typeof library.dispose !== 'function') return;
@@ -1127,7 +1237,10 @@
     gpaChartMountScheduled = true;
     const mount = () => {
       gpaChartMountScheduled = false;
-      if (page === 'grades' && !state.settings.focusMode) mountGpaKlineChart();
+      if (page === 'grades' && !state.settings.focusMode) {
+        mountGpaKlineChart('banded');
+        mountGpaKlineChart('linear');
+      }
     };
     if (typeof window.requestIdleCallback === 'function') window.requestIdleCallback(mount, { timeout: 420 });
     else window.requestAnimationFrame(mount);
@@ -1189,10 +1302,14 @@
   }
   function renderSourceCard(source) {
     if (source === 'teams') return renderGraphSourceCard();
-    if (!sourceURL(source)) return '<section class="card source-card"><h2>' + esc(sourceName(source)) + '</h2><span class="status-badge warning">未配置学校地址</span><p>' + esc(schoolConfigurationHelp) + '</p></section>';
-    const status = sourceStatus(source), busy = statuses[source] && statuses[source].busy;
-    const badge = busy ? '正在同步' : status.loginRequired ? '需要登录' : status.lastCapturedAt ? status.stale ? '缓存待更新' : '已读取' : '尚未连接';
-    return '<section class="card source-card"><div class="source-header"><span class="source-logo ' + (source === 'managebac' ? 'mb' : source === 'teams' ? 'teams-logo' : '') + '">' + (source === 'seiue' ? (isEnglish() ? 'S' : '希') : source === 'teams' ? 'T' : 'M') + '</span><div><h2>' + sourceName(source) + '</h2><p>' + (source === 'seiue' ? '课程表 · 上课时间 · 教室' : source === 'teams' ? '作业要求 · 提醒 · EC 通知' : '课程成绩 · 学校任务 · 老师反馈') + '</p></div><span class="status-badge ' + (status.stale || status.loginRequired ? 'warning' : '') + '">' + badge + '</span></div><p>最近读取：' + esc(lastUpdated(status.lastCapturedAt)) + '</p>' + (statuses[source] && statuses[source].message ? '<p>' + esc(localizedRuntimeText(statuses[source].message)) + '</p>' : '') + (status.warnings && status.warnings.length ? '<div class="source-warning">' + status.warnings.slice(0, 3).map(localizedRuntimeText).map(esc).join('<br>') + '</div>' : '') + '<div class="source-actions">' + button(source === 'teams' ? '在浏览器打开 Teams' : status.lastCapturedAt ? '打开学校页面' : '登录并连接', 'open-source', 'data-source="' + source + '"', 'button-primary') + (source === 'teams' ? '' : button('退出登录', 'clear-session', 'data-source="' + source + '"')) + '</div>' + (source === 'teams' ? '<p class="gpa-note">使用 ' + esc(teamsBrowserName()) + ' 的登录状态，退出 Teams 请在该浏览器操作。应用内旧登录状态不会转移到浏览器。</p>' : '') + '</section>';
+    const configured = Boolean(sourceURL(source)), status = sourceStatus(source), busy = Boolean(statuses[source]?.busy);
+    const needsLogin = !status.lastCapturedAt || status.loginRequired;
+    const badge = !configured ? '未配置学校地址' : busy ? '正在同步' : status.loginRequired ? '需要登录' : status.lastCapturedAt ? status.stale ? '缓存待更新' : '已读取' : '尚未连接';
+    const attrs = 'data-source="' + source + '"';
+    const primary = !configured ? '设置并登录' : needsLogin ? status.loginRequired ? '重新登录' : '登录并同步' : busy ? '正在同步…' : '立即同步';
+    return '<section class="card source-card connection-card"><div class="source-header"><span class="source-logo ' + (source === 'managebac' ? 'mb' : '') + '">' + (source === 'seiue' ? (isEnglish() ? 'S' : '希') : 'M') + '</span><div><h2>' + esc(sourceName(source)) + '</h2><p>' + t(source === 'seiue' ? '课程表 · 上课时间 · 教室' : '课程成绩 · 学校任务 · 老师反馈') + '</p></div></div><span id="connection-badge-' + source + '" class="status-badge">' + t(badge) + '</span><p class="connection-session">' + t('登录会话保存在这台 Mac；学校要求验证时需重新登录。') + '</p><p>' + t('最近读取：') + esc(lastUpdated(status.lastCapturedAt)) + '</p><p id="connection-message-' + source + '" role="status">' + esc(localizedRuntimeText(statuses[source]?.message || '')) + '</p>' +
+      '<div class="source-actions">' + button(primary, !configured || needsLogin ? 'connect-source' : 'sync-school', attrs + ' id="connection-primary-' + source + '"' + (busy && !needsLogin ? ' disabled' : ''), 'button-primary') + (configured ? button('打开网站', 'connect-source', attrs) : '') + '</div>' +
+      '<details id="connection-options-' + source + '" class="connection-options"><summary>' + t('连接设置与退出') + '</summary><div class="source-actions">' + button('连接选项', 'connection-options', attrs) + (configured ? button('退出登录', 'clear-session', attrs) : '') + '</div>' + (status.warnings?.length ? '<div class="source-warning">' + status.warnings.slice(0, 3).map(localizedRuntimeText).map(esc).join('<br>') + '</div>' : '') + '</details></section>';
   }
   function permissionCopy() {
     if (!native) return '通知提醒只在 CampusDesk Mac 应用中可用。';
@@ -1201,9 +1318,9 @@
     return '启用后将请求 macOS 通知权限。没有明确截止时间的作业可在“查看要求”中手动设置。';
   }
   function renderGraphSourceCard() {
-    if (state.settings.teamsMode === 'browser') return '<section class="card source-card"><div class="source-header"><span class="source-logo teams-logo">T</span><div><h2>Microsoft Teams</h2><p>自动发现 · EC 附件 · 本机缓存</p></div><span id="teams-source-badge" class="status-badge">' + (teamsAuto.running ? '正在读取' : '浏览器自动同步') + '</span></div><p id="teams-source-message">' + esc(localizedRuntimeText(teamsAuto.message)) + '</p><div class="source-actions">' + button('登录／打开 Teams', 'teams-auto-login', !native ? 'disabled' : '', 'button-primary') + '</div></section>';
+    if (state.settings.teamsMode === 'browser') return '<section class="card source-card connection-card"><div class="source-header"><span class="source-logo teams-logo">T</span><div><h2>Microsoft Teams</h2><p>' + t('自动发现 · EC 附件 · 本机缓存') + '</p></div></div><span id="teams-source-badge" class="status-badge">' + t(teamsAuto.running ? '正在读取' : '浏览器自动同步') + '</span><p class="connection-session">' + t('登录入口始终可用，已登录的浏览器会继续使用现有会话。') + '</p><p>' + esc(teamsBrowserName()) + '</p><p id="teams-source-message" role="status">' + esc(localizedRuntimeText(teamsAuto.message)) + '</p><div class="source-actions">' + button('登录／打开 Teams', 'connect-source', 'data-source="teams"', 'button-primary') + button('连接选项', 'connection-options', 'data-source="teams"') + '</div></section>';
     const badge = graphStatus.busy ? '正在同步' : graphStatus.connected ? '已连接' : graphStatus.configured ? '等待登录' : '待首次配置';
-    return '<section class="card source-card"><div class="source-header"><span class="source-logo teams-logo">T</span><div><h2>Microsoft Teams</h2><p>频道消息 · 作业要求 · EC 名单</p></div><span class="status-badge ' + (!graphStatus.connected ? 'warning' : '') + '">' + badge + '</span></div><p>' + esc(graphStatusCopy()) + '</p><div class="source-actions">' + graphPrimaryButton() + '</div></section>';
+    return '<section class="card source-card connection-card"><div class="source-header"><span class="source-logo teams-logo">T</span><div><h2>Microsoft Teams</h2><p>' + t('频道消息 · 作业要求 · EC 名单') + '</p></div><span class="status-badge">' + t(badge) + '</span></div><p>' + esc(graphStatusCopy()) + '</p><div class="source-actions">' + graphPrimaryButton() + '</div></section>';
   }
   function renderGraphSettings() {
     const config = graphConfigurationDraft || { clientId: graphStatus.clientId || '', tenant: graphStatus.tenant || 'organizations' };
@@ -1213,7 +1330,7 @@
     const counts = teamsAuto.counts || {}, count = key => Number.isSafeInteger(counts[key]) && counts[key] >= 0 ? counts[key] : 0;
     const diagnostics = (teamsAuto.coverageItems || []).filter(item => item.status !== 'complete').slice(0,60);
     const enabled = native && state.settings.teamsBrowserAutomation;
-    return '<section id="teams-auto-panel" class="card settings-section teams-auto-panel">' + cardHeader('teams', 'Teams 自动同步 · 0.4.0') + '<p id="teams-auto-message" role="status">' + esc(localizedRuntimeText(teamsAuto.message)) + '</p><p id="teams-auto-counts" class="graph-coverage">' + esc(teamsAutoCountText()) + '</p><div class="banner-actions">' + button('登录／打开 Teams', 'teams-auto-login', 'id="teams-auto-login-button" '+(!native || teamsAuto.running ? 'disabled' : ''), 'button-primary') + button(teamsAuto.running ? '正在自动读取…' : '立即自动同步', 'teams-auto-start', 'id="teams-auto-start-button" '+(!enabled || teamsAuto.running ? 'disabled' : '')) + button('优先读取 EC', 'teams-auto-ec', 'id="teams-auto-ec-button" '+(!enabled || teamsAuto.running ? 'disabled' : '')) + button('停止本轮', 'teams-auto-stop', 'id="teams-auto-stop-button" '+(!teamsAuto.running ? 'disabled' : '')) + '</div><p class="gpa-note">自动发现账号可见页面，优先读取 EC；无需逐页关注。应用运行、Mac 唤醒且联网时按设置周期更新。学校要求重新验证时需要你登录。正式作业、成绩及全部历史尚未验证，不会当作已完整同步。</p><div id="teams-auto-warnings" class="source-warning"'+(!teamsAuto.warnings.length?' hidden':'')+'>' + teamsAuto.warnings.map(localizedRuntimeText).map(esc).join('<br>') + '</div><details id="teams-auto-diagnostics"'+(!diagnostics.length?' hidden':'')+'><summary id="teams-auto-diagnostics-summary">查看未完成范围（' + diagnostics.length + '）</summary><div id="teams-auto-diagnostics-items">' + diagnosticsHTML(diagnostics) + '</div></details>' + (!settings ? '<div class="banner-actions">' + button('连接设置', 'teams-settings') + '</div>' : '') + '</section>';
+    return '<section id="teams-auto-panel" class="card settings-section teams-auto-panel">' + cardHeader('teams', 'Teams 自动同步 · 0.4.0') + '<p id="teams-auto-message" role="status">' + esc(localizedRuntimeText(teamsAuto.message)) + '</p><p id="teams-auto-counts" class="graph-coverage">' + esc(teamsAutoCountText()) + '</p><div class="banner-actions">' + button('登录／打开 Teams', 'teams-auto-login', 'id="teams-auto-login-button" '+(!native ? 'disabled' : ''), 'button-primary') + button(teamsAuto.running ? '正在自动读取…' : '立即自动同步', 'teams-auto-start', 'id="teams-auto-start-button" '+(!enabled || teamsAuto.running ? 'disabled' : '')) + button('优先读取 EC', 'teams-auto-ec', 'id="teams-auto-ec-button" '+(!enabled || teamsAuto.running ? 'disabled' : '')) + button('停止本轮', 'teams-auto-stop', 'id="teams-auto-stop-button" '+(!teamsAuto.running ? 'disabled' : '')) + '</div><p class="gpa-note">自动发现账号可见页面，优先读取 EC；无需逐页关注。应用运行、Mac 唤醒且联网时按设置周期更新。学校要求重新验证时需要你登录。正式作业、成绩及全部历史尚未验证，不会当作已完整同步。</p><div id="teams-auto-warnings" class="source-warning"'+(!teamsAuto.warnings.length?' hidden':'')+'>' + teamsAuto.warnings.map(localizedRuntimeText).map(esc).join('<br>') + '</div><details id="teams-auto-diagnostics"'+(!diagnostics.length?' hidden':'')+'><summary id="teams-auto-diagnostics-summary">查看未完成范围（' + diagnostics.length + '）</summary><div id="teams-auto-diagnostics-items">' + diagnosticsHTML(diagnostics) + '</div></details>' + (!settings ? '<div class="banner-actions">' + button('连接设置', 'teams-settings') + '</div>' : '') + '</section>';
   }
   function teamsAutoCountText() {
     const counts = teamsAuto.counts || {}, count = key => Number.isSafeInteger(counts[key]) && counts[key] >= 0 ? counts[key] : 0;
@@ -1226,7 +1343,7 @@
   function updateTeamsAutoPanel() {
     setText('teams-auto-message',localizedRuntimeText(teamsAuto.message)); setText('teams-auto-counts',teamsAutoCountText());
     const enabled = native && state.settings.teamsBrowserAutomation;
-    for (const [id,disabled] of [['login',!native || teamsAuto.running],['start',!enabled || teamsAuto.running],['ec',!enabled || teamsAuto.running],['stop',!teamsAuto.running]]) { const node = document.getElementById('teams-auto-'+id+'-button'); if (node) node.disabled = disabled; }
+    for (const [id,disabled] of [['login',!native],['start',!enabled || teamsAuto.running],['ec',!enabled || teamsAuto.running],['stop',!teamsAuto.running]]) { const node = document.getElementById('teams-auto-'+id+'-button'); if (node) node.disabled = disabled; }
     setText('teams-auto-start-button',teamsAuto.running ? (isEnglish() ? 'Reading automatically…' : '正在自动读取…') : (isEnglish() ? 'Sync now' : '立即自动同步'));
     const warnings = document.getElementById('teams-auto-warnings'); if (warnings) { warnings.hidden = !teamsAuto.warnings.length; setHTML(warnings.id,teamsAuto.warnings.map(localizedRuntimeText).map(esc).join('<br>')); }
     const items = (teamsAuto.coverageItems || []).filter(item => item.status !== 'complete').slice(0,60), details = document.getElementById('teams-auto-diagnostics');
@@ -1381,11 +1498,15 @@
     const graphConfigOpen = page === 'settings' && document.getElementById('graph-configuration') && document.getElementById('graph-configuration').open;
     const shell = document.getElementById('app-shell');
     // Unrelated sync/status renders must not throw away the user's chart view.
-    const retainedChart = page === 'grades' && gpaKlineChart ? document.getElementById('gpa-kline-chart') : null;
-    if (!retainedChart && gpaKlineChart && window.klinecharts && typeof window.klinecharts.dispose === 'function') {
-      const oldChart = gpaKlineChart;
-      gpaKlineChart = null; gpaKlineChartKey = '';
-      deferGpaChartDispose(oldChart, window.klinecharts);
+    const retainedCharts = {};
+    for (const mode of ['banded', 'linear']) {
+      const id = mode === 'linear' ? 'gpa-kline-linear-chart' : 'gpa-kline-chart';
+      retainedCharts[mode] = page === 'grades' && gpaKlineCharts[mode] ? document.getElementById(id) : null;
+      if (!retainedCharts[mode] && gpaKlineCharts[mode] && window.klinecharts && typeof window.klinecharts.dispose === 'function') {
+        const oldChart = gpaKlineCharts[mode];
+        gpaKlineCharts[mode] = null; gpaKlineChartKeys[mode] = '';
+        deferGpaChartDispose(oldChart, window.klinecharts);
+      }
     }
     if (shell) { shell.dataset.dashboardTheme = state.settings.dashboardTheme || 'classic'; shell.dataset.focusMode = String(Boolean(state.settings.focusMode)); }
     renderNav();
@@ -1411,10 +1532,13 @@
       if (replacement) replacement.replaceWith(input);
     }
     if (pageChanged) animatePageSwitch(content);
-    if (retainedChart) {
-      const replacement = document.getElementById('gpa-kline-chart');
-      if (replacement) replacement.replaceWith(retainedChart);
-      else { if (gpaKlineChart._campusHoverCleanup) gpaKlineChart._campusHoverCleanup(); window.klinecharts.dispose(gpaKlineChart); gpaKlineChart = null; gpaKlineChartKey = ''; }
+    for (const mode of ['banded', 'linear']) if (retainedCharts[mode]) {
+      const replacement = document.getElementById(mode === 'linear' ? 'gpa-kline-linear-chart' : 'gpa-kline-chart');
+      if (replacement) replacement.replaceWith(retainedCharts[mode]);
+      else {
+        if (gpaKlineCharts[mode]._campusHoverCleanup) gpaKlineCharts[mode]._campusHoverCleanup();
+        window.klinecharts.dispose(gpaKlineCharts[mode]); gpaKlineCharts[mode] = null; gpaKlineChartKeys[mode] = '';
+      }
     }
     if (graphConfigOpen && document.getElementById('graph-configuration')) document.getElementById('graph-configuration').open = true;
     renderedPage = page;restoreReading(saved);
@@ -1522,14 +1646,46 @@
     if (!target) return;
     if (target.dataset.page) { navigate(target.dataset.page); return; }
     const action = target.dataset.action;
-    if (action === 'open-source') openSource(target.dataset.source, target.dataset.url);
+    if (action === 'connect-source') startQuickConnection(target.dataset.source);
+    else if (action === 'connection-options') startQuickConnection(target.dataset.source, true);
+    else if (action === 'close-quick-connect') { pendingQuickConnection = null; closeDialog('quick-connect-dialog'); }
+    else if (action === 'sync-school') { if (['seiue', 'managebac'].includes(target.dataset.source)) send('syncSchool', { source: target.dataset.source }); }
+    else if (action === 'open-source') openSource(target.dataset.source, target.dataset.url);
+    else if (action === 'import-school-calendar') { if (!send('importSchoolCalendar')) document.getElementById('school-calendar-file').click(); }
+    else if (action === 'cancel-calendar-preview') { pendingSchoolCalendarPDF = null; closeDialog('calendar-preview-dialog'); }
+    else if (action === 'confirm-calendar-preview') {
+      if (!pendingSchoolCalendarPDF) return;
+      let invalid = false;
+      const events = pendingSchoolCalendarPDF.events.map((item, index) => {
+        const dateInput = document.getElementById('calendar-date-' + index), endInput = document.getElementById('calendar-end-' + index), titleInput = document.getElementById('calendar-title-' + index), check = document.getElementById('calendar-check-' + index);
+        if (!check || !check.checked) return null;
+        const date = dateInput && dateInput.value, end = endInput && endInput.value, title = String(titleInput && titleInput.value || '').trim();
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(date || '') || !/^\d{4}-\d{2}-\d{2}$/.test(end || '') || end < date || !title) { invalid = true; return null; }
+        const durationDays = Math.round((Date.parse(end + 'T00:00:00Z') - Date.parse(date + 'T00:00:00Z')) / 86400000) + 1;
+        if (durationDays > 366) { invalid = true; return null; }
+        return Object.assign({}, item, { startDate: date, endDate: calendarAddDays(end, 1), durationDays, title: title.slice(0, 300) });
+      }).filter(Boolean);
+      if (invalid) { toast('请核对所选活动的开始、结束日期和名称。'); return; }
+      if (!events.length) { toast('请至少勾选一条活动。'); return; }
+      if (state.schoolCalendar.events.length && !window.confirm(t('导入会替换当前本机校历，确定继续吗？'))) return;
+      try {
+        const updated = Object.assign({}, pendingSchoolCalendarPDF, { events });
+        state = Core.validateState(Object.assign({}, state, { schoolCalendar: updated }));
+        persist(); render(); closeDialog('calendar-preview-dialog'); pendingSchoolCalendarPDF = null;
+        toast(t('校历已导入，共 ') + events.length + t(' 条事件。'));
+      } catch (error) { toast(t('校历导入失败：') + (error && error.message || '日期或活动名称无效。')); }
+    }
+    else if (action === 'clear-school-calendar') {
+      if (!window.confirm(t('确定清除本机导入的校历吗？'))) return;
+      state.schoolCalendar = { fileName: '', importedAt: '', events: [] }; persist(); render(); toast(t('校历已清除。'));
+    }
     else if (action === 'toggle-focus-mode') { state.settings.focusMode = !state.settings.focusMode; persist(); render(); toast(state.settings.focusMode ? '已进入专注模式。' : '已退出专注模式。'); }
     else if (action === 'save-ec-identity') {
       const input = document.getElementById('ec-identity-names');
       const names = [...new Set(String(input && input.value || '').split(/[，,\n;]/).map(value => value.trim().slice(0, 100)).filter(Boolean))].slice(0, 10);
       state.settings.ecIdentityNames = names; persist(); render(); toast(names.length ? '姓名匹配已保存在本机。' : '已清除姓名匹配。');
     }
-    else if (action === 'gpa-kline-zoom') zoomGpaKline(Number(target.dataset.step));
+    else if (action === 'gpa-kline-zoom') zoomGpaKline(Number(target.dataset.step), target.dataset.mode);
     else if (action === 'dashboard-theme') {
       const theme = target.dataset.theme;
       if (!['classic', 'board'].includes(theme)) return;
@@ -1842,6 +1998,7 @@
   });
   document.addEventListener('submit', event => {
     if (!event.target) return;
+    if (event.target.id === 'quick-connect-form') { event.preventDefault(); submitQuickConnection(); return; }
     if (event.target.id === 'grade-plan-form') { event.preventDefault(); getGradePlanner().submit(event.target); return; }
     if (event.target.id === 'school-configuration-form') {
       event.preventDefault();
@@ -1948,6 +2105,37 @@
     try { applyImport(JSON.parse(await file.text())); } catch (_) { toast('无法读取这份 JSON 备份。'); }
     event.target.value = '';
   });
+  async function importSchoolCalendarText(text, fileName) {
+    if (typeof text !== 'string' || text.length > 5 * 1024 * 1024) { toast(t('校历文件过大，请选择 5 MB 以内的文件。')); return; }
+    if (!/\.ics$/i.test(fileName || '')) { toast(t('请选择 .ics 格式的校历文件。')); return; }
+    if (state.schoolCalendar.events.length && !window.confirm(t('导入会替换当前本机校历，确定继续吗？'))) return;
+    try {
+      const nextCalendar = Core.parseSchoolCalendarICS(text, fileName, state.settings.timezone);
+      state = Core.validateState(Object.assign({}, state, { schoolCalendar: nextCalendar }));
+      persist(); render();
+      toast(t('校历已导入，共 ') + nextCalendar.events.length + t(' 条事件。'));
+    } catch (error) { toast(t('校历导入失败：') + (error && error.message ? error.message.replace(/^数据格式无效：/, '') : '文件格式无效。')); }
+  }
+  function calendarAddDays(date, amount) {
+    const value = new Date(date + 'T00:00:00Z');
+    value.setUTCDate(value.getUTCDate() + amount);
+    return value.toISOString().slice(0, 10);
+  }
+  function previewSchoolCalendarPDF(text, fileName) {
+    try {
+      pendingSchoolCalendarPDF = Core.parseSchoolCalendarPDFText(text, fileName);
+      document.getElementById('calendar-preview-note').textContent = '识别到 ' + pendingSchoolCalendarPDF.events.length + ' 条安排。请核对日期区间和活动名称，只会导入勾选的项目。';
+      document.getElementById('calendar-preview-rows').innerHTML = pendingSchoolCalendarPDF.events.map((item, index) => '<tr><td><input id="calendar-check-' + index + '" type="checkbox" checked aria-label="采用此活动"></td><td><input id="calendar-date-' + index + '" type="date" value="' + esc(item.startDate) + '" aria-label="开始日期"></td><td><input id="calendar-end-' + index + '" type="date" value="' + esc(item.durationDays ? calendarAddDays(item.endDate, -1) : item.startDate) + '" aria-label="结束日期（含）"></td><td><input id="calendar-title-' + index + '" type="text" value="' + esc(item.title) + '" maxlength="300" aria-label="活动名称"></td></tr>').join('');
+      showDialog('calendar-preview-dialog');
+    } catch (error) { pendingSchoolCalendarPDF = null; toast('PDF 校历识别失败：' + (error && error.message ? error.message : '请确认 PDF 含有可选中的文本表格。')); }
+  }
+  document.getElementById('school-calendar-file').addEventListener('change', async event => {
+    const file = event.target.files && event.target.files[0];
+    if (!file) return;
+    if (file.size > 5 * 1024 * 1024) toast(t('校历文件过大，请选择 5 MB 以内的文件。'));
+    else { try { if (/\.pdf$/i.test(file.name || '')) toast('PDF 校历请在 CampusDesk 应用内点击“导入校历”，由 Mac 安全读取并识别表格。'); else await importSchoolCalendarText(await file.text(), file.name); } catch (_) { toast(t('校历导入失败：') + '无法读取文件。'); } }
+    event.target.value = '';
+  });
   document.getElementById('sync-button').addEventListener('click', () => {
     if (!send('sync')) toast('学校数据同步需要使用 Mac 应用。网页预览只能管理个人待办和本地备份。');
   });
@@ -1956,8 +2144,15 @@
     receive: function (event) {
       if (!event || typeof event !== 'object') return;
       try {
-        if (event.type === 'schoolConfiguration') { applySchoolConfiguration(event.config, event.saved === true); }
-        else if (event.type === 'schoolConfigurationError') { schoolSavePending = false; toast(t('学校网址未能保存，请检查网址及本机磁盘写入权限后重试。')); }
+        if (event.type === 'schoolCalendarFile') { importSchoolCalendarText(event.text, event.fileName); }
+        else if (event.type === 'schoolCalendarPDF') { previewSchoolCalendarPDF(event.text, event.fileName); }
+        else if (event.type === 'schoolCalendarFileError') { toast(t(event.message || '无法读取校历文件。')); }
+        else if (event.type === 'schoolConfiguration') { applySchoolConfiguration(event.config, event.saved === true); }
+        else if (event.type === 'schoolConfigurationError') {
+          schoolSavePending = false; pendingQuickConnection = null;
+          quickConnectionError('学校网址未能保存，请检查网址及本机磁盘写入权限后重试。');
+          toast(t('学校网址未能保存，请检查网址及本机磁盘写入权限后重试。'));
+        }
         else if (event.type === 'state') { state = event.state && Object.keys(event.state).length ? Core.validateState(event.state) : Core.emptyState(); render(); syncReminders(); }
         else if (event.type === 'teamsAutoStatus') {
           teamsAuto.running = Boolean(event.running);
@@ -2057,6 +2252,15 @@
           persist(); render();
         } else if (event.type === 'status') {
           statuses[event.source || 'app'] = { busy: Boolean(event.busy), message: String(event.message || '') };
+          if (['seiue', 'managebac'].includes(event.source)) {
+            const source = event.source, current = sourceStatus(source);
+            const message = document.getElementById('connection-message-' + source);
+            if (message) message.textContent = localizedRuntimeText(event.message || '');
+            const badge = document.getElementById('connection-badge-' + source);
+            if (badge) badge.textContent = t(event.busy ? '正在同步' : current.loginRequired ? '需要登录' : current.lastCapturedAt ? current.stale ? '缓存待更新' : '已读取' : '尚未连接');
+            const primary = document.getElementById('connection-primary-' + source);
+            if (primary && primary.dataset.action === 'sync-school') { primary.disabled = Boolean(event.busy); primary.textContent = t(event.busy ? '正在同步…' : '立即同步'); }
+          }
           updateStatus();
           if (!event.busy && event.message && (event.source === 'app' || event.source === 'teams')) toast(event.message);
           // Progress messages update the toolbar in place; settings forms stay put.
@@ -2099,6 +2303,7 @@
       }).catch(() => {}).finally(() => { restoreBrowserState(); render(); });
     } else restoreBrowserState();
   }
+  document.getElementById('quick-connect-dialog').addEventListener('cancel', () => { pendingQuickConnection = null; });
   render();
   send('ready');
   send('requestGraphStatus');

@@ -26,6 +26,122 @@ test('Beijing day changes at 16:00 UTC and midnight uses 00:00', () => {
   assert.equal(Core.today('2026-09-18T16:00:00Z', 'America/Los_Angeles'), '2026-09-18');
 });
 
+test('school calendar imports all-day, UTC, multi-day and recurring events into the selected day', () => {
+  const state = Core.emptyState();
+  state.manualTasks.push({ id: 'keep', title: 'Keep local task', course: 'Personal', dueAt: null, dueLabel: '', status: 'open', createdAt: '2026-09-19T00:00:00Z' });
+  state.schoolCalendar = Core.parseSchoolCalendarICS([
+    'BEGIN:VCALENDAR',
+    'BEGIN:VEVENT', 'UID:holiday', 'DTSTART;VALUE=DATE:20260924', 'DTEND;VALUE=DATE:20260926', 'SUMMARY:School holiday', 'END:VEVENT',
+    'BEGIN:VEVENT', 'UID:utc', 'DTSTART:20260924T080000Z', 'DTEND:20260924T090000Z', 'SUMMARY:UTC event', 'END:VEVENT',
+    'BEGIN:VEVENT', 'UID:weekly', 'DTSTART;TZID=Asia/Shanghai:20260917T090000', 'DTEND;TZID=Asia/Shanghai:20260917T100000', 'RRULE:FREQ=WEEKLY;BYDAY=TH;COUNT=3', 'EXDATE;TZID=Asia/Shanghai:20260924T090000', 'SUMMARY:Weekly class', 'LOCATION:Room 3', 'END:VEVENT',
+    'END:VCALENDAR'
+  ].join('\r\n'), 'term.ics', 'Asia/Shanghai');
+  const restored = Core.validateState(state);
+  assert.equal(restored.manualTasks[0].title, 'Keep local task');
+  assert.deepEqual(Core.getSchoolCalendarEvents(restored, '2026-09-24').map(item => item.title), ['School holiday', 'UTC event']);
+  assert.equal(Core.getSchoolCalendarEvents(restored, '2026-09-25').find(item => item.title === 'School holiday').allDay, true);
+  assert.ok(Core.getSchoolCalendarEvents(restored, '2026-10-01').find(item => item.title === 'Weekly class'));
+  assert.throws(() => Core.parseSchoolCalendarICS('BEGIN:VCALENDAR\nEND:VCALENDAR', 'empty.ics'), /没有找到/);
+});
+
+test('make-up days use the nearest captured source weekday when Seiue has no date-specific timetable', () => {
+  const state = Core.mergeSnapshot(Core.emptyState(), seiue({ schedule: [
+    { id:'tue-math', date:'2026-09-15', start:'08:00', end:'08:40', title:'Tuesday Math', room:'201', teacher:'', isSelfStudy:false },
+    { id:'tue-english', date:'2026-09-15', start:'08:50', end:'09:30', title:'Tuesday English', room:'202', teacher:'', isSelfStudy:false }
+  ] }));
+  state.schoolCalendar = Core.parseSchoolCalendarPDFText('2026 年 9 月 校历\n安排明细\n1. 9 月 20 日（周日）补周二的课。', 'makeup.pdf', 2026);
+  const rows = Core.getSchedule(state, '2026-09-20');
+  assert.deepEqual(rows.map(row=>row.title), ['Tuesday Math','Tuesday English']);
+  assert.ok(rows.every(row=>row.calendarSubstitute && row.calendarSourceDate === '2026-09-15'));
+});
+
+test('calendar holiday exposes a conflict when Seiue explicitly lists classes that day', () => {
+  const state = Core.mergeSnapshot(Core.emptyState(), seiue());
+  state.schoolCalendar = Core.parseSchoolCalendarPDFText('2026 年 9 月 校历\n安排明细\n1. 9 月 18 日，学校放假。', 'holiday.pdf', 2026);
+  assert.deepEqual(Core.schoolCalendarScheduleConflict(state, '2026-09-18'), {date:'2026-09-18',title:'学校放假',count:2});
+});
+
+test('change inbox tracks category weights and explicit Teams Graph removals', () => {
+  let state = Core.mergeSnapshot(Core.emptyState(), managebac({courses:[{id:'math',name:'Math',percentage:90,term:'First Semester (current)',isCurrentTerm:true,isCourseGrade:true,
+    gradeComponents:[{name:'Exam',weight:40,percentage:90},{name:'Coursework',weight:60,percentage:90}]}]}));
+  state = Core.mergeSnapshot(state, managebac({capturedAt:'2026-09-18T01:00:00Z',courses:[{id:'math',name:'Math',percentage:90,term:'First Semester (current)',isCurrentTerm:true,isCourseGrade:true,
+    gradeComponents:[{name:'Exam',weight:50,percentage:90},{name:'Coursework',weight:50,percentage:90}]}]}));
+  assert.ok(state.changeLog.some(row=>row.detail.includes('类别权重')));
+  const teamsBase = {source:'teams',url:'https://teams.microsoft.com/v2/',coverage:'graph',graphComplete:true,capturedAt:'2026-09-18T00:00:00Z',warnings:[],tasks:[],posts:[{id:'teams:graph:message:abc',title:'Notice',text:'A notice',kind:'general',url:'https://teams.microsoft.com/v2/'}],feedback:[],grades:[]};
+  state = Core.mergeSnapshot(state, teamsBase);
+  state = Core.mergeSnapshot(state, {...teamsBase,capturedAt:'2026-09-18T02:00:00Z',posts:[],graphDeletedIDs:['teams:graph:message:abc']});
+  assert.ok(state.changeLog.some(row=>row.kind==='removed' && row.title==='Notice'));
+});
+
+test('PDF calendar table text extracts English, numeric, and Chinese date rows for preview', () => {
+  const calendar = Core.parseSchoolCalendarPDFText([
+    'School Calendar 2026',
+    'Date | Event',
+    '2026-09-02 First day of school',
+    '09/18/2026 Parent Conference',
+    'Sep 24, 2026 Field Trip',
+    '2026年10月1日 国庆假期',
+    '2026-02-30 Invalid date row',
+    'Page 1'
+  ].join('\n'), 'term.pdf', 2026);
+  assert.equal(calendar.fileName, 'term.pdf');
+  assert.deepEqual(calendar.events.map(event => [event.startDate, event.title]), [
+    ['2026-09-02', 'First day of school'],
+    ['2026-09-18', 'Parent Conference'],
+    ['2026-09-24', 'Field Trip'],
+    ['2026-10-01', '国庆假期']
+  ]);
+  assert.equal(calendar.events.every(event => event.allDay), true);
+  const wrapped = Core.parseSchoolCalendarPDFText('2026-09-30\nAutumn festival', 'wrapped.pdf', 2026);
+  assert.deepEqual(wrapped.events.map(event => [event.startDate, event.title]), [['2026-09-30', 'Autumn festival']]);
+  assert.throws(() => Core.parseSchoolCalendarPDFText('Title\nNo date here', 'scan.pdf', 2026), /可选择的文字/);
+});
+
+test('PDF two-month calendar uses numbered arrangements and preserves inclusive date ranges', () => {
+  const text = [
+    '2026 年 9—10 月 校历', '2026 年 9 月 September', '一 二 三 四 五 六 日',
+    '31 1 2 3 4 5 6', '21 22 23 24 25', '中秋假期', '安排明细',
+    '1. 9 月 20 日（周日）补周二的课。',
+    '2. 9 月 25—27 日，中秋假期。',
+    '3. 9 月 28 日（周一），正常上课。',
+    '4. 9 月 29—30 日，学校运动会，如遇下雨，按课表正常上课。',
+    '2026 年 10 月 October', '一 二 三 四 五 六 日', '1 2 3 4', '国庆假期',
+    '5. 10 月 1 日—10 月 7 日，国庆假期。',
+    '6. 10 月 10 日（周六）补周三的课。',
+    '7. 10 月 15 日（周四），社会实践活动。'
+  ].join('\n');
+  const calendar = Core.parseSchoolCalendarPDFText(text, 'two-months.pdf', 2026);
+  assert.equal(calendar.events.length, 7);
+  assert.deepEqual(calendar.events.map(event => [event.startDate, event.endDate, event.title]), [
+    ['2026-09-20', '2026-09-21', '补周二的课'],
+    ['2026-09-25', '2026-09-28', '中秋假期'],
+    ['2026-09-28', '2026-09-29', '正常上课'],
+    ['2026-09-29', '2026-10-01', '学校运动会，如遇下雨，按课表正常上课'],
+    ['2026-10-01', '2026-10-08', '国庆假期'],
+    ['2026-10-10', '2026-10-11', '补周三的课'],
+    ['2026-10-15', '2026-10-16', '社会实践活动']
+  ]);
+  const state = Core.emptyState(); state.schoolCalendar = Core.validateState(Object.assign({}, state, {schoolCalendar:calendar})).schoolCalendar;
+  assert.equal(Core.getSchoolCalendarEvents(state, '2026-09-26')[0].title, '中秋假期');
+  assert.equal(Core.getSchoolCalendarEvents(state, '2026-10-07')[0].title, '国庆假期');
+  assert.equal(Core.getSchoolCalendarEvents(state, '2026-10-08').length, 0);
+  assert.deepEqual(Core.schoolCalendarScheduleRule(state, '2026-09-20'), {kind:'makeup',weekday:2,title:'补周二的课'});
+  assert.deepEqual(Core.schoolCalendarScheduleRule(state, '2026-10-10'), {kind:'makeup',weekday:3,title:'补周三的课'});
+  assert.equal(Core.schoolCalendarScheduleRule(state, '2026-10-05').kind, 'holiday');
+  state.settings.customLessons = [
+    {id:'tue',title:'Tuesday class',weekdays:[2],weekPattern:'all',period:'P1',start:'08:00',end:'08:45'},
+    {id:'wed',title:'Wednesday class',weekdays:[3],weekPattern:'all',period:'P1',start:'08:00',end:'08:45'},
+    {id:'sat',title:'Saturday class',weekdays:[6],weekPattern:'all',period:'P1',start:'08:00',end:'08:45'},
+    {id:'one-off',title:'One-off class',date:'2026-10-05',weekdays:[],weekPattern:'all',period:'P1',start:'09:00',end:'09:45'}
+  ];
+  const adjusted = Core.validateState(state);
+  assert.deepEqual(Core.getSchedule(adjusted, '2026-09-20').map(row=>row.title), ['Tuesday class']);
+  assert.deepEqual(Core.getSchedule(adjusted, '2026-10-10').map(row=>row.title), ['Wednesday class']);
+  assert.deepEqual(Core.getSchedule(adjusted, '2026-10-05').map(row=>row.title), ['One-off class']);
+  const staleSchoolDay = Core.mergeSnapshot(adjusted, seiue({schedule:[{id:'regular',date:'2026-09-25',start:'08:00',end:'08:40',title:'Regular Friday class',isSelfStudy:false}]}));
+  assert.deepEqual(Core.getSchedule(staleSchoolDay, '2026-09-25'), []);
+});
+
 test('dashboard theme keeps old exports on classic and accepts only explicit panel choices', () => {
   const empty = Core.emptyState();
   assert.equal(empty.settings.dashboardTheme, 'classic');
@@ -76,6 +192,27 @@ test('GPA bands include each exact boundary and exclude assignment grades', () =
   assert.equal(result.count, 2);
 });
 
+test('linear GPA converts each eligible course percentage to 4.0 before averaging, without per-course rounding', () => {
+  const courses = [
+    { percentage: 93.33, isCurrentTerm: true, isCourseGrade: true },
+    { percentage: 86.88, isCurrentTerm: true, isCourseGrade: true },
+    { percentage: 0, isCurrentTerm: true, isCourseGrade: true },
+    { percentage: 99, isCurrentTerm: false, isCourseGrade: true },
+    { percentage: 75, isCurrentTerm: true, isCourseGrade: false },
+    { percentage: null, isCurrentTerm: true, isCourseGrade: true }
+  ];
+  assert.ok(Math.abs(Core.linearGradePoints(93.33) - 3.7332) < 1e-10);
+  assert.equal(Core.linearGradePoints(-1), null);
+  assert.equal(Core.linearGradePoints(101), null);
+  assert.equal(Core.linearGradePoints(null), null);
+  const linear = Core.estimateLinearGPA(courses);
+  assert.ok(Math.abs(linear.value - (93.33 + 86.88 + 0) / 3 / 100 * 4) < 1e-10);
+  assert.equal(linear.count, 3);
+  assert.equal(linear.excluded, 3);
+  assert.equal(Core.estimateGPA(courses).value, 2.33);
+  assert.equal(Core.estimateLinearGPA([{ percentage: null }]).value, null);
+});
+
 test('semester GPA forecast uses explicit weighted components and a local term timeline', () => {
   const courses = [
     { id: 'math', name: 'Synthetic Math', term: 'Synthetic Fall', isCurrentTerm: true, isCourseGrade: false,
@@ -91,6 +228,7 @@ test('semester GPA forecast uses explicit weighted components and a local term t
   assert.equal(result.coverage, 75);
   assert.equal(result.remainingGPA, 3.5);
   assert.equal(result.projectedGPA, 3.5);
+  assert.ok(Math.abs(result.projectedLinearGPA - 3.58) < 1e-10);
   assert.equal(result.courses[0].currentPercent, 84);
   assert.equal(result.courses[1].projectedPercent, 95);
 });
@@ -194,11 +332,24 @@ test('GPA history adds only eligible course changes; official remains separate',
     officialGPA: { value: 4.3, scale: 5, label: 'Weighted GPA' } }));
   assert.equal(state.gradeHistory.length, 1);
   assert.equal(state.gradeHistory[0].capturedAt, '2026-09-18T00:30:00.000Z');
+  assert.equal(state.gradeHistory[0].linearValue, 3.64);
   assert.equal(Core.estimateGPA(Core.getCourses(state)).value, 4);
   assert.equal(Core.getOfficialGPA(state).value, 4.3);
   assert.equal(Core.getOfficialGPA(state).scale, 5);
   const unknown = Core.mergeSnapshot(Core.emptyState(), managebac({ courses: [{ id: 'x', name: 'Unknown term', percentage: 95 }] }));
   assert.equal(unknown.gradeHistory.length, 0);
+});
+
+test('legacy GPA history only backfills the latest linear point with a matching course signature', () => {
+  let state = Core.mergeSnapshot(Core.emptyState(), managebac());
+  const oldEntry = Object.assign({}, state.gradeHistory[0]);
+  delete oldEntry.linearValue;
+  state.gradeHistory = [Object.assign({}, oldEntry, { signature: 'older-courses', date: '2026-09-17' }), oldEntry];
+  const restored = Core.validateState(state);
+  assert.equal(restored.gradeHistory[0].linearValue, null);
+  assert.equal(restored.gradeHistory[1].linearValue, 3.6);
+  const mismatched = Core.validateState(Object.assign({}, state, { gradeHistory: [Object.assign({}, oldEntry, { signature: 'other-courses' })] }));
+  assert.equal(mismatched.gradeHistory[0].linearValue, null);
 });
 
 test('verified empty calendar clears old lessons even when another cached URL had data', () => {

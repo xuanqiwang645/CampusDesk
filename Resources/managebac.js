@@ -74,15 +74,22 @@
   // Current ManageBac renders this "table" as ordinary layout blocks, not
   // <table> or ARIA rows. Restrict text parsing to its explicitly named section.
   function categoryAveragesFromText(input) {
-    const section = String(input || '').split(/Task\s+Category\s+Averages/i)[1];
-    if (!section || !/Category\s*\(Weight\)/i.test(section) || !/Mark\s*\(Score\)/i.test(section)) return [];
-    const body = clean(section.split(/View the average grades/i)[0]).split(/Mark\s*\(Score\)/i)[1]
-      .replace(/^\s*Overall\s*(?:(?:[A-F][+-]?\s*)?\(\s*\d+(?:\.\d+)?\s*%\s*\)|\d+(?:\.\d+)?\s*%|[-–—])\s*/i, ''), rows = [];
+    const source = String(input || ''), sectionMatch = /(?:Task\s+Category\s+Averages|任务类别(?:平均分|平均成绩)|任务分类平均分)/i.exec(source);
+    if (!sectionMatch) return [];
+    const section = source.slice(sectionMatch.index + sectionMatch[0].length);
+    const categoryHeader = /(?:Category\s*\(\s*Weight\s*\)|类别\s*[（(]\s*权重\s*[）)]|类别（权重）)/i;
+    const markHeader = /(?:Mark\s*\(\s*Score\s*\)|成绩\s*[（(]\s*(?:分数|得分)\s*[）)]|评分\s*[（(]\s*得分\s*[）)]|成绩（分数）)/i;
+    if (!categoryHeader.test(section) || !markHeader.test(section)) return [];
+    const end = /(?:View the average grades|查看(?:每个)?任务类别的平均成绩|查看各任务类别平均分)/i.exec(section);
+    const content = end ? section.slice(0, end.index) : section;
+    const markMatch = markHeader.exec(content);
+    const body = clean(markMatch ? content.slice(markMatch.index + markMatch[0].length) : '')
+      .replace(/^\s*(?:Overall|总评|总成绩)\s*(?:(?:[A-F][+-]?\s*)?\(\s*\d+(?:\.\d+)?\s*%\s*\)|\d+(?:\.\d+)?\s*%|[-–—])\s*/i, ''), rows = [];
     // Flex/grid layouts may separate cells by spaces rather than line breaks.
-    const pattern = /([^%]+?)\s*\(\s*(\d+(?:\.\d+)?)\s*%\s*\)\s*((?:[A-F][+-]?\s*)?\(\s*\d+(?:\.\d+)?\s*%\s*\)|\d+(?:\.\d+)?\s*%|[-–—])/gi;
+    const pattern = /([^%]+?)\s*[（(]\s*(\d+(?:\.\d+)?)\s*%\s*[）)]\s*((?:[A-F][+-]?\s*)?[（(]\s*\d+(?:\.\d+)?\s*%\s*[）)]|\d+(?:\.\d+)?\s*%|[-–—])/gi;
     for (const match of body.matchAll(pattern)) {
-      const name = clean(match[1]);
-      if (!name || /^(?:overall|total)$/i.test(name)) continue;
+      const name = clean(match[1]).replace(/^[)）\]]+\s*/, '');
+      if (!name || /^(?:overall|total|总评|总成绩)$/i.test(name)) continue;
       rows.push({name,weight:Number(match[2]),percentage:componentPercentage(match[3])});
     }
     return parseGradeComponents(rows);
@@ -137,10 +144,10 @@
       const header = tableRows.find(row => all(row, 'th, [role="columnheader"]').length >= 2) || tableRows[0];
       if (!header) continue;
       const headers = all(header, 'th, td, [role="columnheader"], [role="cell"]').map(text);
-      const nameIndex = headers.findIndex(value => /^(?:category|component|assessment|criterion|类别|分类|组成|项目)(?:\s*\(\s*weight\s*\))?$/i.test(value));
+      const nameIndex = headers.findIndex(value => /^(?:category|component|assessment|criterion|类别|分类|组成|项目)(?:\s*[（(]\s*(?:weight|权重)\s*[）)])?$/i.test(value));
       const weightIndex = headers.findIndex(isPercentageWeightHeader);
-      const gradeIndex = headers.findIndex(value => /(?:average|percentage|grade|score|mark|result|成绩|分数|平均|百分比)/i.test(value) && !/(?:weight|weighting|权重|比重)/i.test(value));
-      const weightInCategory = nameIndex >= 0 && /^(?:category|component|assessment|criterion)\s*\(\s*weight\s*\)$/i.test(headers[nameIndex]);
+      const gradeIndex = headers.findIndex(value => /(?:average|percentage|grade|score|mark|result|成绩|评分|分数|得分|平均|百分比)/i.test(value) && !/(?:weight|weighting|权重|比重)/i.test(value));
+      const weightInCategory = nameIndex >= 0 && /^(?:category|component|assessment|criterion|类别|分类|组成|项目)\s*[（(]\s*(?:weight|权重)\s*[）)]$/i.test(headers[nameIndex]);
       if (nameIndex < 0 || (weightIndex < 0 && !weightInCategory) || gradeIndex < 0) continue;
       for (const row of tableRows) {
         if (row === header || !visible(row)) continue;
@@ -150,13 +157,13 @@
         const embeddedWeight = weightInCategory && rawName.match(/^(.*?)\s*[([]\s*(\d{1,3}(?:\.\d+)?)\s*%\s*[)\]]\s*$/);
         const name = embeddedWeight ? clean(embeddedWeight[1]) : rawName;
         const weight = weightIndex >= 0 ? componentWeight(text(cells[weightIndex])) : componentWeight(embeddedWeight && embeddedWeight[2]);
-        if (!name || weight == null || /^(?:total|overall|总计|总评)$/i.test(name)) continue;
+        if (!name || weight == null || /^(?:total|overall|总计|总评|总成绩)$/i.test(name)) continue;
         page.gradeComponents.push({ name, weight, percentage:componentPercentage(text(cells[gradeIndex])) });
       }
     }
     if (!page.gradeComponents.length) {
       for (const heading of all(doc, 'h1, h2, h3, h4, h5, h6, [role="heading"]')) {
-        if (!visible(heading) || !/^Task\s+Category\s+Averages$/i.test(text(heading))) continue;
+        if (!visible(heading) || !/^(?:Task\s+Category\s+Averages|任务类别(?:平均分|平均成绩)|任务分类平均分)$/i.test(text(heading))) continue;
         let section = heading.parentElement;
         for (let depth = 0; section && depth < 8 && !section.matches('body, main, html'); depth++, section = section.parentElement) {
           const raw = String(section.innerText == null ? section.textContent || '' : section.innerText);
@@ -228,6 +235,9 @@
     const currentID = courseID(page.url), currentTask = taskID(page.url);
     const term = clean(page.term) || null;
     const currentTerm = term ? /\bcurrent\b|当前|本学期/i.test(term) : false;
+    if (term && !currentTerm && !/\b(?:previous|past|historical|archived|last term)\b|上学期|历史学期|往期/i.test(term)) {
+      result.warnings.push('学期标签“' + term + '”没有明确标注为当前学期；该课程暂不计入当前 GPA，请确认学期选择。');
+    }
     const addLink = (kind, url, title) => {
       if (!result.links.some(x=>x.url===url)) result.links.push({kind,url,title:title || ''});
     };
@@ -286,7 +296,7 @@
       if (!visible(node)) return false;
       const labels = ['aria-label', 'title', 'data-tooltip', 'data-original-title']
         .map(name => node.getAttribute && node.getAttribute(name) || '').join(' ');
-      return /task\s*(?:information|info)|task\s*category\s*averages/i.test(labels) || /^(?:Details\s*){1,2}$/i.test(text(node));
+      return /task\s*(?:information|info)|task\s*category\s*averages|任务信息|作业信息|任务详情/i.test(labels) || /^(?:Details?|详情)$/i.test(text(node));
     });
     if (!control) return false;
     // The adapter is re-injected on every native retry. Keep the marker on the

@@ -9,6 +9,7 @@ const near = (actual, expected) => assert.ok(Math.abs(actual - expected) < 1e-8,
 test('actual 20/35/45 categories drive targets and forecast without term dates', () => {
   const c = course(), original = JSON.stringify(c), r = P.evaluate(c, {target:90});
   near(r.required, 90.78); near(r.projectedPercent, 86.88); assert.equal(r.adjustableWeight,80);
+  near(P.aggregate([c], {}, Core.gradePoints).linearGPA, 3.4752);
   assert.equal(r.goalStatus,'possible'); assert.equal(JSON.stringify(c),original);
   const changed = P.evaluate(c,{target:90,overrides:[{name:'Summative Assessment',mode:'estimate',score:95},{name:'Exams',mode:'estimate',score:90}]});
   near(changed.projectedPercent,91.126);

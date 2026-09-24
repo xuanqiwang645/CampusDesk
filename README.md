@@ -3,16 +3,17 @@
 面向使用M系列 mac 的国际部学生打造的集中查看希悦课表、ManageBac课程总评和GPA估算、待办与可识别的教师反馈。同时，对北京101国际部特色活动English Corner（EC）有特别优化
 
 
-最新版 macOS 安装包：[CampusDesk 0.5.8（Apple Silicon）](https://github.com/xuanqiwang645/CampusDesk/releases/latest)。
+最新版 macOS 安装包：[CampusDesk 0.5.13（Apple Silicon）](https://github.com/xuanqiwang645/CampusDesk/releases/tag/v0.5.13)。
 
 -如果需要windows操作系统版本，移步到https://github.com/zhyunran/ManageBac-packer
 
 如发现任何值得改进的地方，欢迎联系我！邮箱：xuanqiwang645@gmail.com
 
-**当前版本：0.5.8 · MIT · 实验性软件。** 支持中文默认界面与 English 切换、经典面板与卡片看板，以及 Three.js/WebGL Liquid Glass 效果。学习中心汇总全局搜索、今日学习计划、同步可信度、变化记录、成绩目标模拟、EC 定位、附件中心和专注模式；Teams 与 ManageBac 待办分区并按学科整理。课表支持单双周、节假日、一次性课程和临时调课。成绩页保留数字 GPA、百分比分布与本机历史 K 线；K 线支持 1 小时至 30 天时间分度、柱状图和收盘折线，悬停显示 GPA 数值但不显示日期。自动读取不等于完整读取；遇到权限、布局、限流或数量限制时保留已有结果，并显示未完成范围。不要把看板作为成绩、截止时间或 EC 安排的唯一依据，请以学校原平台为准。
+**当前版本：0.5.13 · MIT · 实验性软件。** 支持中文默认界面与 English 切换、经典面板与卡片看板，以及 Three.js/WebGL Liquid Glass 效果。学习中心汇总全局搜索、今日学习计划、同步可信度、变化记录、成绩目标模拟、EC 定位、附件中心和专注模式；Teams 与 ManageBac 待办分区并按学科整理。课表支持单双周、节假日、一次性课程、临时调课和校历导入。成绩页并列展示原分档 GPA 与每科百分比线性折算的 4.0 GPA，各有独立的本机历史 K 线；旧历史缺少线性数据时不会伪造回填。K 线支持 1 小时至 30 天时间分度、柱状图和收盘折线，悬停显示 GPA 数值但不显示日期。两种估算都不是学校官方 GPA。自动读取不等于完整读取；遇到权限、布局、限流或数量限制时保留已有结果，并显示未完成范围。不要把看板作为成绩、截止时间或 EC 安排的唯一依据，请以学校原平台为准。
 
 ## 版本记录
 
+- [v0.5.13](releases/v0.5.13.md) — 双 GPA 算法与双 K 线；整合校历导入、连接体验及同步修正。
 - [v0.5.8](releases/v0.5.8.md) — 每门课程读取自己的 ManageBac 成绩类别权重；成绩目标模拟、学期预测与 K 线悬停改进。
 - [v0.5.7](releases/v0.5.7.md) — 修复英文界面残留中文；按 ManageBac Task Information 中的类别权重与成绩预测 GPA。
 - [v0.5.6](releases/v0.5.6.md) — 修复学期日期输入与 GPA 预测，支持本机配置学校网址。

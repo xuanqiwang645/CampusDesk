@@ -175,6 +175,7 @@
       if (seen.has(id)) continue; seen.add(id);
       const kind = classify(Object.assign({},item,{channel}),options), itemURL = teamsURL(item.url,url,false) || url;
       const attachments = [];
+      if ((Array.isArray(item.attachments) ? item.attachments.length : 0) > 30) warn('单条消息附件超过 30 个，本次仅保留前 30 个。');
       for (const attachment of (Array.isArray(item.attachments) ? item.attachments : []).slice(0,30)) {
         if (!attachment || typeof attachment !== 'object') continue;
         const safe = attachmentURL(attachment.url,url);

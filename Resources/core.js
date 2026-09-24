@@ -147,6 +147,179 @@
     if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(s)) fail('上课时间无效');
     return s;
   }
+  function calendarDateTime(value, tzid, displayTimezone, allDay) {
+    const raw = String(value || '');
+    if (allDay) return { date: dayKey(raw.slice(0, 8).replace(/^(\d{4})(\d{2})(\d{2})$/, '$1-$2-$3')), time: '' };
+    const match = /^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})?(Z)?$/.exec(raw);
+    if (!match) fail('校历包含无法识别的事件时间');
+    const local = match[1] + '-' + match[2] + '-' + match[3] + 'T' + match[4] + ':' + match[5] + ':' + (match[6] || '00');
+    if (!match[7] && !tzid) return { date: dayKey(local.slice(0, 10)), time: timeKey(local.slice(11, 16)) };
+    let instant;
+    if (match[7]) instant = Date.parse(local + 'Z');
+    else {
+      // Interpret a TZID wall time, then convert it to the app's display zone.
+      instant = Date.parse(local + 'Z');
+      for (let i = 0; i < 3; i++) {
+        const p = parts(instant, tzid);
+        const represented = Date.parse(p.year + '-' + p.month + '-' + p.day + 'T' + p.hour + ':' + p.minute + ':00Z');
+        instant += Date.parse(local + 'Z') - represented;
+      }
+    }
+    const p = parts(instant, displayTimezone || 'Asia/Shanghai');
+    return { date: p.year + '-' + p.month + '-' + p.day, time: p.hour + ':' + p.minute };
+  }
+  function unescapeCalendarText(value) {
+    return String(value || '').replace(/\\n/gi, '\n').replace(/\\,/g, ',').replace(/\\;/g, ';').replace(/\\\\/g, '\\');
+  }
+  function parseCalendarRule(value) {
+    if (!value) return null;
+    const fields = {};
+    for (const pair of value.split(';')) { const index = pair.indexOf('='); if (index > 0) fields[pair.slice(0, index).toUpperCase()] = pair.slice(index + 1); }
+    if (Object.keys(fields).some(key => !['FREQ','INTERVAL','COUNT','UNTIL','BYDAY','WKST'].includes(key)) || (fields.WKST && fields.WKST !== 'MO')) fail('校历重复规则包含暂不支持的条件');
+    const freq = String(fields.FREQ || '').toUpperCase();
+    if (!['DAILY', 'WEEKLY', 'MONTHLY', 'YEARLY'].includes(freq)) fail('暂不支持校历中的重复规则：' + freq);
+    const interval = Math.min(366, Math.max(1, Number(fields.INTERVAL) || 1));
+    const count = fields.COUNT ? Math.min(10000, Math.max(1, Number(fields.COUNT) || 1)) : 10000;
+    let until = '';
+    if (fields.UNTIL) {
+      const untilValue = fields.UNTIL;
+      until = /^\d{8}$/.test(untilValue) ? untilValue.replace(/^(\d{4})(\d{2})(\d{2})$/, '$1-$2-$3') : calendarDateTime(untilValue, '', 'Asia/Shanghai', false).date;
+    }
+    if (fields.BYDAY && fields.BYDAY.split(',').some(item => !/^(MO|TU|WE|TH|FR|SA|SU)$/.test(item))) fail('暂不支持按第几个星期几重复的校历规则');
+    const byDay = fields.BYDAY ? fields.BYDAY.split(',').map(item => item.slice(-2)).filter(item => ['MO','TU','WE','TH','FR','SA','SU'].includes(item)) : [];
+    return { freq, interval, count, until, byDay };
+  }
+  function parseSchoolCalendarICS(text, fileName, displayTimezone) {
+    if (typeof text !== 'string' || text.length > 5 * 1024 * 1024) fail('校历文件超过 5 MB 或无法读取');
+    const lines = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n').reduce((out, line) => {
+      if (/^[ \t]/.test(line) && out.length) out[out.length - 1] += line.slice(1); else out.push(line);
+      return out;
+    }, []);
+    const events = [], props = [];
+    let inEvent = false;
+    for (const line of lines) {
+      if (line === 'BEGIN:VEVENT') { inEvent = true; props.length = 0; continue; }
+      if (line === 'END:VEVENT') {
+        inEvent = false;
+        const read = name => props.find(item => item.name === name);
+        const startProp = read('DTSTART'), endProp = read('DTEND');
+        if (!startProp) continue;
+        const allDay = startProp.params.VALUE === 'DATE' || /^\d{8}$/.test(startProp.value);
+        const start = calendarDateTime(startProp.value, startProp.params.TZID, displayTimezone, allDay);
+        let end = endProp ? calendarDateTime(endProp.value, endProp.params.TZID || startProp.params.TZID, displayTimezone, allDay) :
+          (allDay ? { date: addDays(start.date, 1), time: '' } : (() => { const next = new Date(Date.parse(start.date + 'T' + start.time + ':00Z') + 60 * 60 * 1000); return { date: next.toISOString().slice(0, 10), time: next.toISOString().slice(11, 16) }; })());
+        if (allDay && end.date <= start.date) end = { date: addDays(start.date, 1), time: '' };
+        if (!allDay && (end.date < start.date || (end.date === start.date && end.time <= start.time))) fail('校历事件结束时间无效');
+        const uid = unescapeCalendarText((read('UID') || {}).value || '');
+        const recurrence = parseCalendarRule((read('RRULE') || {}).value || '');
+        const exdates = props.filter(item => item.name === 'EXDATE').flatMap(item => item.value.split(',').map(value => calendarDateTime(value, item.params.TZID || startProp.params.TZID, displayTimezone, allDay).date));
+        events.push({ id: 'cal-' + hash(uid || start.date + start.time + ((read('SUMMARY') || {}).value || '') + events.length), uid, title: str(unescapeCalendarText((read('SUMMARY') || {}).value || '（无标题）'), 300),
+          description: str(unescapeCalendarText((read('DESCRIPTION') || {}).value || ''), 2000), location: str(unescapeCalendarText((read('LOCATION') || {}).value || ''), 300),
+          startDate: start.date, endDate: end.date, startTime: start.time, endTime: end.time, allDay,
+          durationDays: Math.min(366, Math.max(0, Math.round((Date.parse(end.date + 'T00:00:00Z') - Date.parse(start.date + 'T00:00:00Z')) / 86400000))),
+          recurrence, exdates: [...new Set(exdates)].slice(0, 500) });
+        if (events.length > 5000) fail('校历事件超过 5000 条');
+        continue;
+      }
+      if (!inEvent) continue;
+      const colon = line.indexOf(':'); if (colon < 0) continue;
+      const left = line.slice(0, colon).split(';'), name = left.shift().toUpperCase(), params = {};
+      for (const part of left) { const i = part.indexOf('='); if (i > 0) params[part.slice(0, i).toUpperCase()] = part.slice(i + 1).replace(/^"|"$/g, ''); }
+      props.push({ name, params, value: line.slice(colon + 1) });
+    }
+    if (!events.length) fail('没有找到可导入的校历事件');
+    return { fileName: str(fileName || 'school-calendar.ics', 255), importedAt: new Date().toISOString(), events };
+  }
+  function parseSchoolCalendarPDFText(text, fileName, fallbackYear) {
+    if (typeof text !== 'string' || text.length > 10 * 1024 * 1024) fail('PDF 校历文本超过 10 MB 或无法读取');
+    const monthNames = { january:1, jan:1, february:2, feb:2, march:3, mar:3, april:4, apr:4, may:5, june:6, jun:6, july:7, jul:7, august:8, aug:8, september:9, sep:9, sept:9, october:10, oct:10, november:11, nov:11, december:12, dec:12 };
+    const currentYear = Number(fallbackYear) || new Date().getFullYear();
+    const explicitYears = [...text.matchAll(/\b(20\d{2})\b/g)].map(match => Number(match[1]));
+    const defaultYear = explicitYears.length ? explicitYears.sort((a,b) => Math.abs(a-currentYear)-Math.abs(b-currentYear))[0] : currentYear;
+    function validDate(year, month, day) {
+      const date = new Date(Date.UTC(year, month - 1, day));
+      if (date.getUTCFullYear() !== year || date.getUTCMonth() !== month - 1 || date.getUTCDate() !== day) return '';
+      return date.toISOString().slice(0, 10);
+    }
+    function detailRows() {
+      const rows = [];
+      for (const raw of text.split(/\r?\n/)) {
+        const item = /^\s*\d{1,2}[.、．]\s*(.+)$/.exec(raw.trim());
+        if (!item) continue;
+        const detail = item[1].trim();
+        const date = /^(?:(20\d{2})\s*年\s*)?(\d{1,2})\s*月\s*(\d{1,2})\s*日?\s*(?:[—–\-~～至到]\s*(?:(20\d{2})\s*年\s*)?(?:(\d{1,2})\s*月\s*)?(\d{1,2})\s*日?)?/.exec(detail);
+        if (!date) continue;
+        const startYear = +(date[1] || defaultYear), startMonth = +date[2], start = validDate(startYear, startMonth, +date[3]);
+        const endMonth = +(date[5] || startMonth), endYear = +(date[4] || (endMonth < startMonth ? startYear + 1 : startYear));
+        const end = date[6] ? validDate(endYear, endMonth, +date[6]) : start;
+        if (!start || !end || end < start || Date.parse(end + 'T00:00:00Z') - Date.parse(start + 'T00:00:00Z') > 365 * 86400000) continue;
+        const title = detail.slice(date[0].length).replace(/^\s*[（(](?:周|星期)[一二三四五六日天][)）]\s*/, '').replace(/^[\s，,、:：.．]+/, '').replace(/[。．.\s]+$/, '').trim();
+        if (title) rows.push({ date: start, endInclusive: end, title });
+      }
+      return rows;
+    }
+    function findDate(line) {
+      let match = /\b(20\d{2})[-/.](\d{1,2})[-/.](\d{1,2})\b/.exec(line);
+      if (match) return { date: validDate(+match[1], +match[2], +match[3]), token: match[0], index: match.index };
+      match = /(?:\b(20\d{2})年)?\s*(\d{1,2})月\s*(\d{1,2})日/.exec(line);
+      if (match) return { date: validDate(+(match[1] || defaultYear), +match[2], +match[3]), token: match[0], index: match.index };
+      match = /\b(\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))?\b/.exec(line);
+      if (match) { let year = match[3] ? +match[3] : defaultYear; if (year < 100) year += 2000; return { date: validDate(year, +match[1], +match[2]), token: match[0], index: match.index }; }
+      match = /\b(January|Jan\.?|February|Feb\.?|March|Mar\.?|April|Apr\.?|May|June|Jun\.?|July|Jul\.?|August|Aug\.?|September|Sept?\.?|October|Oct\.?|November|Nov\.?|December|Dec\.?)\s+(\d{1,2})(?:,?\s+(20\d{2}))?\b/i.exec(line);
+      if (match) { const month = monthNames[match[1].toLowerCase().replace('.', '')]; return { date: validDate(+(match[3] || defaultYear), month, +match[2]), token: match[0], index: match.index }; }
+      return null;
+    }
+    const rows = []; let pendingDate = '';
+    for (const raw of text.replace(/\r/g, '\n').split('\n')) {
+      const line = raw.replace(/[\t\u00a0]+/g, ' ').replace(/\s{2,}/g, ' ').trim();
+      if (!line || /^(校历|school calendar|date|日期|event|事件|活动|说明|备注|page\s+\d+|第\s*\d+\s*页)$/i.test(line)) continue;
+      const found = findDate(line);
+      if (found) {
+        if (!found.date) continue;
+        let title = (line.slice(0, found.index) + ' ' + line.slice(found.index + found.token.length)).replace(/[|｜•·:：—–-]+/g, ' ').replace(/\b(Mon(day)?|Tue(sday)?|Wed(nesday)?|Thu(rsday)?|Fri(day)?|Sat(urday)?|Sun(day)?)\b/ig, ' ').replace(/星期[一二三四五六日天]|周[一二三四五六日天]/g, ' ').replace(/\s{2,}/g, ' ').trim();
+        title = title.replace(/^(?:上午|下午|morning|afternoon)\s*/i, '').replace(/\s*(?:上午|下午)$/i, '').trim();
+        if (title && !/^(?:holiday|event|活动名称|事项)$/i.test(title)) rows.push({ date: found.date, title });
+        else pendingDate = found.date;
+      } else if (line.length <= 240 && !/^\d+$/.test(line) && !/^(?:continued|续表|备注[:：]?|说明[:：]?)/i.test(line)) {
+        if (pendingDate) { rows.push({ date: pendingDate, title: line }); pendingDate = ''; }
+        else {
+          const previous = rows[rows.length - 1];
+          if (previous && previous.title.length < 280) previous.title = (previous.title + ' ' + line).slice(0, 300);
+        }
+      }
+    }
+    const detailed = detailRows(), selected = detailed.length ? detailed : rows;
+    const seen = new Set();
+    const events = selected.filter(row => { const key = row.date + '|' + (row.endInclusive || row.date) + '|' + row.title; if (seen.has(key)) return false; seen.add(key); return true; }).slice(0, 500).map((row, index) => ({
+      id: 'pdf-cal-' + hash(row.date + '|' + row.title + '|' + index), uid: '', title: str(row.title, 300, '校历事件'), description: '', location: '',
+      startDate: row.date, endDate: addDays(row.endInclusive || row.date, 1), startTime: '', endTime: '', allDay: true,
+      durationDays: Math.round((Date.parse((row.endInclusive || row.date) + 'T00:00:00Z') - Date.parse(row.date + 'T00:00:00Z')) / 86400000) + 1,
+      recurrence: null, exdates: []
+    }));
+    if (!events.length) fail('PDF 中没有识别到“日期 + 事件名称”表格行，请确认 PDF 有可选择的文字');
+    return { fileName: str(fileName || 'school-calendar.pdf', 255), importedAt: new Date().toISOString(), events };
+  }
+  function addDays(date, amount) { const value = new Date(date + 'T00:00:00Z'); value.setUTCDate(value.getUTCDate() + amount); return value.toISOString().slice(0, 10); }
+  function normalizeSchoolCalendar(value) {
+    if (value === undefined) return { fileName: '', importedAt: '', events: [] };
+    record(value, '导入校历');
+    return { fileName: str(value.fileName, 255), importedAt: value.importedAt ? dateISO(value.importedAt, false) : '', events: array(value.events, '校历事件', 5000).map(row => {
+      record(row, '校历事件');
+      const startDate = dayKey(row.startDate), endDate = dayKey(row.endDate), allDay = bool(row.allDay, false);
+      if (endDate < startDate || (!allDay && endDate === startDate && timeKey(row.endTime) <= timeKey(row.startTime))) fail('校历事件日期范围无效');
+      let recurrence = null;
+      if (row.recurrence) {
+        record(row.recurrence, '校历重复规则');
+        if (!['DAILY','WEEKLY','MONTHLY','YEARLY'].includes(row.recurrence.freq)) fail('校历重复频率无效');
+        recurrence = { freq: row.recurrence.freq, interval: finite(row.recurrence.interval, 1, 366, false), count: finite(row.recurrence.count, 1, 10000, false), until: row.recurrence.until ? dayKey(row.recurrence.until) : '', byDay: array(row.recurrence.byDay, '校历星期', 7).map(strDay) };
+      }
+      return { id: id(row.id), uid: str(row.uid, 512), title: str(row.title, 300, '（无标题）'), description: str(row.description, 2000), location: str(row.location, 300),
+        startDate, endDate, startTime: allDay ? '' : timeKey(row.startTime), endTime: allDay ? '' : timeKey(row.endTime), allDay,
+        durationDays: finite(row.durationDays === undefined ? Math.round((Date.parse(endDate + 'T00:00:00Z') - Date.parse(startDate + 'T00:00:00Z')) / 86400000) : row.durationDays, 0, 366, false),
+        recurrence, exdates: array(row.exdates, '校历排除日期', 500).map(dayKey) };
+    }) };
+  }
+  function strDay(value) { const day = str(value, 2); if (!['MO','TU','WE','TH','FR','SA','SU'].includes(day)) fail('校历星期无效'); return day; }
   function safeURL(value, source) {
     if (!value || typeof value !== 'string' || value.length > 4096) return '';
     try {
@@ -218,7 +391,7 @@
       teamsBrowser: 'chrome', teamsBrowserAutomation: false, teamsMode: 'browser', teamsAutoDiscover: true, graphIncludeChats: true,
       reminderMinutes: 30, teamsDueOverrides: {}, dashboardTheme: 'classic', gpaCandleColors: 'red-up', language: 'zh-CN', focusSubjects: [], focusTeamsChannels: [], customLessons: [],
       scheduleHolidays: [], scheduleWeekAnchor: '', scheduleOverrides: [], focusMode: false, planOrder: [], taskMinutes: {}, taskPriority: {}, gradeGoals: {}, gradePlans: {}, gpaTermDates: {}, ecIdentityNames: [] }, snapshots: { seiue: {}, managebac: {}, teams: {} },
-      manualTasks: [], taskChecks: {}, feedbackRead: {}, gradeHistory: [], changeLog: [] };
+      manualTasks: [], taskChecks: {}, feedbackRead: {}, gradeHistory: [], changeLog: [], schoolCalendar: { fileName: '', importedAt: '', events: [] } };
   }
   function scheduleRow(row) {
     record(row, '课程');
@@ -531,7 +704,7 @@
   function historyRow(value) {
     record(value, '成绩历史');
     return { capturedAt: dateISO(value.capturedAt, false), date: dayKey(value.date),
-      value: finite(value.value, 0, 4, false), count: finite(value.count, 1, 1000, false), scale: 4,
+      value: finite(value.value, 0, 4, false), linearValue: finite(value.linearValue, 0, 4, true), count: finite(value.count, 1, 1000, false), scale: 4,
       term: str(value.term, 300), method: str(value.method, 500, METHOD), signature: str(value.signature, 100000) };
   }
   function changeRow(value) {
@@ -655,7 +828,17 @@
     s.taskChecks = flagMap(raw.taskChecks, '待办标记');
     s.feedbackRead = flagMap(raw.feedbackRead, '反馈标记');
     s.gradeHistory = array(raw.gradeHistory, '成绩历史', 120).map(historyRow);
+    // An old record only has the banded value. Recover the latest linear point
+    // when its exact course signature still matches the current snapshot;
+    // older points cannot be reconstructed honestly from aggregate GPA alone.
+    const latestGrade = s.gradeHistory[s.gradeHistory.length - 1];
+    if (latestGrade && latestGrade.linearValue == null && latestGrade.signature) {
+      const currentCourses = getCourses(s).filter(c => c.gpaEligible && points(c.percentage) !== null);
+      const currentSignature = JSON.stringify(currentCourses.map(c => [c.id, c.term, c.percentage]).sort((a, b) => a[0].localeCompare(b[0])));
+      if (latestGrade.signature === currentSignature) latestGrade.linearValue = estimateLinearGPA(currentCourses).value;
+    }
     s.changeLog = array(raw.changeLog, '变化收件箱', 600).map(changeRow);
+    s.schoolCalendar = normalizeSchoolCalendar(raw.schoolCalendar);
     return s;
   }
   function parts(date, tz) {
@@ -686,6 +869,23 @@
     return inferred.sort((a, b) => a.start.localeCompare(b.start));
   }
   function weekdayKey(value) { return new Date(value + 'T12:00:00Z').getUTCDay(); }
+  function schoolCalendarScheduleRule(state, date) {
+    const events = getSchoolCalendarEvents(state, date).filter(event => event.allDay);
+    const days = { '日':0, '天':0, '一':1, '二':2, '三':3, '四':4, '五':5, '六':6 };
+    for (const event of events) {
+      if (event.durationDays > 1) continue;
+      const match = /(?:补|按|上)(?:周|星期)([一二三四五六日天])(?:的)?(?:课|课表)/.exec(event.title);
+      if (match) return { kind: 'makeup', weekday: days[match[1]], title: event.title };
+    }
+    const holiday = events.find(event => /(?:假期|放假|调休休息|休息日)/.test(event.title));
+    return holiday ? { kind: 'holiday', title: holiday.title } : null;
+  }
+  function schoolCalendarScheduleConflict(state, date) {
+    const key = dayKey(date), rule = schoolCalendarScheduleRule(state, key);
+    if (!rule || rule.kind !== 'holiday') return null;
+    const rows = entries(state, 'seiue').flatMap(snapshot => (snapshot.schedule || []).filter(row => row.date === key));
+    return rows.length ? { date: key, title: rule.title, count: rows.length } : null;
+  }
   function weekParity(key, anchor) {
     if (!anchor) return 'all';
     const start = new Date(anchor + 'T12:00:00Z'), current = new Date(key + 'T12:00:00Z');
@@ -701,7 +901,8 @@
     return false;
   }
   function customScheduleForDay(state, key) {
-    const periods = getSchedulePeriods(state), weekday = weekdayKey(key), holiday = (state.settings.scheduleHolidays || []).includes(key), parity = weekParity(key, state.settings.scheduleWeekAnchor);
+    const rule = schoolCalendarScheduleRule(state, key);
+    const periods = getSchedulePeriods(state), weekday = rule && rule.kind === 'makeup' ? rule.weekday : weekdayKey(key), holiday = (state.settings.scheduleHolidays || []).includes(key) || Boolean(rule && rule.kind === 'holiday'), parity = weekParity(key, state.settings.scheduleWeekAnchor);
     return (state.settings.customLessons || []).filter(item => {
       if (item.date === key) return true;
       if (item.date || holiday || (item.skipDates || []).includes(key) || !item.weekdays.includes(weekday)) return false;
@@ -748,12 +949,70 @@
     }
     return bestOverlap > 0 && bestOverlap / Math.max(1, end - start) >= 0.5 ? best : '';
   }
+  function calendarWeekday(date) { return ['SU','MO','TU','WE','TH','FR','SA'][new Date(date + 'T00:00:00Z').getUTCDay()]; }
+  function calendarMonday(date) { const day = new Date(date + 'T00:00:00Z').getUTCDay(); return addDays(date, -((day + 6) % 7)); }
+  function calendarOccurrence(rule, startDate, occurrenceDate) {
+    if (!rule) return occurrenceDate === startDate;
+    if (occurrenceDate < startDate || (rule.until && occurrenceDate > rule.until)) return false;
+    const start = new Date(startDate + 'T00:00:00Z'), current = new Date(occurrenceDate + 'T00:00:00Z');
+    const dayDiff = Math.round((current - start) / 86400000), interval = rule.interval || 1;
+    let matches = false;
+    if (rule.freq === 'DAILY') matches = dayDiff % interval === 0;
+    else if (rule.freq === 'WEEKLY') {
+      const weeks = Math.round((Date.parse(calendarMonday(occurrenceDate) + 'T00:00:00Z') - Date.parse(calendarMonday(startDate) + 'T00:00:00Z')) / (7 * 86400000)), byDay = rule.byDay && rule.byDay.length ? rule.byDay : [calendarWeekday(startDate)];
+      matches = weeks % interval === 0 && byDay.includes(calendarWeekday(occurrenceDate));
+    } else if (rule.freq === 'MONTHLY') {
+      const months = (current.getUTCFullYear() - start.getUTCFullYear()) * 12 + current.getUTCMonth() - start.getUTCMonth();
+      matches = months >= 0 && months % interval === 0 && current.getUTCDate() === start.getUTCDate();
+    } else if (rule.freq === 'YEARLY') matches = current.getUTCMonth() === start.getUTCMonth() && current.getUTCDate() === start.getUTCDate() && (current.getUTCFullYear() - start.getUTCFullYear()) % interval === 0;
+    if (!matches) return false;
+    if (rule.count && rule.count < 10000) {
+      let count = 0;
+      // Count generated dates through the candidate so COUNT is honored for all supported frequencies.
+      for (let cursor = startDate; cursor <= occurrenceDate; cursor = addDays(cursor, 1)) {
+        if (calendarOccurrenceMatches(rule, startDate, cursor)) count++;
+        if (count > rule.count) return false;
+      }
+    }
+    return true;
+  }
+  function calendarOccurrenceMatches(rule, startDate, occurrenceDate) {
+    if (occurrenceDate < startDate || (rule.until && occurrenceDate > rule.until)) return false;
+    const start = new Date(startDate + 'T00:00:00Z'), current = new Date(occurrenceDate + 'T00:00:00Z');
+    const dayDiff = Math.round((current - start) / 86400000), interval = rule.interval || 1;
+    if (rule.freq === 'DAILY') return dayDiff % interval === 0;
+    if (rule.freq === 'WEEKLY') return Math.round((Date.parse(calendarMonday(occurrenceDate) + 'T00:00:00Z') - Date.parse(calendarMonday(startDate) + 'T00:00:00Z')) / (7 * 86400000)) % interval === 0 && (rule.byDay && rule.byDay.length ? rule.byDay : [calendarWeekday(startDate)]).includes(calendarWeekday(occurrenceDate));
+    if (rule.freq === 'MONTHLY') return ((current.getUTCFullYear() - start.getUTCFullYear()) * 12 + current.getUTCMonth() - start.getUTCMonth()) % interval === 0 && current.getUTCDate() === start.getUTCDate();
+    return (current.getUTCFullYear() - start.getUTCFullYear()) % interval === 0 && current.getUTCMonth() === start.getUTCMonth() && current.getUTCDate() === start.getUTCDate();
+  }
+  function getSchoolCalendarEvents(state, date) {
+    const target = dayKey(date || today(undefined, state.settings.timezone));
+    const output = [];
+    for (const event of state.schoolCalendar.events) {
+      const length = event.durationDays || 0, maxOffset = event.allDay ? Math.max(0, length - 1) : length;
+      for (let offset = 0; offset <= maxOffset; offset++) {
+        const occurrenceDate = addDays(target, -offset);
+        if (occurrenceDate < event.startDate || event.exdates.includes(occurrenceDate)) continue;
+        if (calendarOccurrence(event.recurrence, event.startDate, occurrenceDate)) {
+          output.push(Object.assign({}, event, { date: target, occurrenceDate,
+            displayStartTime: offset ? '00:00' : event.startTime,
+            displayEndTime: offset === maxOffset ? event.endTime : '' }));
+          break;
+        }
+      }
+    }
+    return output.sort((a, b) => Number(a.allDay) !== Number(b.allDay) ? Number(b.allDay) - Number(a.allDay) :
+      (a.displayStartTime || '').localeCompare(b.displayStartTime || '') || a.title.localeCompare(b.title));
+  }
   function getSchedule(state, date, includeSelfStudy) {
     const key = typeof date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(date) ? dayKey(date) : today(date, state.settings.timezone);
     const periods = getSchedulePeriods(state), seen = new Set(), rows = [];
-    const holiday = (state.settings.scheduleHolidays || []).includes(key);
+    const calendarRule = schoolCalendarScheduleRule(state, key);
+    const holiday = (state.settings.scheduleHolidays || []).includes(key) || Boolean(calendarRule && calendarRule.kind === 'holiday');
+    const seiueEntries = entries(state, 'seiue');
+    const schoolDateKnown = seiueEntries.some(snapshot => (snapshot.calendarDates || []).includes(key) || (snapshot.schedule || []).some(row => row.date === key));
     // One slot gets the latest authoritative title, including a change to self-study.
-    for (const s of entries(state, 'seiue')) {
+    for (const s of seiueEntries) {
       if (holiday) break;
       for (const r of s.schedule || []) {
         if (r.date !== key) continue;
@@ -765,6 +1024,24 @@
       }
       // A verified complete day is authoritative, including a day with no lessons.
       if ((s.calendarDates || []).includes(key)) break;
+    }
+    if (!holiday && !schoolDateKnown && calendarRule && calendarRule.kind === 'makeup') {
+      const candidates = seiueEntries.flatMap(snapshot => (snapshot.schedule || [])
+        .filter(row => row.date !== key && weekdayKey(row.date) === calendarRule.weekday)
+        .map(row => ({ row, distance: Math.abs(Date.parse(key + 'T12:00:00Z') - Date.parse(row.date + 'T12:00:00Z')) })))
+        .filter(candidate => candidate.distance <= 35 * 86400000)
+        .sort((a, b) => a.distance - b.distance);
+      const nearestDate = candidates.length ? candidates[0].row.date : '';
+      for (const candidate of candidates) {
+        if (candidate.row.date !== nearestDate) break;
+        const row = candidate.row, slot = key + '|' + row.start + '|' + row.end;
+        if (seen.has(slot)) continue;
+        seen.add(slot);
+        if (row.isSelfStudy && !state.settings.selfStudy && !includeSelfStudy) continue;
+        rows.push(Object.assign({}, row, { id: row.id + '@makeup-' + key, date: key, calendarSubstitute: true, calendarSourceDate: row.date,
+          period: schedulePeriodForRow(row, periods), capturedAt: seiueEntries.find(snapshot => (snapshot.schedule || []).some(item => item.id === row.id))?.capturedAt || '',
+          sourceURL: seiueEntries.find(snapshot => (snapshot.schedule || []).some(item => item.id === row.id))?.url || '' }));
+      }
     }
     rows.push(...customScheduleForDay(state, key));
     const adjusted = applyScheduleOverrides(rows, state, key, periods);
@@ -808,11 +1085,22 @@
     if (typeof percentage !== 'number' || !Number.isFinite(percentage) || percentage < 0 || percentage > 100) return null;
     return percentage >= 90 ? 4 : percentage >= 80 ? 3 : percentage >= 70 ? 2 : percentage >= 60 ? 1 : 0;
   }
+  function linearPoints(percentage) {
+    if (typeof percentage !== 'number' || !Number.isFinite(percentage) || percentage < 0 || percentage > 100) return null;
+    return percentage / 100 * 4;
+  }
   function estimateGPA(courses) {
     const eligible = courses.filter(c => c.gpaEligible !== false && c.isCurrentTerm !== false && c.isCourseGrade !== false);
     const grades = eligible.map(c => points(c.percentage)).filter(p => p !== null);
     return { value: grades.length ? Math.round(grades.reduce((a, b) => a + b, 0) / grades.length * 100) / 100 : null,
       count: grades.length, excluded: courses.length - grades.length, scale: 4, method: METHOD };
+  }
+  function estimateLinearGPA(courses) {
+    const eligible = courses.filter(c => c.gpaEligible !== false && c.isCurrentTerm !== false && c.isCourseGrade !== false);
+    const grades = eligible.map(c => linearPoints(c.percentage)).filter(p => p !== null);
+    return { value: grades.length ? grades.reduce((sum, value) => sum + value, 0) / grades.length : null,
+      count: grades.length, excluded: courses.length - grades.length, scale: 4,
+      method: '每门当前学期课程的百分制总评 ÷ 100 × 4，再按课程等权平均；非学校官方 GPA' };
   }
   function semesterGPAForecast(courses, termDates, now) {
     const start = termDates && termDates.start, end = termDates && termDates.end;
@@ -841,11 +1129,14 @@
       // projected at the student's weighted average on the components already graded.
       const projectedPercent = (graded.reduce((sum, component) => sum + Number(component.percentage) * Number(component.weight), 0) + (100 - gradedWeight) * currentPercent) / 100;
       forecasts.push({ id: course.id, name: course.name, currentPercent, projectedPercent,
-        currentGPA: points(currentPercent), projectedGPA: points(projectedPercent), gradedWeight,
+        currentGPA: points(currentPercent), projectedGPA: points(projectedPercent),
+        currentLinearGPA: linearPoints(currentPercent), projectedLinearGPA: linearPoints(projectedPercent), gradedWeight,
         representedWeight: Math.min(100, totalWeight), components: components.length });
     }
     const gpas = forecasts.map(course => course.projectedGPA).filter(value => value !== null);
     const remainingGpas = forecasts.map(course => course.currentGPA).filter(value => value !== null);
+    const linearGpas = forecasts.map(course => course.projectedLinearGPA).filter(value => value !== null);
+    const remainingLinearGpas = forecasts.map(course => course.currentLinearGPA).filter(value => value !== null);
     const daysRemaining = Math.max(0, Math.ceil((endMs - Date.UTC(new Date(current).getUTCFullYear(), new Date(current).getUTCMonth(), new Date(current).getUTCDate())) / 86400000));
     return { available: forecasts.length > 0, reason: forecasts.length ? null : missingComponents ? 'components' : invalidWeights ? 'weights' : 'components',
       start, end, progress: Math.round(progress * 1000) / 10, daysRemaining, count: forecasts.length,
@@ -853,6 +1144,8 @@
       coverage: forecasts.length ? Math.round(forecasts.reduce((sum, course) => sum + course.gradedWeight, 0) / forecasts.length * 10) / 10 : 0,
       remainingGPA: remainingGpas.length ? Math.round(remainingGpas.reduce((sum, value) => sum + value, 0) / remainingGpas.length * 100) / 100 : null,
       projectedGPA: gpas.length ? Math.round(gpas.reduce((sum, value) => sum + value, 0) / gpas.length * 100) / 100 : null,
+      remainingLinearGPA: remainingLinearGpas.length ? remainingLinearGpas.reduce((sum, value) => sum + value, 0) / remainingLinearGpas.length : null,
+      projectedLinearGPA: linearGpas.length ? linearGpas.reduce((sum, value) => sum + value, 0) / linearGpas.length : null,
       scale: 4, method: '已评分组成按学校页面中明确显示的权重加权；尚未评分的部分按该课程已评分组成的平均百分比作平稳情景；课程间等权。', courses: forecasts };
   }
   function getOfficialGPA(state) {
@@ -949,7 +1242,7 @@
         const changes = fields.filter(key => JSON.stringify(old[key] == null ? null : old[key]) !== JSON.stringify(row[key] == null ? null : row[key]));
         if (!changes.length) continue;
         const details = changes.map(key => ({ dueAt: '截止日期已调整', dueLabel: '截止日期说明已调整', requirements: '作业要求已更新',
-          attachments: '附件有增删或版本变化', percentage: '课程百分比成绩已更新', score: '作业得分已更新', gradeLabel: '成绩等级已更新',
+          attachments: '附件有增删或版本变化', percentage: '课程百分比成绩已更新', gradeComponents: '成绩组成、类别权重或类别均分已更新', score: '作业得分已更新', gradeLabel: '成绩等级已更新',
           text: '正文内容已更新', title: '标题已更新', status: '提交状态已更新' }[key] || '内容已更新'));
         if (field === 'posts' && row.kind === 'ec' && changes.includes('text')) {
           const before = ecSignals(old.text || ''), after = ecSignals(row.text || '');
@@ -964,9 +1257,18 @@
     };
     compare('tasks', '作业', ['dueAt', 'dueLabel', 'requirements', 'status', 'attachments'], '作业');
     compare('posts', '消息', ['title', 'text', 'attachments'], '消息');
-    compare('courses', '成绩', ['percentage'], '课程成绩');
+    compare('courses', '成绩', ['percentage', 'gradeComponents'], '课程成绩');
     compare('grades', '成绩', ['score', 'percentage', 'gradeLabel'], '作业成绩');
     compare('feedback', '反馈', ['text', 'score', 'gradeLabel'], '老师反馈');
+    // Only report removals when the source explicitly sends tombstones. An
+    // absent row in a visible-page or partial sync is not proof of deletion.
+    const deleted = new Set((current.graphDeletedIDs || current.deletedIDs || []).map(String));
+    if (deleted.size) for (const field of ['tasks', 'posts', 'feedback', 'grades']) {
+      for (const row of previous[field] || []) if ([...deleted].some(id => row.id === id || row.id.startsWith(id + ':reply:'))) {
+        rows.push({ id: 'change-' + hash(source + '|removed|' + row.id + '|' + capturedAt), source, kind: 'removed', category: field === 'tasks' ? '作业' : field === 'posts' ? '消息' : field === 'grades' ? '成绩' : '反馈',
+          title: row.title || row.name || '记录', course: row.course || '', detail: '来源已明确移除此记录', capturedAt, url: row.url || current.url });
+      }
+    }
     return rows;
   }
   function ecSignals(text) {
@@ -1127,14 +1429,14 @@
     }
     if (changes.length) result.changeLog = result.changeLog.concat(changes).slice(-600);
     if (!failed && item.source === 'managebac') {
-      const courses = getCourses(result), estimate = estimateGPA(courses);
+      const courses = getCourses(result), estimate = estimateGPA(courses), linear = estimateLinearGPA(courses);
       if (estimate.count) {
         const relevant = courses.filter(c => c.gpaEligible && points(c.percentage) !== null);
         const signature = JSON.stringify(relevant.map(c => [c.id, c.term, c.percentage]).sort((a, b) => a[0].localeCompare(b[0])));
         const last = result.gradeHistory[result.gradeHistory.length - 1];
-        if (!last || last.signature !== signature) {
+        if (!last || last.signature !== signature || last.linearValue == null) {
           const entry = { capturedAt: item.capturedAt, date: today(item.capturedAt, result.settings.timezone),
-            value: estimate.value, count: estimate.count, scale: 4, term: relevant[0].term, method: METHOD, signature };
+            value: estimate.value, linearValue: linear.value, count: estimate.count, scale: 4, term: relevant[0].term, method: METHOD, signature };
           const sameDay = result.gradeHistory.findIndex(h => h.date === entry.date && termKey(h.term) === termKey(entry.term));
           if (sameDay >= 0) result.gradeHistory[sameDay] = entry;
           else result.gradeHistory.push(entry);
@@ -1157,12 +1459,13 @@
     const courses = getCourses(state);
     return { date: today(date, state.settings.timezone), time: clock(date, state.settings.timezone),
       schedule: getSchedule(state, date), schedulePeriods: getSchedulePeriods(state), courses, tasks: getTasks(state), feedback: getFeedback(state),
-      officialGPA: getOfficialGPA(state), estimatedGPA: estimateGPA(courses), nextClass: getNextClass(state, date),
+      officialGPA: getOfficialGPA(state), estimatedGPA: estimateGPA(courses), linearGPA: estimateLinearGPA(courses), nextClass: getNextClass(state, date),
       classClock: getClassClock(state, date), teamsPosts: getTeamsPosts(state), teamsEC: getTeamsEC(state), teamsGrades: getTeamsGrades(state),
+      schoolCalendarEvents: getSchoolCalendarEvents(state, today(date, state.settings.timezone)),
       sources: { seiue: getSourceStatus(state, 'seiue', date), managebac: getSourceStatus(state, 'managebac', date), teams: getSourceStatus(state, 'teams', date) },
       changes: state.changeLog.slice().sort((a, b) => Date.parse(b.capturedAt) - Date.parse(a.capturedAt)) };
   }
   return Object.freeze({ VERSION, configureSchools, schoolHomes, normalizeSchoolHome, emptyState, defaultState: emptyState, validateState, normalizeState: validateState,
-    mergeSnapshot, resetTeamsData, clearTeamsData: resetTeamsData, today, clock, getSchedule, getCourses, getTasks, getFeedback, getOfficialGPA, estimateGPA, semesterGPAForecast,
-    getNextClass, getClassClock, getSchedulePeriods, getTeamsPosts, getTeamsEC, getTeamsGrades, getSourceStatus, buildView, safeURL, safeAttachmentURL, gradePoints: points });
+    mergeSnapshot, resetTeamsData, clearTeamsData: resetTeamsData, today, clock, getSchedule, getCourses, getTasks, getFeedback, getOfficialGPA, estimateGPA, estimateLinearGPA, semesterGPAForecast,
+    getNextClass, getClassClock, getSchedulePeriods, getTeamsPosts, getTeamsEC, getTeamsGrades, getSourceStatus, buildView, getSchoolCalendarEvents, schoolCalendarScheduleRule, schoolCalendarScheduleConflict, parseSchoolCalendarICS, parseSchoolCalendarPDFText, safeURL, safeAttachmentURL, gradePoints: points, linearGradePoints: linearPoints });
 });

@@ -37,6 +37,9 @@ test('Details category blocks accept whitespace layouts but require explicit sec
   assert.deepEqual(mb.categoryAveragesFromText('Quiz (40%) A (90%) Project (60%) -'),[]);
   assert.deepEqual(mb.categoryAveragesFromText('Task Category Averages\nCategory (Weight)\nMark (Score)\nOverall\n-\nQuiz (100%)\n-').map(({name,weight,percentage})=>({name,weight,percentage})),[{name:'Quiz',weight:100,percentage:null}]);
   assert.deepEqual(mb.categoryAveragesFromText('Task Category Averages Category (Weight) Mark (Score) Overall B (85%) Midterm (Group Research Project) (20%) - Final exam (80%) B (85%)').map(({name,weight,percentage})=>({name,weight,percentage})),[{name:'Midterm (Group Research Project)',weight:20,percentage:null},{name:'Final exam',weight:80,percentage:85}]);
+  assert.deepEqual(mb.categoryAveragesFromText('任务类别平均成绩\n类别（权重）\n评分（得分）\n总评 B (86.88%)\n形成性评价 (20%) B (86.88%)\n总结性评价 (35%) -\n考试 (45%) -').map(({name,weight,percentage})=>({name,weight,percentage})),[
+    {name:'形成性评价',weight:20,percentage:86.88},{name:'总结性评价',weight:35,percentage:null},{name:'考试',weight:45,percentage:null}
+  ]);
 });
 
 test('synthetic overall grade and task statuses use their own explicit fields', () => {
@@ -147,6 +150,13 @@ test('historical and unknown terms cannot claim to be current', () => {
     const page = clone(); page.term = term;
     assert.equal(mb.fromProjection(page, timestamp).courses[0].isCurrentTerm, false);
   }
+});
+
+test('unmarked term labels explain why the course is excluded from current-term GPA', () => {
+  const page = clone(); page.term = 'Semester One';
+  const result = mb.fromProjection(page, timestamp);
+  assert.equal(result.courses[0].isCurrentTerm, false);
+  assert.ok(result.warnings.some(value=>value.includes('暂不计入当前 GPA')));
 });
 
 test('pending and upcoming tasks are not treated as submitted', () => {

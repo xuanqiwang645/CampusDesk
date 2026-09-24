@@ -223,3 +223,10 @@ test('DOM manual fallback only reads explicit current selection',()=>{
   const empty=teams.collect(documentFor([]),url,{selectionOnly:true});
   assert.equal(empty.selectionEmpty,true); assert.deepEqual(empty.messages,[]);
 });
+test('attachment truncation is explicitly reported instead of silently dropping file links',()=>{
+  const page=fixture();
+  page.messages=[{nativeID:'many-files',title:'Files',text:'See the files.',attachments:Array.from({length:31},(_,index)=>({title:'File '+index,url:'https://example.sharepoint.com/sites/class/file-'+index+'.pdf'}))}];
+  const data=result(page);
+  assert.equal(data.posts[0].attachments.length,30);
+  assert.ok(data.warnings.some(value=>value.includes('超过 30 个')));
+});

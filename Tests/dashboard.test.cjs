@@ -185,6 +185,9 @@ test('estimated GPA is always presented with two decimal places', () => {
   app.click({ page: 'grades' });
   assert.match(app.node('content').innerHTML, />3\.50</);
   assert.match(app.node('content').innerHTML, />4\.00</);
+  assert.match(app.node('content').innerHTML, /线性折算 GPA/);
+  assert.match(app.node('content').innerHTML, />3\.40</);
+  assert.match(app.node('content').innerHTML, /<th>线性绩点<\/th>/);
 });
 
 test('semester forecast explains its assumptions and saves local term dates', () => {
@@ -258,6 +261,82 @@ test('tasks group by subject and Teams group by sender/channel with local focus 
   app.click({ action: 'toggle-focus-channel', value: 'HOMEWORK' });
   assert.deepEqual(app.last('saveState').state.settings.focusTeamsChannels, ['HOMEWORK']);
   app.click({ action: 'teams-channel-filter', filter: 'focus' }); assert.match(app.node('content').innerHTML, /HOMEWORK/); assert.doesNotMatch(app.node('content').innerHTML, /ENGLISH CORNER ROSTER/);
+});
+
+test('quick connection saves only the school origin and waits for persistence before opening sign-in', () => {
+  const app = harness({ hash: '#settings' });
+  app.receive({ type: 'schoolConfiguration', config: { seiue: '', managebac: 'https://example-school.managebac.cn/' } });
+  app.click({ action: 'connect-source', source: 'seiue' });
+  assert.equal(app.node('quick-connect-dialog').open, true);
+  app.input('quick-connect-url', 'https://new-school.seiue.com/login?next=/timetable');
+  app.receive({ type: 'snapshot', snapshot: teamsSnapshot() });
+  assert.equal(app.node('quick-connect-url').value, 'https://new-school.seiue.com/login?next=/timetable');
+  app.submit('quick-connect-form');
+  assert.deepEqual(app.last('saveSchoolConfiguration').config, { seiue: 'https://new-school.seiue.com/', managebac: 'https://example-school.managebac.cn/' });
+  assert.equal(app.last('connectSchool'), undefined);
+  app.receive({ type: 'schoolConfiguration', config: app.last('saveSchoolConfiguration').config, saved: true });
+  assert.equal(app.last('connectSchool').source, 'seiue');
+  assert.equal(app.node('quick-connect-dialog').open, false);
+});
+
+test('quick connection rejects unrelated hosts and allows retry after a failed save', () => {
+  const app = harness({ hash: '#settings' });
+  app.click({ action: 'connection-options', source: 'managebac' });
+  for (const invalid of ['https://managebac.cn.evil.invalid/', 'http://school.managebac.cn/', 'https://user:pass@school.managebac.cn/']) {
+    app.input('quick-connect-url', invalid); app.submit('quick-connect-form');
+    assert.equal(app.last('saveSchoolConfiguration'), undefined);
+  }
+  app.input('quick-connect-url', 'new-school.managebac.cn/student/home'); app.submit('quick-connect-form');
+  app.receive({ type: 'schoolConfigurationError' });
+  assert.equal(app.last('connectSchool'), undefined);
+  assert.equal(app.node('quick-connect-submit').disabled, false);
+  app.submit('quick-connect-form');
+  assert.equal(app.sent.filter(item => item.action === 'saveSchoolConfiguration').length, 2);
+});
+
+test('canceling a pending quick connection does not launch a login window when saving completes', () => {
+  const app = harness({ hash: '#settings' });
+  app.click({ action: 'connection-options', source: 'seiue' });
+  app.input('quick-connect-url', 'new-school.seiue.com'); app.submit('quick-connect-form');
+  app.click({ action: 'close-quick-connect' });
+  app.receive({ type: 'schoolConfiguration', config: app.last('saveSchoolConfiguration').config, saved: true });
+  assert.equal(app.last('connectSchool'), undefined);
+});
+
+test('configured school sign-in is one click and does not rewrite school configuration', () => {
+  const app = harness({ hash: '#settings' });
+  app.click({ action: 'connect-source', source: 'managebac' });
+  assert.deepEqual(app.last('connectSchool'), { action: 'connectSchool', source: 'managebac' });
+  assert.equal(app.last('saveSchoolConfiguration'), undefined);
+  app.click({ action: 'sync-school', source: 'seiue' });
+  assert.deepEqual(app.last('syncSchool'), { action: 'syncSchool', source: 'seiue' });
+});
+
+test('Teams quick connection requires consent and saves the selected browser before opening sign-in', () => {
+  const app = harness({ hash: '#settings' });
+  app.click({ action: 'connection-options', source: 'teams' });
+  app.node('quick-connect-consent').checked = false; app.submit('quick-connect-form');
+  assert.equal(app.last('teams-auto-login'), undefined);
+  app.node('quick-connect-consent').checked = true;
+  app.node('quick-connect-browser').value = 'edge'; app.submit('quick-connect-form');
+  const settings = app.last('saveState').state.settings;
+  assert.equal(settings.teamsBrowser, 'edge'); assert.equal(settings.teamsBrowserAutomation, true); assert.equal(settings.teamsAutoDiscover, true);
+  assert.ok(app.last('teams-auto-login'));
+  app.receive({ type: 'teamsAutoStatus', running: true, phase: 'attachments', message: 'Reading' });
+  const before = app.sent.filter(item => item.action === 'teams-auto-login').length;
+  app.click({ action: 'connect-source', source: 'teams' });
+  assert.equal(app.sent.filter(item => item.action === 'teams-auto-login').length, before + 1);
+});
+
+test('quick connection dialog is fully English when English is selected', () => {
+  const app = harness({ hash: '#settings' });
+  app.change('app-language', { value: 'en-US' });
+  app.click({ action: 'connection-options', source: 'seiue' });
+  assert.match(app.node('quick-connect-content').innerHTML, /Quick connect/);
+  assert.doesNotMatch(app.node('quick-connect-content').innerHTML, /[\u3400-\u9fff]/);
+  app.click({ action: 'close-quick-connect' });
+  app.click({ action: 'connection-options', source: 'teams' });
+  assert.doesNotMatch(app.node('quick-connect-content').innerHTML, /[\u3400-\u9fff]/);
 });
 
 test('new users can edit school addresses through sync and activate them only after native persistence', () => {
@@ -757,4 +836,85 @@ test('successful replacement text clears an old version when new identity is abs
     const item=Object.values(app.last('saveState').state.snapshots.teams)[0].posts[0].attachments[0];
     assert.equal(item.text,'Fresh replacement text');assert.equal(item.cached,false);assert.equal(item.versionKey,undefined);
   }
+});
+
+test('school calendar events appear on overview and the selected schedule day in both dashboard styles',()=>{
+  for(const dashboardTheme of ['classic','board']) {
+    const app=harness({hash:'#overview'}),state=app.ctx.CampusCore.emptyState();
+    state.settings.dashboardTheme=dashboardTheme;
+    state.schoolCalendar=app.ctx.CampusCore.parseSchoolCalendarICS('BEGIN:VCALENDAR\nBEGIN:VEVENT\nUID:today\nDTSTART;TZID=Asia/Shanghai:20260919T103000\nDTEND;TZID=Asia/Shanghai:20260919T113000\nSUMMARY:Assembly\nLOCATION:Hall A\nEND:VEVENT\nEND:VCALENDAR','school.ics','Asia/Shanghai');
+    app.receive({type:'state',state});
+    assert.match(app.node('content').innerHTML,/Assembly/);
+    assert.match(app.node('content').innerHTML,/10:30/);
+    app.click({page:'schedule'});
+    assert.match(app.node('content').innerHTML,/data-action="import-school-calendar"/);
+    assert.match(app.node('content').innerHTML,/Hall A/);
+  }
+});
+
+test('school calendar file selection imports locally, persists the events, and rerenders today',async()=>{
+  const app=harness({hash:'#overview'}),input=app.node('school-calendar-file');
+  input.files=[{name:'school.ics',type:'text/calendar',size:120,text:async()=>'BEGIN:VCALENDAR\nBEGIN:VEVENT\nUID:local\nDTSTART;TZID=Asia/Shanghai:20260919T130000\nDTEND;TZID=Asia/Shanghai:20260919T140000\nSUMMARY:Local event\nEND:VEVENT\nEND:VCALENDAR'}];
+  await input.events.change({target:input});
+  assert.equal(app.last('saveState').state.schoolCalendar.fileName,'school.ics');
+  assert.equal(app.last('saveState').state.schoolCalendar.events[0].title,'Local event');
+  assert.match(app.node('content').innerHTML,/Local event/);
+  assert.equal(input.value,'');
+});
+
+test('imported calendar remains visible when the selected day has no events',()=>{
+  const app=harness({hash:'#schedule'}); let state=app.ctx.CampusCore.emptyState();
+  state.schoolCalendar=app.ctx.CampusCore.parseSchoolCalendarICS('BEGIN:VCALENDAR\nBEGIN:VEVENT\nUID:later\nDTSTART;VALUE=DATE:20260925\nDTEND;VALUE=DATE:20260926\nSUMMARY:School holiday\nEND:VEVENT\nEND:VCALENDAR','school.ics','Asia/Shanghai');
+  app.receive({type:'state',state});
+  const html=app.node('content').innerHTML;
+  assert.match(html,/已导入校历：school\.ics/);
+  assert.match(html,/今天没有校历事件/);
+});
+
+test('calendar make-up day shows the weekday substitution without claiming school lessons were read',()=>{
+  const app=harness({hash:'#schedule'}); let state=app.ctx.CampusCore.emptyState();
+  state.schoolCalendar=app.ctx.CampusCore.parseSchoolCalendarPDFText('2026 年 9 月 校历\n安排明细\n1. 9 月 19 日（周六）补周二的课。','makeup.pdf',2026);
+  app.receive({type:'state',state});
+  const html=app.node('content').innerHTML;
+  assert.match(html,/调休识别：每周自编课程按周二显示/);
+  assert.match(html,/学校课程仍需希悦当天课表确认/);
+});
+
+test('calendar make-up day displays the date and count when borrowing a captured Seiue weekday timetable',()=>{
+  const app=harness({hash:'#schedule'}); let state=app.ctx.CampusCore.emptyState();
+  state.schoolCalendar=app.ctx.CampusCore.parseSchoolCalendarPDFText('2026 年 9 月 校历\n安排明细\n1. 9 月 19 日（周六）补周二的课。','makeup.pdf',2026);
+  app.ctx.__scheduleSnapshot=JSON.stringify({source:'seiue',url:'https://example-school.seiue.com/timetable',capturedAt:'2026-09-18T00:00:00Z',warnings:[],schedule:[{id:'math',date:'2026-09-15',start:'08:00',end:'08:40',title:'数学',room:'201',teacher:'',isSelfStudy:false}]});
+  app.ctx.__stateForTest=state; state=vm.runInContext('CampusCore.mergeSnapshot(__stateForTest, JSON.parse(__scheduleSnapshot))',app.ctx);
+  app.receive({type:'state',state});
+  assert.match(app.node('content').innerHTML,/按 2026-09-15 的课表临时代入 1 节/);
+  assert.match(app.node('content').innerHTML,/数学/);
+});
+
+test('calendar holiday explains why regular lessons are hidden',()=>{
+  const app=harness({hash:'#schedule'}),state=app.ctx.CampusCore.emptyState();
+  state.schoolCalendar=app.ctx.CampusCore.parseSchoolCalendarPDFText('2026 年 9 月 校历\n安排明细\n1. 9 月 19 日，学校放假。','holiday.pdf',2026);
+  app.receive({type:'state',state});
+  assert.match(app.node('content').innerHTML,/这一天的常规课程已按导入的校历隐藏/);
+});
+
+test('calendar holiday surfaces a conflict instead of silently hiding Seiue classes',()=>{
+  const app=harness({hash:'#schedule'}); let state=app.ctx.CampusCore.emptyState();
+  state.schoolCalendar=app.ctx.CampusCore.parseSchoolCalendarPDFText('2026 年 9 月 校历\n安排明细\n1. 9 月 19 日，学校放假。','holiday.pdf',2026);
+  app.ctx.__scheduleSnapshot=JSON.stringify({source:'seiue',url:'https://example-school.seiue.com/timetable',capturedAt:'2026-09-18T00:00:00Z',warnings:[],schedule:[{id:'math',date:'2026-09-19',start:'08:00',end:'08:40',title:'数学',room:'201',teacher:'',isSelfStudy:false}]});
+  app.ctx.__stateForTest=state; state=vm.runInContext('CampusCore.mergeSnapshot(__stateForTest, JSON.parse(__scheduleSnapshot))',app.ctx);
+  app.receive({type:'state',state});
+  assert.match(app.node('content').innerHTML,/数据冲突：希悦仍记录当天 1 节课/);
+});
+
+test('native PDF school calendar opens an editable event preview without importing unconfirmed rows',()=>{
+  const app=harness({hash:'#schedule'});
+  app.receive({type:'schoolCalendarPDF',fileName:'term.pdf',text:'2026 年 9 月 校历\n安排明细\n1. 9 月 25—27 日，秋季假期。'});
+  assert.equal(app.node('calendar-preview-dialog').open,true);
+  assert.match(app.node('calendar-preview-rows').innerHTML,/秋季假期/);
+  assert.equal(app.node('calendar-date-0').value,'2026-09-25');
+  assert.equal(app.node('calendar-end-0').value,'2026-09-27');
+  assert.equal(app.sent.filter(row=>row.action==='saveState').length,0);
+  app.click({action:'confirm-calendar-preview'});
+  assert.equal(app.last('saveState').state.schoolCalendar.events[0].endDate,'2026-09-28');
+  assert.equal(app.node('calendar-preview-dialog').open,false);
 });

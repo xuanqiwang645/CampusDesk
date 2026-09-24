@@ -1,5 +1,8 @@
 import Cocoa
 import WebKit
+import UniformTypeIdentifiers
+import PDFKit
+import Vision
 
 let userSchoolConfigURL = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first?
     .appendingPathComponent("CampusDesk", isDirectory: true)
@@ -78,12 +81,18 @@ func readSavedState(_ url: URL) throws -> [String: Any] {
     return candidate
 }
 
-final class SchoolBrowser: NSObject, WKNavigationDelegate, WKUIDelegate {
+final class SchoolBrowser: NSObject, WKNavigationDelegate, WKUIDelegate, NSWindowDelegate {
     let source: String
     let window: NSWindow
     let web: WKWebView
     let address = NSTextField(labelWithString: "")
     var onCapture: ((WKWebView, String, Bool) -> Void)?
+    var onConnected: (([String: Any]) -> Void)?
+    var onReturn: (() -> Void)?
+    private var signInTimer: Timer?
+    private var signInGeneration = UUID()
+    private var checkingSignIn = false
+    let signInHint = NSTextField(labelWithString: "")
     init(source: String) {
         self.source = source
         web = WKWebView(frame: .zero, configuration: schoolConfig())
@@ -91,6 +100,7 @@ final class SchoolBrowser: NSObject, WKNavigationDelegate, WKUIDelegate {
         super.init()
         window.title = (sourceLabels[source] ?? source) + " · 学校原网页"
         window.isReleasedWhenClosed = false
+        window.delegate = self
         window.center()
         web.navigationDelegate = self
         web.uiDelegate = self
@@ -98,14 +108,18 @@ final class SchoolBrowser: NSObject, WKNavigationDelegate, WKUIDelegate {
         let home = NSButton(title: "首页", target: self, action: #selector(goHome))
         let refresh = NSButton(title: "刷新", target: self, action: #selector(reloadPage))
         let capture = NSButton(title: "读取当前页到看板", target: self, action: #selector(capturePage))
+        let dashboard = NSButton(title: "返回看板", target: self, action: #selector(returnToDashboard))
         address.lineBreakMode = .byTruncatingMiddle
         address.textColor = .secondaryLabelColor
         address.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        let toolbar = NSStackView(views: [back, home, refresh, address, capture])
+        let toolbar = NSStackView(views: [back, home, refresh, address, capture, dashboard])
         toolbar.orientation = .horizontal
         toolbar.spacing = 10
         toolbar.edgeInsets = NSEdgeInsets(top: 10, left: 12, bottom: 10, right: 12)
-        let stack = NSStackView(views: [toolbar, web])
+        signInHint.textColor = .secondaryLabelColor
+        signInHint.font = .systemFont(ofSize: 12)
+        signInHint.stringValue = "  登录会话保存在这台 Mac，学校要求验证时需重新登录。"
+        let stack = NSStackView(views: [toolbar, signInHint, web])
         stack.orientation = .vertical
         stack.spacing = 0
         stack.alignment = .leading
@@ -132,6 +146,47 @@ final class SchoolBrowser: NSObject, WKNavigationDelegate, WKUIDelegate {
     }
     @objc func reloadPage() { web.reload() }
     @objc func capturePage() { onCapture?(web, source, false) }
+    @objc func returnToDashboard() { onReturn?() }
+    func windowWillClose(_ notification: Notification) { stopSignInWatch() }
+    func stopSignInWatch() {
+        signInTimer?.invalidate(); signInTimer = nil
+        signInGeneration = UUID(); checkingSignIn = false
+    }
+    func beginSignIn(script: String) {
+        stopSignInWatch()
+        guard !script.isEmpty else { return }
+        signInHint.stringValue = "  请在学校页面登录；识别到课程后自动同步，可随时返回看板。"
+        let generation = signInGeneration
+        let deadline = Date().addingTimeInterval(600)
+        signInTimer = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] _ in
+            guard let self = self, self.signInGeneration == generation else { return }
+            if Date() > deadline {
+                self.stopSignInWatch()
+                self.signInHint.stringValue = "  登录检测已暂停。完成登录后可点「读取当前页到看板」，或返回看板重新连接。"
+                return
+            }
+            guard !self.checkingSignIn, !self.web.isLoading,
+                  let raw = self.web.url?.absoluteString, schoolURL(raw, source: self.source) != nil else { return }
+            self.checkingSignIn = true
+            let checkedURL = self.web.url
+            self.web.evaluateJavaScript(extractionScript(script, source: self.source)) { [weak self] value, error in
+                guard let self = self, self.signInGeneration == generation else { return }
+                self.checkingSignIn = false
+                guard self.web.url == checkedURL, error == nil, let raw = value as? String,
+                      let data = raw.data(using: .utf8),
+                      let snapshot = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+                      snapshot["loginRequired"] as? Bool != true,
+                      snapshot["parseError"] as? Bool != true,
+                      (snapshot["parseError"] as? String ?? "").isEmpty else { return }
+                // A cached timestamp or a loaded login page is not proof of a session.
+                let keys = self.source == "seiue" ? ["schedule", "calendarDates"] : ["courses", "tasks", "feedback", "links"]
+                guard keys.contains(where: { !(snapshot[$0] as? [Any] ?? []).isEmpty }) || snapshot["officialGPA"] is [String: Any] else { return }
+                self.stopSignInWatch()
+                self.signInHint.stringValue = "  已连接，正在后台同步。可以返回看板。"
+                self.onConnected?(snapshot)
+            }
+        }
+    }
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         address.stringValue = webView.url?.absoluteString ?? ""
     }
@@ -172,6 +227,7 @@ final class SyncWorker: NSObject, WKNavigationDelegate {
     var readablePages = 0
     var failedPages = 0
     var pageLimitReached = false
+    var queueTruncatedLinks = 0
     var onSnapshot: (([String: Any]) -> Void)?
     var onStatus: ((String, Bool) -> Void)?
     let script: String
@@ -189,7 +245,7 @@ final class SyncWorker: NSObject, WKNavigationDelegate {
         guard !busy else { return }
         guard source == "teams" || sourceHomes[source] != nil else { onStatus?(CampusSchoolConfiguration.help, false); return }
         guard !script.isEmpty else { onStatus?("缺少页面读取组件，请重新安装应用", false); return }
-        busy = true; token = UUID(); visited.removeAll(); queue.removeAll(); pageCount = 0; readablePages = 0; failedPages = 0; pageLimitReached = false
+        busy = true; token = UUID(); visited.removeAll(); queue.removeAll(); pageCount = 0; readablePages = 0; failedPages = 0; pageLimitReached = false; queueTruncatedLinks = 0
         pageOptions.removeAll(); currentOptions = [:]
         if source == "teams" {
             for page in validatedTeamsPages(pages) {
@@ -224,7 +280,8 @@ final class SyncWorker: NSObject, WKNavigationDelegate {
             } else {
                 message = "本轮读取完成（\(pageCount) 页）"
             }
-            onStatus?(message, false)
+            let truncation = queueTruncatedLinks > 0 ? "；另有 \(queueTruncatedLinks) 个页面链接超出队列上限，未加入本轮" : ""
+            onStatus?(message + truncation, false)
             return
         }
         let url = queue.removeFirst()
@@ -294,7 +351,10 @@ final class SyncWorker: NSObject, WKNavigationDelegate {
             guard readOnly, !visited.contains(raw), !queue.contains(where: { $0.absoluteString == raw }) else { continue }
             if link["kind"] as? String == "feedback" { queue.append(url) }
             else { queue.insert(url, at: 0) }
-            if queue.count > 150 { queue = Array(queue.prefix(150)) }
+            if queue.count > 150 {
+                queueTruncatedLinks += queue.count - 150
+                queue = Array(queue.prefix(150))
+            }
         }
     }
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) { if navigation === activeNavigation { navigationFailed(error) } }
@@ -487,9 +547,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         if browsers[source] == nil {
             let browser = SchoolBrowser(source: source)
             browser.onCapture = { [weak self] web, source, selectionOnly in self?.capture(web, source: source, selectionOnly: selectionOnly) }
+            browser.onReturn = { [weak self] in self?.window.makeKeyAndOrderFront(nil) }
+            browser.onConnected = { [weak self] snapshot in
+                self?.emit(["type": "snapshot", "snapshot": snapshot])
+                self?.workers[source]?.start()
+            }
             browsers[source] = browser
         }
         browsers[source]?.show(url: raw.flatMap { schoolURL($0, source: source) })
+    }
+    func connectSchool(_ source: String) {
+        guard CampusSchoolConfiguration.sources.contains(source), sourceHomes[source] != nil else { return }
+        openSource(source, raw: nil)
+        browsers[source]?.beginSignIn(script: workers[source]?.script ?? "")
     }
     func openTeamsBrowser(raw: String?) {
         let browser = teamsBrowserChoice
@@ -899,7 +969,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         case "syncTeams": syncTeams()
         case "teams-auto-start": startTeamsAuto(focus: body["focus"] as? String == "ec" ? "ec" : "all")
         case "teams-auto-stop": stopTeamsAuto()
-        case "teams-auto-login": startTeamsAuto(loginOnly: true)
+        case "connectSchool": if let source = body["source"] as? String { connectSchool(source) }
+        case "syncSchool":
+            if let source = body["source"] as? String, CampusSchoolConfiguration.sources.contains(source) { workers[source]?.start() }
+        case "teams-auto-login":
+            // Opening sign-in remains available while a long sync is in progress.
+            openTeamsBrowser(raw: nil)
+            if !teamsAutoBridge.isRunning && !teamsBrowserBridge.isRunning { scheduleTeamsLoginRetry() }
         case "requestTeamsAutoStatus": emitTeamsAutoStatus()
         case "teamsAutoSnapshotFailed":
             stopTeamsAuto()
@@ -957,6 +1033,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
             else { status("teams", "附件链接无效或不属于受支持的 Microsoft 文件站点，请在 Teams 原页打开", false) }
         case "exportData": exportData()
         case "importData": importData()
+        case "importSchoolCalendar": importSchoolCalendar()
         case "clearSession": if let source = body["source"] as? String { clearSession(source) }
         default: break
         }
@@ -1198,6 +1275,76 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
             return
         }
         statusItem.button?.title = "◷ " + countdownLabel + " " + String(format: "%02d:%02d", remaining / 60, remaining % 60)
+    }
+    func extractSchoolCalendarPDF(url: URL) throws -> String {
+        guard let pdf = PDFDocument(url: url), !pdf.isLocked, pdf.pageCount > 0, pdf.pageCount <= 300 else {
+            throw NSError(domain: "CampusDesk.CalendarPDF", code: 1, userInfo: [NSLocalizedDescriptionKey: "PDF 无法打开、已加密或页数超过 300 页"])
+        }
+        let textPages = (0..<pdf.pageCount).map { index -> (Int, String) in
+            (index, pdf.page(at: index)?.string?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "")
+        }
+        let pagesNeedingOCR = textPages.filter { $0.1.isEmpty }
+        guard pagesNeedingOCR.isEmpty || pdf.pageCount <= 50 else {
+            throw NSError(domain: "CampusDesk.CalendarPDF", code: 2, userInfo: [NSLocalizedDescriptionKey: "扫描版 PDF 超过 50 页；请拆分后再导入"])
+        }
+        var extracted = textPages.map(\.1)
+        for (index, _) in pagesNeedingOCR {
+            guard let page = pdf.page(at: index) else { continue }
+            let thumbnail = page.thumbnail(of: CGSize(width: 1800, height: 1800), for: .mediaBox)
+            var proposedRect = CGRect(origin: .zero, size: thumbnail.size)
+            guard let image = thumbnail.cgImage(forProposedRect: &proposedRect, context: nil, hints: nil) else { continue }
+            let request = VNRecognizeTextRequest()
+            request.recognitionLevel = .accurate
+            request.usesLanguageCorrection = true
+            request.recognitionLanguages = ["zh-Hans", "en-US"]
+            try VNImageRequestHandler(cgImage: image).perform([request])
+            extracted[index] = (request.results ?? []).compactMap { $0.topCandidates(1).first?.string }.joined(separator: "\n")
+        }
+        let result = extracted.joined(separator: "\n")
+        guard !result.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw NSError(domain: "CampusDesk.CalendarPDF", code: 3, userInfo: [NSLocalizedDescriptionKey: "PDF 中未识别到文字；请确认页面清晰，或手动核对校历原件"])
+        }
+        guard result.utf8.count <= 10 * 1024 * 1024 else {
+            throw NSError(domain: "CampusDesk.CalendarPDF", code: 4, userInfo: [NSLocalizedDescriptionKey: "PDF 提取文字超过 10 MB"])
+        }
+        return result
+    }
+    func importSchoolCalendar() {
+        let panel = NSOpenPanel()
+        panel.title = "导入校历文件"
+        panel.allowedContentTypes = [UTType(filenameExtension: "ics") ?? .plainText, .pdf]
+        panel.allowsOtherFileTypes = false
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        panel.beginSheetModal(for: window) { [weak self] response in
+            guard response == .OK, let self = self, let url = panel.url else { return }
+            do {
+                let values = try url.resourceValues(forKeys: [.fileSizeKey])
+                guard (values.fileSize ?? Int.max) <= 5 * 1024 * 1024 else {
+                    self.emit(["type": "schoolCalendarFileError", "message": "校历文件超过 5 MB"])
+                    return
+                }
+                if url.pathExtension.lowercased() == "pdf" {
+                    DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+                        do {
+                            let text = try self?.extractSchoolCalendarPDF(url: url) ?? ""
+                            DispatchQueue.main.async { self?.emit(["type": "schoolCalendarPDF", "fileName": url.lastPathComponent, "text": text]) }
+                        } catch {
+                            DispatchQueue.main.async { self?.emit(["type": "schoolCalendarFileError", "message": error.localizedDescription]) }
+                        }
+                    }
+                    return
+                }
+                let data = try Data(contentsOf: url, options: [.mappedIfSafe])
+                guard let text = String(data: data, encoding: .utf8) else {
+                    self.emit(["type": "schoolCalendarFileError", "message": "校历文件不是有效的 UTF-8 文本"])
+                    return
+                }
+                self.emit(["type": "schoolCalendarFile", "fileName": url.lastPathComponent, "text": text])
+            } catch {
+                self.emit(["type": "schoolCalendarFileError", "message": "无法读取校历文件"])
+            }
+        }
     }
     func exportData() {
         let panel = NSSavePanel(); panel.nameFieldStringValue = "CampusDesk-backup.json"; panel.allowedFileTypes = ["json"]
