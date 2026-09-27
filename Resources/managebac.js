@@ -105,6 +105,8 @@
   function exactDate(value) {
     // A month/day card omits year and timezone; keep its original dueLabel instead.
     if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})$/.test(value || '')) return null;
+    const [year, month, day] = value.slice(0,10).split('-').map(Number);
+    if (month < 1 || month > 12 || day < 1 || day > new Date(Date.UTC(year, month, 0)).getUTCDate() || +value.slice(11,13) > 23 || +value.slice(14,16) > 59) return null;
     const timestamp = Date.parse(value);
     return Number.isFinite(timestamp) ? new Date(timestamp).toISOString() : null;
   }
@@ -194,10 +196,13 @@
       const cardURL = anchor ? safeURL(anchor.getAttribute('href'), url) : (taskID(url) ? url : null);
       if (!cardURL) continue;
       const titleNode = first(card, '.title');
-      const datetime = first(card, '.due-date time[datetime], .date-badge time[datetime]');
+      const dueNodes = all(card, '.due-date, .date-badge, .due-date *, .date-badge *, [data-due-at], [data-due-date]');
+      const dateValues = dueNodes.flatMap(node => ['datetime','data-due-at','data-due-date','title','aria-label','data-original-title','data-bs-original-title'].map(name => node.getAttribute(name)).filter(Boolean));
+      const datetime = dateValues.find(exactDate) || null;
+      const fullDueLabel = dateValues.find(value => /\b20\d{2}\b/.test(value) && /\d[:：]\d{2}/.test(value)) || null;
       page.tasks.push({url:cardURL, title:anchor ? text(anchor) : text(titleNode),
         month:text(first(card,'.date-badge .month')), day:text(first(card,'.date-badge .day')),
-        dueText:text(first(card,'.due-date')), datetime:datetime && datetime.getAttribute('datetime'),
+        dueText:text(first(card,'.due-date')), datetime, fullDueLabel,
         badge:text(first(card,'.badge-label')), points:text(first(card,'.task-score .points')),
         assessment:text(first(card,'.task-score')), section:nearbySection(card)});
     }
@@ -264,8 +269,8 @@
     for (const task of page.tasks || []) {
       const url = safeURL(task.url,page.url), id = taskID(url);
       if (!id || !clean(task.title) || result.tasks.some(x=>x.id===id)) continue;
-      const dueLabel = [clean([task.month,task.day].filter(Boolean).join(' ')),clean(task.dueText)].filter(Boolean).join(' · ') || null;
-      result.tasks.push({id,title:clean(task.title),course:clean(page.heading) || null,dueAt:exactDate(task.datetime),dueLabel,
+      const dueLabel = clean(task.fullDueLabel) || [clean([task.month,task.day].filter(Boolean).join(' ')),clean(task.dueText)].filter(Boolean).join(' · ') || null;
+      result.tasks.push({id,title:clean(task.title),course:clean(page.heading) || null,dueAt:exactDate(task.datetime),dueLabel,dueTerm:term || '',
         status:taskStatus(task),url});
       addLink('feedback',url,clean(task.title));
     }

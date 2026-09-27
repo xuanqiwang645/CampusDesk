@@ -2,6 +2,7 @@
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; object-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'none'">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light">
   <title>CampusDesk · 学习，一目了然</title>
@@ -13,13 +14,16 @@
   <link rel="stylesheet" href="board.css">
   <link rel="stylesheet" href="liquid-glass.css">
   <link rel="stylesheet" href="liquid-board.css">
+  <link rel="stylesheet" href="themes.css">
+  <link rel="stylesheet" href="setup-wizard.css">
+  <link rel="stylesheet" href="assistant.css">
   <link rel="stylesheet" href="study-center.css">
 </head>
 <body>
   <canvas id="liquid-glass-canvas" aria-hidden="true" hidden></canvas>
   <div id="app-shell" class="app-shell">
     <aside class="sidebar" aria-label="主导航">
-      <a class="brand" href="#overview"><span class="brand-mark" aria-hidden="true">c<span>·</span></span><span>CampusDesk<small id="brand-tagline">学习，一目了然</small></span></a>
+      <a class="brand" href="#overview"><span>CampusDesk<small id="brand-tagline">学习，一目了然</small></span></a>
       <div id="sidebar-label" class="sidebar-label">我的校园</div>
       <nav id="nav"></nav>
       <div class="sidebar-bottom"><div class="desk-note"><span class="status-dot"></span> <span id="sidebar-clock-label">北京时间</span> <span id="sidebar-clock">—</span><small id="sidebar-note">把今天留给重要的事。</small></div><button class="nav-item settings-nav" data-page="settings" type="button"><span class="icon" id="settings-icon"></span><span id="settings-nav-label">连接与设置</span></button></div>
@@ -31,6 +35,8 @@
   </div>
   <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
   <dialog id="quick-connect-dialog" aria-labelledby="quick-connect-title"><div id="quick-connect-content"></div></dialog>
+  <dialog id="setup-wizard-dialog" class="setup-wizard-dialog" aria-labelledby="setup-wizard-title"><div id="setup-wizard-content"></div></dialog>
+  <dialog id="assistant-confirm-dialog" class="assistant-confirm-dialog" aria-labelledby="assistant-confirm-title"><div id="assistant-confirm-content"></div></dialog>
   <dialog id="task-dialog"><form id="task-form"><div class="dialog-heading"><h2>添加待办</h2><button class="icon-button" type="button" data-action="close-task" aria-label="关闭">×</button></div><p class="subtle">个人待办保存在这台 Mac，不会提交至学校系统。</p><label>要做什么<input id="task-title" name="title" required maxlength="180" placeholder="例如：整理今天的化学笔记" autocomplete="off"></label><label>截止时间（可选）<input id="task-due" name="due" type="datetime-local"></label><p class="field-hint">按北京时间记录。</p><div class="dialog-actions"><button type="button" class="button button-light" data-action="close-task">取消</button><button type="submit" class="button button-primary">添加待办</button></div></form></dialog>
   <dialog id="detail-dialog" class="detail-dialog" aria-labelledby="detail-title"><div id="detail-content"></div></dialog>
   <dialog id="calendar-preview-dialog" class="calendar-preview-dialog" aria-labelledby="calendar-preview-title">

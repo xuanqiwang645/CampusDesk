@@ -3,9 +3,9 @@
 面向使用M系列 mac 的国际部学生打造的集中查看希悦课表、ManageBac课程总评和GPA估算、待办与可识别的教师反馈。同时，对北京101国际部特色活动English Corner（EC）有特别优化
 
 
-**最新版本：v1.0.0 Orion · 主题版 · 构建 54。** 适用于 Apple Silicon（M 系列芯片）Mac，最低 macOS 12。
+**最新版本：v1.1.0 Super Orion · 主题版 · 构建 55。** 适用于 Apple Silicon（M 系列芯片）Mac，最低 macOS 12。
 
-[下载 DMG 安装包](https://github.com/xuanqiwang645/CampusDesk/releases/download/v1.0.0/CampusDesk-Theme-v1.0.0-Orion-build54-macOS-arm64.dmg) · [下载 ZIP 压缩包](https://github.com/xuanqiwang645/CampusDesk/releases/download/v1.0.0/CampusDesk-Theme-v1.0.0-Orion-build54-macOS-arm64.zip) · [发布说明与 SHA-256 校验](https://github.com/xuanqiwang645/CampusDesk/releases/tag/v1.0.0)
+[下载 DMG 安装包](https://github.com/xuanqiwang645/CampusDesk/releases/download/v1.1.0/CampusDesk-Theme-v1.1.0-Super-Orion-build55-macOS-arm64.dmg) · [下载 ZIP 压缩包](https://github.com/xuanqiwang645/CampusDesk/releases/download/v1.1.0/CampusDesk-Theme-v1.1.0-Super-Orion-build55-macOS-arm64.zip) · [发布说明与 SHA-256 校验](https://github.com/xuanqiwang645/CampusDesk/releases/tag/v1.1.0)
 
 打开 DMG 后，将 **CampusDesk Theme Edition.app** 拖入 Applications。更新时请替换原来的主题版安装位置；如果原应用位于个人 `~/Applications`，请仍放回该目录。应用使用本机持久签名，尚未经过 Apple Developer ID 公证。
 
@@ -32,6 +32,7 @@ DeepSeek API 密钥通过原生组件保存在 macOS 钥匙串中。安装包不
 
 ## 版本记录
 
+- [v1.1.0 Super Orion · 主题版 · 构建 55](releases/v1.1.0.md) — 更新设置向导版本记录、可重复触发的向导重启，以及更具体的学校平台读取失败诊断；同步发布可复现主题版源码。
 - [v1.0.0 Orion · 主题版 · 构建 54](https://github.com/xuanqiwang645/CampusDesk/releases/tag/v1.0.0) — 学习助手、对话页接入方式切换、配置向导与教程、密钥保存修复，以及任务卡片倒计时和紧迫度显示。
 - [v0.5.13](releases/v0.5.13.md) — 双 GPA 算法与双 K 线；整合校历导入、连接体验及同步修正。
 - [v0.5.8](releases/v0.5.8.md) — 每门课程读取自己的 ManageBac 成绩类别权重；成绩目标模拟、学期预测与 K 线悬停改进。
@@ -58,9 +59,15 @@ EC 自动附件读取支持 PDF、PNG/JPEG/GIF、TXT/CSV、DOCX、XLSX 的部分
 
 Teams 默认模式在 Teams 页面内使用当前账号会话访问内部服务，参考了 [teams-web-chat-exporter](https://github.com/gediz/teams-web-chat-exporter)。这不是稳定的公开 Microsoft API，也不绕过账号权限或学校策略。接口或页面升级可能让同步失效；请仅在获得相应使用许可时启用。
 
-## 仓库源码与安装包版本
+## 主题版源码构建
 
-当前 v1.0.0 Orion 为主题版二进制安装包发布；仓库现有应用源码及 GitHub 自动生成的 Source code 附件尚未同步为构建 54 的完整源码。使用最新版主题版请下载上方 DMG 或 ZIP。下方源码安装说明适用于仓库中的原版源码。
+仓库现在包含主题版完整源码。默认 `bash build.sh` 仍构建原版 CampusDesk；构建主题版请使用：
+
+```sh
+CAMPUSDESK_INFO_PLIST="$PWD/Info-ThemeEdition.plist" bash build.sh
+```
+
+主题版使用独立应用标识和图标；安装到 `~/Applications/CampusDesk Theme Edition.app` 可与原版并存。安装包不含个人登录状态、API 密钥、学校网址或同步数据。
 
 ## 从源码安装（仓库原版）
 

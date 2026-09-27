@@ -26,6 +26,18 @@ test('Beijing day changes at 16:00 UTC and midnight uses 00:00', () => {
   assert.equal(Core.today('2026-09-18T16:00:00Z', 'America/Los_Angeles'), '2026-09-18');
 });
 
+test('color theme defaults safely for old backups and rejects unknown presets', () => {
+  const old = Core.emptyState();
+  delete old.settings.colorTheme;
+  assert.equal(Core.validateState(old).settings.colorTheme, 'sage');
+  for (const colorTheme of ['sage', 'ocean', 'ember', 'midnight']) {
+    const state = Core.emptyState(); state.settings.colorTheme = colorTheme;
+    assert.equal(Core.validateState(state).settings.colorTheme, colorTheme);
+  }
+  const invalid = Core.emptyState(); invalid.settings.colorTheme = 'school-data';
+  assert.throws(() => Core.validateState(invalid), /主题配色无效/);
+});
+
 test('school calendar imports all-day, UTC, multi-day and recurring events into the selected day', () => {
   const state = Core.emptyState();
   state.manualTasks.push({ id: 'keep', title: 'Keep local task', course: 'Personal', dueAt: null, dueLabel: '', status: 'open', createdAt: '2026-09-19T00:00:00Z' });
@@ -53,6 +65,22 @@ test('make-up days use the nearest captured source weekday when Seiue has no dat
   const rows = Core.getSchedule(state, '2026-09-20');
   assert.deepEqual(rows.map(row=>row.title), ['Tuesday Math','Tuesday English']);
   assert.ok(rows.every(row=>row.calendarSubstitute && row.calendarSourceDate === '2026-09-15'));
+});
+
+test('school calendar recognizes common explicit make-up and adjusted workday wording', () => {
+  const fixtures = [
+    ['调休补班，按周二课程表执行', 2],
+    ['补周五的课', 5],
+    ['星期四课程照常', 4]
+  ];
+  for (const [title, weekday] of fixtures) {
+    const state = Core.emptyState();
+    state.schoolCalendar = Core.parseSchoolCalendarPDFText('2026 年 9 月 校历\n安排明细\n1. 9 月 19 日，' + title + '。', 'makeup.pdf', 2026);
+    assert.equal(Core.schoolCalendarScheduleRule(state, '2026-09-19').weekday, weekday, title);
+  }
+  const ordinary = Core.emptyState();
+  ordinary.schoolCalendar = Core.parseSchoolCalendarPDFText('2026 年 9 月 校历\n安排明细\n1. 9 月 19 日，周二社团报名。', 'ordinary.pdf', 2026);
+  assert.equal(Core.schoolCalendarScheduleRule(ordinary, '2026-09-19'), null);
 });
 
 test('calendar holiday exposes a conflict when Seiue explicitly lists classes that day', () => {
@@ -164,6 +192,15 @@ test('focus preferences migrate empty, preserve labels, and reject duplicate or 
   assert.throws(() => Core.validateState(duplicate), /重复/);
   const blank = Core.emptyState(); blank.settings.focusTeamsChannels = [''];
   assert.throws(() => Core.validateState(blank), /不能为空/);
+});
+
+test('Teams reminder subject allowlists default to all and are safely normalized', () => {
+  const legacy = Core.emptyState(); delete legacy.settings.reminderSubjects;
+  assert.deepEqual(Core.validateState(legacy).settings.reminderSubjects, []);
+  const state = Core.emptyState(); state.settings.reminderSubjects = ['Chemistry', 'English', 'Chemistry'];
+  assert.deepEqual(Core.validateState(state).settings.reminderSubjects, ['Chemistry', 'English']);
+  const invalid = Core.emptyState(); invalid.settings.reminderSubjects = ['x'.repeat(121)];
+  assert.throws(() => Core.validateState(invalid), /过长/);
 });
 
 test('schedule never relabels yesterday as today; class interval excludes exact end', () => {

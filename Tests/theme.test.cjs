@@ -7,6 +7,7 @@ const path = require('node:path');
 const resources = path.join(__dirname, '../Resources');
 const theme = fs.readFileSync(path.join(resources, 'vivid.css'), 'utf8');
 const html = fs.readFileSync(path.join(resources, 'index.html'), 'utf8');
+const presets = fs.readFileSync(path.join(resources, 'themes.css'), 'utf8');
 
 function color(name) {
   const value = new RegExp('--' + name + ':\\s*(#[0-9a-f]{6})', 'i').exec(theme)?.[1];
@@ -65,4 +66,27 @@ test('text, sidebar and primary button retain at least 4.5:1 contrast', () => {
   assert.ok(contrast('#3f6251', color('nav')) >= 4.5, 'sidebar navigation');
   assert.ok(contrast('#ffffff', color('teal')) >= 4.5, 'primary button');
   assert.ok(contrast('#174e3c', '#cbe6d7') >= 4.5, 'active navigation');
+});
+
+test('color palettes preserve readable text and accessible primary actions', () => {
+  assert.ok(html.indexOf('href="themes.css"') > html.indexOf('href="liquid-board.css"'));
+  const blocks = [...presets.matchAll(/:root\[data-color-theme="(ocean|ember|midnight)"\]\s*\{([^}]+)\}/g)];
+  assert.equal(blocks.length, 3, 'three additional palettes should be defined');
+  for (const [, name, block] of blocks) {
+    const values = Object.fromEntries([...block.matchAll(/--([\w-]+):\s*(#[0-9a-f]{6})/gi)].map(([, key, value]) => [key, value]));
+    for (const key of ['paper', 'card', 'ink', 'muted', 'teal', 'teal-soft', 'accent-ink']) assert.ok(values[key], name + ' missing --' + key);
+    assert.ok(contrast(values.ink, values.paper) >= 4.5, name + ' body text on page');
+    assert.ok(contrast(values.ink, values.card) >= 4.5, name + ' body text on cards');
+    assert.ok(contrast(values.muted, values.paper) >= 4.5, name + ' secondary text on page');
+    assert.ok(contrast(values.muted, values.card) >= 4.5, name + ' secondary text on cards');
+    assert.ok(contrast('#ffffff', values.teal) >= 4.5, name + ' primary button text');
+    assert.ok(contrast(values['accent-ink'], values['teal-soft']) >= 4.5, name + ' selected navigation');
+  }
+  assert.match(presets, /@media \(max-width: 900px\)[\s\S]*color-theme-options/);
+  assert.match(presets, /@media \(prefers-reduced-motion: reduce\)/);
+  assert.match(presets, /prefers-reduced-transparency: reduce/);
+  assert.match(presets, /board-kpi-overdue strong/);
+  assert.match(presets, /board-kpi-week strong/);
+  assert.match(presets, /board-kpi-done strong/);
+  assert.match(presets, /board-kpi-gpa strong/);
 });

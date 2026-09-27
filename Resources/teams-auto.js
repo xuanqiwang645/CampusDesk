@@ -91,7 +91,7 @@
         nativeID:record.nativeID || null,textTruncated:clipped,messageType:record.messageType || 'message'});
       if (kind === 'assignment') {
         var dueAt = helpers.exactDate(record.dueDatetime);
-        var dueLine = clean(record.dueLabel) || (instructions || body).split('\n').find(function (line) { return /^\s*(?:due(?:\s+date)?|deadline|截止(?:时间|日期)?|提交截止)\s*[:：]/i.test(line); });
+        var dueLine = helpers.deadlineLabel({dueLabel:record.dueLabel,instructions:instructions || body});
         out.tasks.push({id:id,title:title,course:channel,dueAt:dueAt,dueLabel:short(dueLine || (dueAt ? record.dueDatetime : ''),400) || null,
           status:helpers.taskStatus(record.status),url:itemURL,requirements:(instructions || body).slice(0,LIMITS.text) || null,attachments:attachments});
       }

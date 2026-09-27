@@ -18,6 +18,8 @@ struct GraphAuthError: LocalizedError {
 /// Native public-client authorization code + PKCE. No client secret is used.
 /// Refresh credentials stay in Keychain; the dashboard receives only safe status.
 final class GraphAuth: NSObject, ASWebAuthenticationPresentationContextProviding, URLSessionTaskDelegate {
+    // Keep the registered Microsoft redirect URI stable across the side-by-side
+    // edition; the Keychain service below remains bundle-specific.
     static let redirectURI = "msauth.local.campusdesk.mac://auth"
     static let callbackScheme = "msauth.local.campusdesk.mac"
     static let scopes = ["openid", "profile", "offline_access", "https://graph.microsoft.com/User.Read",
@@ -45,7 +47,7 @@ final class GraphAuth: NSObject, ASWebAuthenticationPresentationContextProviding
     private var refreshing = false
     private var requiresAdminConsent = false
     private var message = "登录 Teams 后自动同步"
-    private let service = "local.campusdesk.mac.microsoft-graph"
+    private let service = "\(Bundle.main.bundleIdentifier ?? "local.campusdesk.mac").microsoft-graph"
     private lazy var session: URLSession = {
         let c = URLSessionConfiguration.ephemeral
         c.timeoutIntervalForRequest = 40
@@ -96,7 +98,7 @@ final class GraphAuth: NSObject, ASWebAuthenticationPresentationContextProviding
         try deleteCredential()
         message = "应用配置已保存，请登录 Teams"; notify()
     }
-    func signOut() {
+    @discardableResult func signOut() -> Bool {
         // A failed Keychain delete must never restore a logged-out session on launch.
         UserDefaults.standard.set(true, forKey: signedOutKey)
         revision = UUID()
@@ -106,12 +108,14 @@ final class GraphAuth: NSObject, ASWebAuthenticationPresentationContextProviding
         let pendingSignIn = signInCompletion; signInCompletion = nil
         let pendingRefresh = refreshWaiters; refreshWaiters = []; refreshing = false
         bearer = nil; expiresAt = .distantPast; credential = nil
-        do { try deleteCredential(); message = "已退出 Teams，本机登录凭据已清除" }
-        catch { message = "已停止 Teams 连接，但钥匙串凭据未能删除，请在钥匙串访问中检查 CampusDesk 项目" }
+        let credentialsRemoved: Bool
+        do { try deleteCredential(); message = "已退出 Teams，本机登录凭据已清除"; credentialsRemoved = true }
+        catch { message = "已停止 Teams 连接，但钥匙串凭据未能删除，请在钥匙串访问中检查 CampusDesk 项目"; credentialsRemoved = false }
         requiresAdminConsent = false
         pendingSignIn?(.failure(cancelled))
         pendingRefresh.forEach { $0(.failure(cancelled)) }
         notify()
+        return credentialsRemoved
     }
     func signIn(completion: @escaping (Result<GraphAccount, Error>) -> Void) {
         guard Self.validClientID(clientId) else {
@@ -315,7 +319,7 @@ final class GraphAuth: NSObject, ASWebAuthenticationPresentationContextProviding
     private func readCredential() throws -> Credential? {
         var query = keyQuery; query[kSecReturnData as String] = true; query[kSecMatchLimit as String] = kSecMatchLimitOne
         var result: CFTypeRef?
-        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        let status = CampusKeychain.copyMatching(query as CFDictionary, &result)
         if status == errSecItemNotFound { return nil }
         guard status == errSecSuccess, let data = result as? Data, data.count < 200_000,
               let item = try? JSONDecoder().decode(Credential.self, from: data), !item.refreshToken.isEmpty, !item.accountID.isEmpty else {
@@ -325,16 +329,16 @@ final class GraphAuth: NSObject, ASWebAuthenticationPresentationContextProviding
     }
     private func saveCredential(_ value: Credential) throws {
         let data = try JSONEncoder().encode(value)
-        var result = SecItemUpdate(keyQuery as CFDictionary, [kSecValueData as String: data] as CFDictionary)
+        var result = CampusKeychain.update(keyQuery as CFDictionary, [kSecValueData as String: data] as CFDictionary)
         if result == errSecItemNotFound {
             var item = keyQuery; item[kSecValueData as String] = data
             item[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
-            result = SecItemAdd(item as CFDictionary, nil)
+            result = CampusKeychain.add(item as CFDictionary, nil)
         }
         guard result == errSecSuccess else { throw GraphAuthError(message: "无法保存钥匙串登录") }
     }
     private func deleteCredential() throws {
-        let result = SecItemDelete(keyQuery as CFDictionary)
+        let result = CampusKeychain.delete(keyQuery as CFDictionary)
         guard result == errSecSuccess || result == errSecItemNotFound else { throw GraphAuthError(message: "无法删除钥匙串登录") }
     }
     func presentationAnchor(for session: ASWebAuthenticationSession) -> ASPresentationAnchor { presentationWindow ?? NSWindow() }

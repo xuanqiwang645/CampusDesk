@@ -29,4 +29,19 @@ campus_arch="$(uname -m)"
   "$campus_root/Sources/SchoolConfig.swift" "$campus_root/Tests/school-config-smoke.swift" \
   -o "$campus_tests/school-config-smoke"
 "$campus_tests/school-config-smoke"
+/usr/bin/xcrun swiftc -swift-version 5 -O -target "$campus_arch-apple-macosx12.0" \
+  "$campus_root/Sources/KeychainAccess.swift" "$campus_root/Sources/SecurityValidation.swift" \
+  "$campus_root/Sources/AssistantCredentialIdentity.swift" "$campus_root/Sources/AssistantCredentialBridge.swift" \
+  "$campus_root/Sources/AssistantKeyStore.swift" "$campus_root/Sources/AssistantAI.swift" \
+  "$campus_root/Tests/assistant-keychain-smoke.swift" \
+  -o "$campus_tests/assistant-keychain-smoke"
+"$campus_tests/assistant-keychain-smoke"
+/usr/bin/xcrun swiftc -swift-version 5 -O -target "$campus_arch-apple-macosx12.0" \
+  "$campus_root/Sources/AssistantModels.swift" "$campus_root/Tests/assistant-models-smoke.swift" \
+  -o "$campus_tests/assistant-models-smoke"
+"$campus_tests/assistant-models-smoke"
+/usr/bin/xcrun swiftc -swift-version 5 -O -target "$campus_arch-apple-macosx12.0" \
+  "$campus_root/Sources/AssistantSetupGuide.swift" "$campus_root/Tests/assistant-setup-smoke.swift" \
+  -o "$campus_tests/assistant-setup-smoke"
+"$campus_tests/assistant-setup-smoke"
 echo "测试产物：$campus_tests"

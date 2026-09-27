@@ -88,10 +88,14 @@
     return 'unknown';
   }
   function deadlineLabel(item) {
-    if (clean(item.dueLabel)) return clean(item.dueLabel).slice(0,400);
+    if (clean(item.dueLabel) && !/^(?:homework\s+)?(?:deadline|due(?:\s+date)?|截止(?:时间|日期)?)\s*[:：]?$/i.test(clean(item.dueLabel))) return clean(item.dueLabel).slice(0,400);
     const lines = multiline(item.instructions || item.text).split('\n');
-    const line = lines.find(value => /^\s*(?:due(?:\s+date)?|deadline|截止(?:时间|日期)?|提交截止)\s*[:：]/i.test(value));
-    return line ? clean(line).slice(0,400) : null;
+    const index = lines.findIndex(value => /^\s*(?:(?:homework|assignment)\s+)?(?:due(?:\s+date)?|deadline|截止(?:时间|日期)?|提交截止)\s*(?:[:：]|\b(?:on|by)\b)/i.test(value));
+    if (index < 0) return null;
+    // Keep a split "Deadline:" and its value together, including class-specific
+    // alternatives for display. The resolver refuses ambiguous multiple dates.
+    const block = lines[index] + (/[:：]\s*$/.test(lines[index]) ? '\n' + lines.slice(index + 1, index + 4).join('\n') : '');
+    return clean(block).slice(0,400) || null;
   }
   function collect(doc, url, options) {
     options = options || {};
@@ -203,7 +207,7 @@
     if (!root || !root.document) throw new Error('extract requires a browser document; use fromProjection for fixtures.');
     return fromProjection(collect(root.document,root.location.href,options),null,options);
   }
-  const api = {extract,collect,fromProjection,classify,taskStatus,exactDate,teamsURL,attachmentURL,hash};
+  const api = {extract,collect,fromProjection,classify,taskStatus,exactDate,deadlineLabel,teamsURL,attachmentURL,hash};
   if (typeof module === 'object' && module.exports) module.exports = api;
   if (root) root.CampusTeams = api;
 })(typeof window !== 'undefined' ? window : null);

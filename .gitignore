@@ -28,3 +28,5 @@ state.*.json
 backups/
 diagnostics/
 outputs/
+dist-windows/
+Windows/ocr-data/

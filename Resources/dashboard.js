@@ -6,12 +6,18 @@
     return;
   }
   const native = Boolean(window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.campus);
+  const themeEdition = window.CampusDeskThemeEdition === true;
+  const appVersionInfo = window.CampusDeskAppVersion || { version: themeEdition ? '1.1.0' : '0.5.13', name: themeEdition ? 'Super Orion' : '' };
+  const setupWizardReleaseVersion = String(appVersionInfo.version || 'unversioned').slice(0, 40);
+  const appVersionLabel = 'CampusDesk v' + String(appVersionInfo.version || '').slice(0, 40) + (appVersionInfo.name ? ' ' + String(appVersionInfo.name).slice(0, 60) : '');
   const storageKey = 'campusdesk.browser.v1';
   let state = Core.emptyState();
-  let page = ['overview', 'learning', 'schedule', 'grades', 'tasks', 'feedback', 'teams', 'ec', 'settings'].includes(location.hash.slice(1)) ? location.hash.slice(1) : 'overview';
+  let page = (['overview', 'learning', 'schedule', 'grades', 'tasks', 'feedback', 'teams', 'ec', 'settings'].includes(location.hash.slice(1)) || (themeEdition && location.hash.slice(1) === 'assistant')) ? location.hash.slice(1) : 'overview';
   let selectedDate = Core.today();
   let taskFilter = 'open';
   let taskSubjectFilter = 'all';
+  let taskOverdueOpen = true;
+  let lastTodoCountdownMinute = -1;
   let customScheduleMode = 'period';
   let customScheduleDays = [];
   let customScheduleKind = 'weekly';
@@ -33,6 +39,9 @@
   let ecSearchIndex = null;
   let ecSearchBuildToken = 0;
   let ecSearchBuildProgress = 0;
+  let derivedCacheState = state;
+  const derivedCache = new Map();
+  let graphBatchRenderPending = false;
   let ecVisibleLimit = 40;
   let teamsVisibleLimit = 40;
   const MESSAGE_PAGE_SIZE = 40;
@@ -45,6 +54,25 @@
   let graphConfigurationDraft = null;
   const gpaTermDateDrafts = new Map();
   let schoolConfigurationDraft = null, schoolSavePending = false;
+  let setupWizardDismissedThisSession = false;
+  let setupWizardNameDraft = '';
+  let setupWizardMode = 'setup', setupWizardRequestSequence = 0, setupWizardHandledSequence = 0;
+  let assistantStatus = { deepSeekKeyConfigured: false, deepSeekKeyState: 'missing' };
+  let assistantKeyEditing = false, assistantKeyRecoveryBusy = false;
+  const assistantCatalogs = {
+    deepseek: { models: ['deepseek-flash', 'deepseek-v4-pro'], loaded: false, attempted: false, loading: false, error: '', requestId: '' },
+    ollama: { models: [], loaded: false, attempted: false, loading: false, error: '', requestId: '' }
+  };
+  let assistantCatalogSequence = 0;
+  let assistantTranscript = [];
+  let assistantReferences = [];
+  let assistantQuestionDraft = '';
+  let assistantRenderDeferred = false;
+  let assistantQuestionComposing = false;
+  let assistantPendingRequest = null;
+  let assistantBusy = false;
+  let assistantActiveRequestID = '';
+  let assistantSentQuestion = '';
   let quickConnectionSource = null, pendingQuickConnection = null;
   let pendingSchoolCalendarPDF = null;
   let teamsAuto = { running: false, phase: 'idle', message: '登录 Teams 后自动发现频道和聊天。', counts: {}, warnings: [], coverageItems: [] };
@@ -70,9 +98,10 @@
   let lastMenuCountdown = '';
   let markupEscapes = null;
   const pageNames = { overview: '总览', learning: '学习中心', schedule: '课程表', grades: '成绩与 GPA', tasks: '待办事项', feedback: '老师反馈', teams: 'Teams 消息', ec: 'English Corner', settings: '连接与设置' };
+  if (themeEdition) pageNames.assistant = '学习助手';
   // Only CampusDesk's own fixed labels are translated. School data stays exactly as received.
   const english = Object.freeze({
-    '取消': 'Cancel', '正在同步…': 'Syncing…',
+    '取消': 'Cancel', '正在同步…': 'Syncing…', '学习助手': 'Learning assistant', '选择资料范围后即可发送问题。': 'Choose a data scope, then send your question.',
     '快捷连接': 'Quick connect', '登录后自动同步': 'Sync automatically after sign-in', '连接选项': 'Connection options', '登录并同步': 'Sign in & sync', '重新登录': 'Sign in again', '立即同步': 'Sync now', '设置并登录': 'Set up & sign in', '打开网站': 'Open website', '保存并登录': 'Save & sign in', '连接设置与退出': 'Connection settings & sign out',
     '登录会话保存在这台 Mac；学校要求验证时需重新登录。': 'Your session stays on this Mac. Sign in again when your school requires verification.',
     '填写学校网址，在学校原页面完成登录，CampusDesk 识别到课程后会自动同步。': 'Enter your school URL and sign in on the school website. CampusDesk starts syncing once it recognizes your courses.',
@@ -86,12 +115,13 @@
     '学习，一目了然': 'Study, in view', '我的校园': 'My Campus', '北京时间': 'Beijing time', '把今天留给重要的事。': 'Make today count.', '同步数据': 'Sync data', '尚未同步': 'Not synced',
     '界面语言': 'Interface language', '选择 CampusDesk 的界面语言。课程、作业、消息、附件和学校原文保持原样，不会被翻译。': 'Choose the CampusDesk interface language. Courses, assignments, messages, attachments, and school content stay exactly as received.', '简体中文': 'Simplified Chinese',
     '让它适合你的每一天。': 'Make it work for every day.', '学校系统各自登录；课表、任务和频道原文保存在本机。': 'Sign in to each school system separately; schedules, tasks, and channel content remain on this Mac.', '更改会立即应用到导航、页面标题、按钮与固定说明文字。': 'Changes apply immediately to navigation, page titles, buttons, and fixed help text.',
-    '面板样式': 'Dashboard style', '经典面板': 'Classic dashboard', '卡片看板': 'Card board', '熟悉的课程、成绩与待办布局': 'Familiar schedule, grades, and to-do layout', '统计概览与密集任务卡片': 'At-a-glance metrics and focused task cards', 'GPA K 线涨跌颜色': 'GPA candle colors', '选择成绩上升和下降时 K 线的颜色，设置会保存在本机。': 'Choose how rising and falling GPA candles are colored. This preference stays on this Mac.', '红涨绿跌': 'Red up, green down', '绿涨红跌': 'Green up, red down', 'GPA K 线已设为绿涨红跌。': 'GPA candles are set to green up, red down.', 'GPA K 线已设为红涨绿跌。': 'GPA candles are set to red up, green down.',
+    '面板样式': 'Dashboard style', '经典面板': 'Classic dashboard', '卡片看板': 'Card board', '熟悉的课程、成绩与待办布局': 'Familiar schedule, grades, and to-do layout', '统计概览与密集任务卡片': 'At-a-glance metrics and focused task cards', '主题配色': 'Color theme', '只改变 CampusDesk 的界面配色；不影响经典/卡片布局、成绩涨跌色或学校数据。': 'Changes CampusDesk colors only; dashboard layout, GPA direction colors, and school data stay unchanged.', '自然绿': 'Sage', '海湾蓝': 'Ocean', '暖阳橙': 'Ember', '深夜': 'Midnight', '界面配色已切换为自然绿。': 'Color theme changed to Sage.', '界面配色已切换为海湾蓝。': 'Color theme changed to Ocean.', '界面配色已切换为暖阳橙。': 'Color theme changed to Ember.', '界面配色已切换为深夜。': 'Color theme changed to Midnight.', 'GPA K 线涨跌颜色': 'GPA candle colors', '选择成绩上升和下降时 K 线的颜色，设置会保存在本机。': 'Choose how rising and falling GPA candles are colored. This preference stays on this Mac.', '红涨绿跌': 'Red up, green down', '绿涨红跌': 'Green up, red down', 'GPA K 线已设为绿涨红跌。': 'GPA candles are set to green up, red down.', 'GPA K 线已设为红涨绿跌。': 'GPA candles are set to red up, green down.',
+    '自然、柔和的浅色默认主题': 'A soft, natural light theme', '清晰的冷调蓝色主题': 'A crisp, cool blue theme', '温暖的沙色与深棕强调色': 'Warm sand tones with deep brown accents', '低亮度深色主题': 'A low-luminance dark theme',
     '日常偏好': 'Daily preferences', '学校连接': 'School connections', '数据与备份': 'Data & backups', '自动刷新间隔': 'Automatic refresh interval', '空白课节显示为自习': 'Show open periods as self-study', '显示时区': 'Display time zone', '每 5 分钟': 'Every 5 minutes', '每 15 分钟': 'Every 15 minutes', '每 30 分钟': 'Every 30 minutes', '每小时': 'Hourly',
     '自编课表': 'Custom schedule', '添加自编课程': 'Add custom class', '课程名称': 'Class name', '教室（可选）': 'Room (optional)', '选择星期': 'Choose weekdays', '按节次': 'By period', '按时刻': 'By time', '第几节': 'Period', '开始时间': 'Start time', '结束时间': 'End time', '保存自编课程': 'Save custom class', '已添加': 'Added', '删除自编课程': 'Delete custom class', '请选择至少一天': 'Choose at least one weekday', '结束时间将自动补为开始时间后 45 分钟。': 'An empty or invalid end time is filled as 45 minutes after the start.', '按时间填写时，会按重叠比例自动归入对应节次。': 'Time-based entries are assigned by overlap with the matching period.', '周日': 'Sun', '周一': 'Mon', '周二': 'Tue', '周三': 'Wed', '周四': 'Thu', '周五': 'Fri', '周六': 'Sat',
     '上课日期': 'Class date', '操作': 'Action', '如：晨会、社团': 'e.g. morning meeting or club', '如：操场': 'e.g. playground', '如：调课后的课程': 'e.g. adjusted class name', '选择节次后自动带出时间': 'Choose a period to fill in the times', '填入开始时间后会自动识别节次': 'A period is suggested after you enter the start time', '将归入 ': 'Assigned to ', '未匹配节次，将按开始时间插入': 'No period match; will be placed by start time', '该节次暂无已读取的时间': 'No captured time is available for this period', '尚未设置节假日；设置后当天常规课表和每周自编课程会隐藏。': 'No holidays set. Adding one hides regular and weekly custom classes for that date.',
     '希悦网址': 'Seiue URL', '学校 ManageBac 网址': 'School ManageBac URL', '导出或恢复本机数据': 'Export or restore local data', '构建时配置；未配置时不会连接。': 'Configured at build time; no connection is made when it is empty.', '构建时配置；仅允许指定学校的精确地址。': 'Configured at build time; only the approved school address is allowed.',
-    'Teams 作业提醒': 'Teams assignment reminders', '截止前系统通知': 'System notifications before due dates', '提前多久提醒': 'Reminder lead time',
+    'Teams 作业提醒': 'Teams assignment reminders', '截止前系统通知': 'System notifications before due dates', '提前多久提醒': 'Reminder lead time', '提醒学科': 'Reminder subjects', '取消某科可暂停该科通知；默认所有学科都可提醒。': 'Uncheck a subject to mute its reminders; all subjects are included by default.', '恢复全部学科': 'Include all subjects', '提醒筛选已更新。': 'Reminder filters updated.', '已恢复所有学科提醒。': 'Reminders are enabled for all subjects.', '暂无已读取学科；获取到 Teams 作业后会在这里列出。': 'No Teams subjects captured yet. Subjects will appear here after assignments are synced.', 'Teams 作业截止提醒': 'Teams assignment due reminders', '通知提醒只在 CampusDesk Mac 应用中可用。': 'Notifications are available in the CampusDesk Mac app only.', '系统通知未允许。请到 Mac 系统设置 → 通知 → CampusDesk 开启。': 'Notifications are off. Turn them on in macOS System Settings → Notifications → CampusDesk.', '如果提前提醒时间已过，将在截止时提醒。已逾期或已完成的作业不安排通知。': 'If the lead time has passed, the reminder is sent at the deadline. Overdue or completed assignments are not scheduled.', '截止时': 'At the deadline', '提前 10 分钟': '10 minutes before', '提前 30 分钟': '30 minutes before', '提前 1 小时': '1 hour before', '提前 1 天': '1 day before', '作业提醒时间已更新。': 'Reminder timing updated.',
     '课程成绩': 'Course grades', '学校 GPA': 'School GPA', '参考 GPA': 'Estimated GPA', '分档 GPA': 'Banded GPA', '线性折算 GPA': 'Linear GPA', '线性绩点': 'Linear points', '今日课程': 'Today\'s classes', '全部待办': 'All to-dos', '添加待办': 'Add to-do', '查看全部': 'View all',
     'Teams 作业': 'Teams assignments', 'ManageBac 作业': 'ManageBac assignments', '个人待办': 'Personal to-dos', '作业来源': 'Assignment source', '学科': 'Subject', '特别关注': 'Favorite', '已关注': 'Following',
     '未完成': 'Open', '已逾期': 'Overdue', '已完成': 'Completed', '全部': 'All', '全部学科': 'All subjects', '全部频道': 'All channels', '全部消息': 'All messages', '作业消息': 'Assignment messages', '其他通知': 'Other notifications',
@@ -174,6 +204,19 @@
   function localizedRuntimeText(value) {
     const text = String(value || '');
     if (!isEnglish()) return text;
+    const stageMessages = {
+      '登录验证阶段：检测到学校登录页或登录表单，当前会话无效/尚未登录。请点击“打开网站”完成登录，再点同步。': 'Sign-in step: a school login page or form was detected. The session is signed out or not signed in yet. Open the school website, complete sign-in, then sync again.',
+      '登录验证阶段：检测到登录页面；请在学校原页面完成登录后再同步。': 'Sign-in step: a login page was detected. Sign in on the original school website, then sync again.',
+      '网络阶段：设备当前离线或连接中断。 已保留缓存。': 'Network step: this Mac is offline or the connection was interrupted. The existing cache was kept.',
+      '网络阶段：连接学校服务器超时。 已保留缓存。': 'Network step: the school server did not respond in time. The existing cache was kept.',
+      '页面识别阶段：页面已打开，但没有找到可读取的数据；请进入课表页（希悦）或课程 Tasks / Grades 页（ManageBac）后重试。': 'Page recognition step: the page opened, but no readable data was found. Open the Seiue timetable or a ManageBac course Tasks / Grades page, then retry.'
+    };
+    if (stageMessages[text]) return stageMessages[text];
+    if (text.startsWith('页面识别阶段：')) return 'Page recognition step: ' + text.slice('页面识别阶段：'.length);
+    if (text.startsWith('页面内容阶段：')) return 'Page content step: ' + text.slice('页面内容阶段：'.length);
+    if (text.startsWith('网络阶段：')) return 'Network step: ' + text.slice('网络阶段：'.length);
+    if (text.startsWith('安全连接阶段：')) return 'Secure connection step: ' + text.slice('安全连接阶段：'.length);
+    if (text.startsWith('登录跳转阶段：')) return 'Sign-in redirect step: ' + text.slice('登录跳转阶段：'.length);
     let match = text.match(/^正在读取第\s*(\d+)\s*页…$/);
     if (match) return 'Reading page ' + match[1] + '…';
     match = text.match(/^已检查\s*(\d+)\s*页；更多内容可打开原页读取$/);
@@ -193,9 +236,14 @@
   }
   function pageName(key) { return t(pageNames[key] || key); }
   function localizeMarkup(markup) {
+    if (window.campusDesktop && window.campusDesktop.platform === 'win32') {
+      markup = markup.replace(/<div class="browser-permission-guide">[\s\S]*?<\/div>/g, '<div class="browser-permission-guide"><p>' + (isEnglish() ? 'Open Teams from CampusDesk and sign in using its dedicated Edge or Chrome profile. Your normal browser profile is not read.' : '从 CampusDesk 打开 Teams，在专用 Edge 或 Chrome 窗口中登录；不会读取你的日常浏览器配置。') + '</p><p>' + (isEnglish() ? 'No Apple Events permission is needed on Windows. Keep the Teams tab open during sync. Attachments are processed locally. Use Exit from the tray menu to stop background sync.' : 'Windows 不需要 Apple Events 权限。同步时保留 Teams 标签页；附件仅在本机解析。通过托盘菜单退出后停止后台同步。') + '</p></div>');
+      markup = markup.replace(/macOS/g, 'Windows').replace(/\bMac\b/g, 'PC');
+    }
     if (!isEnglish()) return markup;
     const labels = Object.assign({}, english, scheduleEnglish, visualEnglish);
-    return Object.keys(labels).sort((a, b) => b.length - a.length).reduce((result, source) => result.split(source).join(labels[source]), markup);
+    const translated = Object.keys(labels).sort((a, b) => b.length - a.length).reduce((result, source) => result.split(source).join(labels[source]), markup);
+    return window.campusDesktop && window.campusDesktop.platform === 'win32' ? translated.replace(/macOS/g,'Windows').replace(/\bMac\b/g,'PC') : translated;
   }
   function localizedHTML(renderMarkup) {
     markupEscapes = [];
@@ -261,6 +309,7 @@
     return false;
   }
   function persist(options) {
+    invalidateDerivedCaches();
     const details = { state: state };
     if (options && options.imported === true) details.imported = true;
     if (!send('saveState', details)) {
@@ -268,6 +317,48 @@
       catch (_) { toast('浏览器无法保存数据。请导出备份，或使用 Mac 应用。'); }
     }
     syncReminders();
+  }
+  function invalidateDerivedCaches() {
+    derivedCacheState = state;
+    derivedCache.clear();
+    teamsPostsCache.clear();
+    cachedSearchIndex = null;
+    ecSearchIndex = null;
+    ecSearchBuildProgress = 0;
+    ecSearchBuildToken++;
+  }
+  function memoized(key, build) {
+    if (derivedCacheState !== state) {
+      derivedCacheState = state;
+      derivedCache.clear();
+    }
+    if (!derivedCache.has(key)) derivedCache.set(key, build());
+    return derivedCache.get(key);
+  }
+  function taskRowsForState() { return memoized('tasks', () => Core.getTasks(state)); }
+  function openTasksForState(source) {
+    return memoized('open-tasks:' + (source || '*'), () => taskRowsForState().filter(task => !task.completed && (!source || task.source === source)));
+  }
+  function openTaskCountForState() { return memoized('open-task-count', () => openTasksForState().length); }
+  function courseRowsForState() { return memoized('courses', () => Core.getCourses(state)); }
+  function feedbackRowsForState() { return memoized('feedback', () => Core.getFeedback(state)); }
+  function scheduleRowsForState(date, includeSelfStudy) {
+    const dateKey = date == null ? '' : typeof date === 'string' ? date : new Date(date).toISOString();
+    return memoized('schedule:' + dateKey + ':' + Boolean(includeSelfStudy), () => Core.getSchedule(state, date, includeSelfStudy));
+  }
+  function schoolCalendarRowsForState(date) {
+    const dateKey = date == null ? '' : typeof date === 'string' ? date : new Date(date).toISOString();
+    return memoized('school-calendar:' + dateKey, () => Core.getSchoolCalendarEvents(state, date));
+  }
+  function flushGraphBatchRender() {
+    if (!graphBatchRenderPending) return;
+    graphBatchRenderPending = false;
+    render();
+  }
+  function scheduleGraphBatchRender() {
+    // Progress is updated through lightweight status events. Rebuild message
+    // and EC views once the run ends instead of repeatedly cancelling indexes.
+    graphBatchRenderPending = true;
   }
   function sourceName(source) { return t(({ seiue: '希悦', managebac: 'ManageBac', teams: 'Microsoft Teams' })[source] || '个人待办'); }
   const schoolConfigurationHelp = '填写学校首页地址，保存后即可登录。未使用的服务可以留空。';
@@ -520,10 +611,10 @@
     return empty('schedule', connected ? '这一天暂无已读取的课程' : '先把你的课程表接进来', connected ? '可能没有课程，也可能尚未读取这一天。打开希悦核对并切换到对应日期，再同步。' : '在应用中登录希悦并打开课程表，这里的每一天就有了安排。', button('打开希悦', 'open-source', 'data-source="seiue"', 'button-light'));
   }
   function getGpaView() {
-    const official = Core.getOfficialGPA(state);
-    const courses = Core.getCourses(state);
-    const estimate = Core.estimateGPA(courses), linear = Core.estimateLinearGPA(courses);
-    return { official: official, estimate: estimate, linear: linear, courses: courses };
+    return memoized('gpa-view', () => {
+      const official = Core.getOfficialGPA(state), courses = courseRowsForState();
+      return { official, estimate: Core.estimateGPA(courses), linear: Core.estimateLinearGPA(courses), courses };
+    });
   }
   function gpaTermKey(value) { return String(value || '').toLowerCase().replace(/\s*\((?:current|current term)\)\s*/g, '').trim(); }
   function gpaValue(value, scale) { return '<div class="gpa-value">' + (value == null || !Number.isFinite(Number(value)) ? '—' : Number(value).toFixed(2)) + '<small>/ ' + esc(scale || '4.00') + '</small></div>'; }
@@ -653,12 +744,15 @@
     return [...senders.entries()].sort((a, b) => a[0].localeCompare(b[0], 'zh-CN')).map(([sender, channels]) => '<section class="teams-recipient-group"><h2>' + (isEnglish() ? 'Sender: ' : '发件人：') + esc(sender) + '</h2>' + [...channels.entries()].sort((a, b) => Number(watched.has(b[0])) - Number(watched.has(a[0])) || a[0].localeCompare(b[0], 'zh-CN')).map(([channel, rows]) => '<div class="teams-channel-group"><div class="group-heading"><div><p>' + (isEnglish() ? 'Channel' : '频道') + '</p><h3>' + esc(channel) + '<span>' + rows.length + (isEnglish() ? ' item(s)' : ' 条') + '</span></h3></div>' + focusButton('toggle-focus-channel', channel, watched.has(channel), '频道：' + channel) + '</div>' + postRows(rows) + '</div>').join('') + '</section>').join('');
   }
   function renderTeams() {
-    const posts = teamsPosts(), watched = new Set(state.settings.focusTeamsChannels || []);
-    const kindVisible = posts.filter(post => teamsFilter === 'all' || post.kind === teamsFilter);
-    const filtered = kindVisible.filter(post => teamsChannelFilter !== 'focus' || watched.has(postChannel(post)));
+    const posts = teamsPosts(), watched = new Set(state.settings.focusTeamsChannels || []), filtered = [];
+    for (const post of posts) {
+      if (teamsFilter !== 'all' && post.kind !== teamsFilter) continue;
+      if (teamsChannelFilter === 'focus' && !watched.has(postChannel(post))) continue;
+      filtered.push(post);
+    }
     const visible = filtered.slice(0, teamsVisibleLimit);
     const remaining = Math.max(0, filtered.length - visible.length);
-    const tasks = Core.getTasks(state).filter(task => task.source === 'teams' && !task.completed);
+    const tasks = openTasksForState('teams');
     const rangeText = isEnglish() ? 'Showing ' + visible.length + ' / ' + filtered.length + ' captured message(s)' : '显示 ' + visible.length + ' / ' + filtered.length + ' 条已读取消息';
     const controls = '<div class="page-tools teams-tools"><div class="filter-pills">' + [['all', '全部消息'], ['assignment', '作业消息'], ['general', '其他通知']].map(filter => '<button type="button" class="pill ' + (teamsFilter === filter[0] ? 'active' : '') + '" data-action="teams-filter" data-filter="' + filter[0] + '">' + filter[1] + '</button>').join('') + '</div><div class="filter-pills"><button type="button" class="pill ' + (teamsChannelFilter === 'all' ? 'active' : '') + '" data-action="teams-channel-filter" data-filter="all">全部频道</button><button type="button" class="pill ' + (teamsChannelFilter === 'focus' ? 'active' : '') + '" data-action="teams-channel-filter" data-filter="focus">特别关注</button></div><span class="subtle">' + rangeText + '</span></div>';
     const showMore = remaining ? '<div class="message-pagination">' + button(isEnglish() ? 'Show 40 more (' + remaining + ' remaining)' : '再显示 40 条（还剩 ' + remaining + ' 条）', 'teams-show-more', '', 'button-light') + '</div>' : '';
@@ -729,7 +823,7 @@
     return heading('English Corner，记得赴约。', '搜索已读取原文和附件文字，核对最新安排。', button(icon('link') + '打开 Teams', 'open-source', 'data-source="teams"')) + teamsGuide() + '<div class="info-note">先核对取消或变更通知，再查看对应日期的名单；旧名单不代表今天的安排。下面按通知的明确发布日期筛选，不推断活动日期或参与人员。附件提取文字可能不完整，未匹配到姓名不代表不在名单中，请核对原件。</div>' + '<section class="card"><div class="ec-filters"><label for="ec-search">姓名或全文<input id="ec-search" type="search" value="' + esc(ecQuery) + '" placeholder="搜索通知和已解析附件" autocomplete="off" maxlength="200" aria-controls="ec-results"></label><label for="ec-date-filter">通知发布日期<select id="ec-date-filter" aria-controls="ec-results"><option value="all"' + (ecDateFilter === 'all' ? ' selected' : '') + '>全部日期</option><option value="unknown"' + (ecDateFilter === 'unknown' ? ' selected' : '') + '>仅日期未确认</option>' + dates.map(date => '<option value="' + date + '"' + (ecDateFilter === date ? ' selected' : '') + '>' + date + '</option>').join('') + '</select></label>' + button('清除筛选','ec-clear') + '</div><div id="ec-results">' + ecResultsHTML() + '</div>' + teamsWarning() + sourceFooter('teams') + '</section>';
   }
   function calendarEventRows(date, compact) {
-    const events = Core.getSchoolCalendarEvents(state, date);
+    const events = schoolCalendarRowsForState(date);
     if (!events.length) return '<div class="empty small-empty"><h3>' + t(date === Core.today() ? '今天没有校历事件' : '没有校历事件') + '</h3></div>';
     return '<div class="school-calendar-event-list' + (compact ? ' compact' : '') + '">' + events.map(event => {
       const time = event.allDay ? t('全天') : ((event.displayStartTime || event.startTime || '—') + (event.displayEndTime || event.endTime ? '–' + (event.displayEndTime || event.endTime) : ''));
@@ -745,7 +839,7 @@
     const weekday = rule && rule.kind === 'makeup' ? (isEnglish() ? ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'][rule.weekday] : '周' + ['日','一','二','三','四','五','六'][rule.weekday]) : '';
     let ruleText = '';
     if (rule && rule.kind === 'makeup') {
-      const substituted = Core.getSchedule(state, date).filter(row => row.calendarSubstitute);
+      const substituted = scheduleRowsForState(date).filter(row => row.calendarSubstitute);
       ruleText = isEnglish() ? 'Make-up day: recurring custom classes follow ' + weekday + '.' : '调休识别：每周自编课程按' + weekday + '显示。';
       if (substituted.length) {
         const sourceDate = substituted[0].calendarSourceDate;
@@ -760,9 +854,14 @@
     return '<section class="card school-calendar-card' + (full ? ' schedule-full' : '') + '">' + cardHeader('schedule', (isEnglish() ? 'School calendar events' : '校历事件') + ' · ' + esc(date), controls) + '<p class="school-calendar-local-note">' + t('校历只保存在本机，不会上传。') + '</p>' + status + ruleNote + (calendar.events.length ? calendarEventRows(date, !full) : '') + '</section>';
   }
   function renderClassicOverview() {
-    const today = Core.today(), classes = Core.getSchedule(state, today), tasks = Core.getTasks(state), feedback = Core.getFeedback(state);
-    const openTasks = tasks.filter(t => !t.completed), overdue = openTasks.filter(t => taskDue(t).overdue).length;
-    const dueToday = openTasks.filter(t => t.dueAt && Core.today(new Date(t.dueAt)) === today).length;
+    const today = Core.today(), classes = scheduleRowsForState(today), tasks = taskRowsForState(), feedback = feedbackRowsForState(), openTasks = [];
+    let overdue = 0, dueToday = 0;
+    for (const task of tasks) {
+      if (task.completed) continue;
+      openTasks.push(task);
+      if (taskDue(task).overdue) overdue++;
+      if (task.dueAt && Core.today(new Date(task.dueAt)) === today) dueToday++;
+    }
     const gpa = getGpaView(), displayGpa = gpa.official || gpa.estimate;
     const course = Core.getNextClass(state);
     const connected = Boolean(sourceStatus('seiue').lastCapturedAt || sourceStatus('managebac').lastCapturedAt || sourceStatus('teams').lastCapturedAt);
@@ -784,30 +883,51 @@
   function boardTaskCards(tasks, limit) {
     const visible = tasks.slice(0, limit || tasks.length);
     if (!visible.length) return '<div class="board-empty"><span>' + icon('tasks') + '</span><h3>现在没有待完成的事项</h3><p>学校任务同步后会出现在这里；也可以从经典面板添加个人待办。</p></div>';
-    return '<div class="board-task-grid">' + visible.map(task => {
-      const source = task.source || 'manual', local = source === 'manual', due = taskDue(task);
-      const accent = due.overdue ? 'rose' : source === 'teams' ? 'teal' : local ? 'violet' : 'amber';
-      const tag = local ? '个人' : source === 'teams' ? 'Teams' : 'ManageBac';
-      return '<article class="board-task-card board-accent-' + accent + '"><div class="board-task-top"><span class="board-course">' + esc(task.course || (local ? '个人待办' : sourceName(source))) + '</span><span class="board-source">' + esc(tag) + '</span></div><h3>' + (local ? esc(task.title) : '<button type="button" data-action="task-detail" data-id="' + esc(task.id) + '">' + esc(task.title) + '</button>') + '</h3><div class="board-task-foot"><span class="board-due ' + (due.overdue ? 'overdue' : '') + '">' + esc(boardDueLabel(task)) + '</span><button class="board-check" type="button" data-action="toggle-task" data-id="' + esc(task.id) + '" aria-label="标为已完成：' + esc(task.title) + '">' + icon('check') + '</button></div></article>';
-    }).join('') + '</div>';
+    const now = Date.now();
+    const cards = visible.map(task => {
+      const source = task.source === 'teams' ? 'teams' : task.source === 'managebac' ? 'managebac' : 'manual';
+      const urgency = todoCardUrgency(task, now);
+      const labels = isEnglish()
+        ? { overdue: 'Overdue', urgent: 'Urgent', soon: 'Due soon', blue: 'On track', ok: 'Plenty of time', unknown: 'Check due date' }
+        : { overdue: '已逾期', urgent: '紧急', soon: '较急', blue: '正常', ok: '充裕', unknown: '待核对' };
+      const sourceLabel = source === 'teams' ? 'Teams' : source === 'managebac' ? 'ManageBac' : (isEnglish() ? 'Personal' : '个人');
+      const course = task.course || (source === 'manual' ? (isEnglish() ? 'Personal task' : '个人待办') : sourceName(source));
+      const hasDueLabel = String(task.dueLabel || '').trim().replace(/^(?:homework\s+)?(?:deadline|due(?:\s+date)?|截止(?:时间|日期)?)\s*[:：]?\s*$/i, '');
+      const dueLabel = urgency.dueAt
+        ? fmtDate(urgency.dueAt, { year: 'numeric', month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false })
+        : (hasDueLabel || (isEnglish() ? 'Due date not provided' : '截止时间未标明'));
+      const countdown = urgency.leftText || (isEnglish() ? 'Date unconfirmed' : (hasDueLabel ? '完整日期待核对' : '日期待核对'));
+      const sourceClass = source === 'teams' ? 'teal' : source === 'managebac' ? 'amber' : 'violet';
+      const knownDue = urgency.dueAt > 0;
+      const ariaLabel = (isEnglish() ? 'Deadline urgency: ' : '截止紧迫度：') + labels[urgency.band] + (knownDue ? ' · ' + countdown : '');
+      return '<article class="board-task-card board-due-card board-accent-' + (urgency.band === 'overdue' || urgency.band === 'urgent' ? 'rose' : sourceClass) + ' todo-band-' + urgency.band + '" data-due-ms="' + urgency.dueAt + '">' +
+        '<div class="board-task-top"><span class="board-course" title="' + esc(course) + '">' + esc(course) + '</span><span class="board-source">' + esc(sourceLabel) + '</span><span class="todo-urgency" aria-label="' + esc(ariaLabel) + '">' + esc(labels[urgency.band]) + '</span></div>' +
+        '<h3>' + (source === 'manual' ? esc(task.title) : '<button type="button" data-action="task-detail" data-id="' + esc(task.id) + '">' + esc(task.title) + '</button>') + '</h3>' +
+        '<div class="todo-urgency-bar" role="progressbar" aria-label="' + esc(isEnglish() ? 'Deadline urgency' : '截止紧迫度') + '" aria-valuemin="0" aria-valuemax="100" aria-valuenow="' + Math.round(urgency.progress * 100) + '"><span data-todo-progress style="width:' + (urgency.progress * 100).toFixed(1) + '%"></span></div>' +
+        '<div class="board-task-foot board-due-foot"><span class="board-due' + (urgency.band === 'overdue' ? ' overdue' : '') + '" title="' + esc(dueLabel) + '">' + icon('clock') + '<span>' + esc(dueLabel) + '</span></span><button class="board-check" type="button" data-action="toggle-task" data-id="' + esc(task.id) + '" aria-label="' + esc((isEnglish() ? (task.completed ? 'Mark incomplete: ' : 'Mark complete: ') : (task.completed ? '标为未完成：' : '标为已完成：')) + task.title) + '" aria-pressed="' + Boolean(task.completed) + '">' + icon('check') + '</button><span class="todo-time-left' + (knownDue ? '' : ' unknown') + '" data-todo-countdown data-band="' + urgency.band + '">' + esc(countdown) + '</span></div>' +
+        '</article>';
+    }).join('');
+    return '<div class="board-task-grid">' + cards + '</div>' + (tasks.length > visible.length ? '<p class="board-more">' + (isEnglish() ? 'Showing ' + visible.length + ' of ' + tasks.length + ' tasks. Open To-Do to see all.' : '已显示 ' + visible.length + ' / ' + tasks.length + ' 项，前往待办事项查看全部。') + '</p>' : '');
   }
   function renderBoardOverview() {
-    const today = Core.today(), tasks = Core.getTasks(state), openTasks = tasks.filter(task => !task.completed);
-    const overdue = openTasks.filter(task => taskDue(task).overdue).length;
-    const nextWeek = openTasks.filter(task => {
-      if (!task.dueAt) return false;
-      const time = new Date(task.dueAt).getTime(), now = Date.now();
-      return time >= now && time <= now + 7 * 24 * 60 * 60 * 1000;
-    }).length;
-    const completed = tasks.filter(task => task.completed).length;
+    const today = Core.today(), tasks = taskRowsForState(), openTasks = [];
+    let overdue = 0, nextWeek = 0, completed = 0;
+    const now = Date.now(), weekEnd = now + 7 * 24 * 60 * 60 * 1000;
+    for (const task of tasks) {
+      if (task.completed) { completed++; continue; }
+      openTasks.push(task);
+      if (taskDue(task).overdue) overdue++;
+      const dueAt = task.dueAt ? Date.parse(task.dueAt) : NaN;
+      if (Number.isFinite(dueAt) && dueAt >= now && dueAt <= weekEnd) nextWeek++;
+    }
     const gpa = getGpaView(), displayGpa = gpa.official || gpa.estimate;
-    const classes = Core.getSchedule(state, today), course = Core.getNextClass(state);
+    const classes = scheduleRowsForState(today), course = Core.getNextClass(state);
     const topText = course.current ? (isEnglish() ? 'Current class: ' + course.current.title + ' ends at ' + (course.current.end || 'the end of class') + '.' : '正在上 ' + course.current.title + '，' + (course.current.end || '课后') + ' 结束。') : course.next ? (isEnglish() ? 'Next: ' + course.next.title + ' starts at ' + (course.next.start || 'TBD') + '.' : '下一节 ' + course.next.title + '，' + (course.next.start || '时间待定') + ' 开始。') : t('把今天的课程和待办排得清清楚楚。');
     const classPreview = classes.slice(0, 3).map(item => '<div class="board-class-row"><span>' + esc(item.start || '—') + '</span><strong>' + esc(item.title || '自习课') + '</strong><small>' + esc(item.room || '地点待确认') + '</small></div>').join('');
     const boardClock = '<div class="board-header-clock">' + renderClassClock() + '</div>';
     const metrics = '<div class="board-kpi-grid"><article class="board-kpi board-kpi-open"><span>未完成</span><strong>' + openTasks.length + '</strong><small>等待处理的任务</small></article><article class="board-kpi board-kpi-overdue"><span>已逾期</span><strong>' + overdue + '</strong><small>优先回到原页面核对</small></article><article class="board-kpi board-kpi-week"><span>7 天内</span><strong>' + nextWeek + '</strong><small>有明确截止时间</small></article><article class="board-kpi board-kpi-done"><span>已完成</span><strong>' + completed + '</strong><small>仅本机勾选记录</small></article><article class="board-kpi board-kpi-gpa"><span>' + (gpa.official ? '学校 GPA' : '参考 GPA') + '</span><strong>' + (displayGpa && displayGpa.value != null ? esc(Number(displayGpa.value).toFixed(2)) : '—') + '</strong><small>' + (displayGpa && displayGpa.scale ? '/ ' + esc(displayGpa.scale) : '等待成绩同步') + '</small></article><article class="board-kpi board-kpi-gpa-linear"><span>' + t('线性折算 GPA') + '</span><strong>' + (gpa.linear.value == null ? '—' : gpa.linear.value.toFixed(2)) + '</strong><small>/ 4.00 · ' + (isEnglish() ? 'Unofficial' : '非官方') + '</small></article></div>';
     const boardTasks = taskSourceSections(openTasks, rows => boardTaskCards(rows, 6));
-    const taskSection = '<section class="board-task-section"><div class="board-section-heading"><div><p>全部待办</p><h2>集中处理最重要的事</h2></div><div>' + button(icon('plus') + '添加待办', 'add-task', '', 'button-primary') + button('查看全部', 'go-tasks', '', 'button-light') + '</div></div><div class="board-source-groups">' + (openTasks.length ? boardTasks : boardTaskCards(openTasks)) + '</div>' + (openTasks.length > 15 ? '<p class="board-more">另有 ' + (openTasks.length - 15) + ' 项，前往“待办事项”查看。</p>' : '') + '</section>';
+    const taskSection = '<section class="board-task-section"><div class="board-section-heading"><div><p>全部待办 · ' + openTasks.length + '</p><h2>集中处理最重要的事</h2></div><div>' + button(icon('plus') + '添加待办', 'add-task', '', 'button-primary') + button('查看全部', 'go-tasks', '', 'button-light') + '</div></div><div class="board-source-groups">' + (openTasks.length ? boardTasks : boardTaskCards(openTasks)) + '</div>' + (openTasks.length > 15 ? '<p class="board-more">' + (isEnglish() ? 'Some tasks are omitted here. Open To-Do to see all.' : '总览仅显示各分组中的部分任务，前往“待办事项”查看全部。') + '</p>' : '') + '</section>';
     const side = '<aside class="board-side-column"><section class="board-mini-card"><p>今日课程</p><h2>' + (classes.length ? classes.length + ' 节已读取课程' : '等待课表同步') + '</h2>' + (classPreview || '<p class="board-muted">登录希悦并打开课表后，这里会显示当天课程。</p>') + '</section>' + renderSchoolCalendar(today, false) + '<section class="board-mini-card board-tip"><p>今日提示</p><h2>信息以原平台为准</h2><span>卡片只整理已经读取到的课程、成绩和作业；点击学校任务可查看原文要求。</span></section></aside>';
     return '<section class="board-panel"><div class="board-hero"><div><p class="board-eyebrow">CAMPUSDESK · 学习看板</p><h1>今天，稳稳推进。</h1><p>' + esc(topText) + '</p></div><div class="board-hero-actions"><span>' + esc(fmtDate(new Date(), { month: 'long', day: 'numeric', weekday: 'long' })) + '</span>' + button(icon('settings') + '面板样式', 'appearance-settings', '', 'button-light') + '</div></div>' + boardClock + metrics + '<div class="board-layout">' + taskSection + side + '</div></section>';
   }
@@ -815,7 +935,7 @@
     return state.settings.dashboardTheme === 'board' ? renderBoardOverview() : renderClassicOverview();
   }
   function renderSchedule() {
-    const rows = Core.getSchedule(state, selectedDate);
+    const rows = scheduleRowsForState(selectedDate);
     return heading('为每一节课，留好位置。', '以北京时间展示课程。空白课节按你的设置显示为自习。') + (selectedDate === Core.today() ? renderClassClock() : '') + '<div class="page-tools"><div class="date-control"><button class="icon-button" type="button" data-action="prev-day" aria-label="前一天">' + icon('back') + '</button><label class="visually-hidden" for="schedule-date">课表日期</label><input id="schedule-date" type="date" value="' + esc(selectedDate) + '"><button class="icon-button" type="button" data-action="next-day" aria-label="后一天">' + icon('arrow') + '</button><span class="date-day">' + esc(dayLabel(selectedDate)) + '</span>' + button('今天', 'today') + '</div>' + button(icon('link') + '打开希悦课表', 'open-source', 'data-source="seiue"') + '</div>' + renderScheduleConflicts(rows, selectedDate) + '<section class="card schedule-full">' + cardHeader('schedule', selectedDate === Core.today() ? '今日课程' : esc(selectedDate) + ' 的课程', '<span class="card-kicker">' + rows.length + ' 节已读取课程</span>') + (rows.length ? scheduleRows(rows, selectedDate) : noSchedule(selectedDate)) + sourceFooter('seiue') + '</section>' + renderSchoolCalendar(selectedDate, true) + renderCustomSchedule() + '<p class="footer-note">自习仅补充学校页面中能确认时间的空白课节，不推测未读取的课表。</p>';
   }
   function renderScheduleConflicts(rows, date) {
@@ -831,13 +951,13 @@
   function searchIndex() {
     if (cachedSearchIndex) return cachedSearchIndex;
     const rows = [];
-    for (const task of Core.getTasks(state)) rows.push({ kind: 'task', id: task.id, title: task.title, meta: [task.course, sourceName(task.source), task.dueAt ? fmtDate(task.dueAt) : ''].filter(Boolean).join(' · '), text: [task.requirements, task.status, ...(task.attachments || []).map(a => a.title + ' ' + (a.text || ''))].join(' '), source: task.source === 'teams' ? 'teams' : task.source === 'managebac' ? 'managebac' : '', url: task.url, task });
+    for (const task of taskRowsForState()) rows.push({ kind: 'task', id: task.id, title: task.title, meta: [task.course, sourceName(task.source), task.dueAt ? fmtDate(task.dueAt) : ''].filter(Boolean).join(' · '), text: [task.requirements, task.status, ...(task.attachments || []).map(a => a.title + ' ' + (a.text || ''))].join(' '), source: task.source === 'teams' ? 'teams' : task.source === 'managebac' ? 'managebac' : '', url: task.url, task });
     for (const post of teamsPosts()) rows.push({ kind: 'post', id: post.id, title: post.title, meta: ['Teams', post.author, post.recipient, post.channel, post.dateLabel].filter(Boolean).join(' · '), text: [post.text, ...(post.attachments || []).map(a => a.title + ' ' + (a.text || ''))].join(' '), source: 'teams', url: post.url, item: post });
-    for (const item of Core.getFeedback(state)) rows.push({ kind: 'feedback', id: item.id, title: item.teacher || '老师反馈', meta: [item.source === 'teams' ? 'Teams' : 'ManageBac', item.course, item.date].filter(Boolean).join(' · '), text: item.text, source: item.source, url: item.url, item });
-    for (const course of Core.getCourses(state)) rows.push({ kind: 'grade', id: course.id, title: course.name, meta: ['ManageBac', course.term, course.percentage == null ? '' : Number(course.percentage).toFixed(1) + '%'].filter(Boolean).join(' · '), text: course.name + ' ' + course.term, source: 'managebac', url: course.url, item: course });
+    for (const item of feedbackRowsForState()) rows.push({ kind: 'feedback', id: item.id, title: item.teacher || '老师反馈', meta: [item.source === 'teams' ? 'Teams' : 'ManageBac', item.course, item.date].filter(Boolean).join(' · '), text: item.text, source: item.source, url: item.url, item });
+    for (const course of courseRowsForState()) rows.push({ kind: 'grade', id: course.id, title: course.name, meta: ['ManageBac', course.term, course.percentage == null ? '' : Number(course.percentage).toFixed(1) + '%'].filter(Boolean).join(' · '), text: course.name + ' ' + course.term, source: 'managebac', url: course.url, item: course });
     for (const grade of Core.getTeamsGrades(state)) rows.push({ kind: 'grade', id: grade.id, title: grade.title || grade.gradeLabel || 'Teams 成绩', meta: ['Teams', grade.course, grade.date].filter(Boolean).join(' · '), text: [grade.gradeLabel, grade.rubric, grade.feedback].filter(Boolean).join(' '), source: 'teams', url: grade.url, item: grade });
     const attachments = [];
-    for (const task of Core.getTasks(state)) for (const file of task.attachments || []) attachments.push({ file, course: task.course, source: task.source === 'teams' ? 'teams' : task.source === 'managebac' ? 'managebac' : '', owner: task.title, parentURL: task.url });
+    for (const task of taskRowsForState()) for (const file of task.attachments || []) attachments.push({ file, course: task.course, source: task.source === 'teams' ? 'teams' : task.source === 'managebac' ? 'managebac' : '', owner: task.title, parentURL: task.url });
     for (const post of teamsPosts()) for (const file of post.attachments || []) attachments.push({ file, course: post.channel || post.course, source: 'teams', owner: post.title, parentURL: post.url });
     const seen = new Set();
     for (const entry of attachments) {
@@ -845,13 +965,13 @@
       if (seen.has(key)) continue; seen.add(key);
       rows.push({ kind: 'attachment', id: file.id || file.url || file.title, title: file.title, meta: [entry.source === 'teams' ? 'Teams' : entry.source === 'managebac' ? 'ManageBac' : '', entry.course, entry.owner, file.mimeType].filter(Boolean).join(' · '), text: [file.text, file.error].filter(Boolean).join(' '), source: entry.source, url: file.url, parentURL: entry.parentURL, file });
     }
-    cachedSearchIndex = rows;
+    cachedSearchIndex = rows.map(item => Object.assign(item, { searchKey: searchText([item.title, item.meta, item.text].join(' ')) }));
     return cachedSearchIndex;
   }
   function searchResultsHTML(query) {
-    const q = String(query || '').trim().toLocaleLowerCase();
+    const q = searchText(query);
     if (!q) return '<p class="hub-hint">' + (isEnglish() ? 'Search assignments, messages, feedback, grades, and attachment text.' : '可搜索作业、Teams 消息、老师反馈、成绩和已提取的附件文字。') + '</p>';
-    const found = searchIndex().filter(item => (item.title + ' ' + item.meta + ' ' + item.text).toLocaleLowerCase().includes(q)).slice(0, 60);
+    const found = searchIndex().filter(item => item.searchKey.includes(q)).slice(0, 60);
     if (!found.length) return '<p class="hub-hint">' + (isEnglish() ? 'No captured results. Unread pages are not searched.' : '没有匹配的已读取内容；尚未读取的页面不会出现在搜索结果里。') + '</p>';
     return '<div class="hub-search-results">' + found.map(item => {
       const fileURL = item.kind === 'attachment' ? (Core.safeAttachmentURL(item.url) || Core.safeURL(item.url, item.source) || '') : '';
@@ -860,7 +980,7 @@
     }).join('') + '</div>';
   }
   function taskPlan() {
-    const settings = state.settings, all = Core.getTasks(state).filter(task => !task.completed);
+    const settings = state.settings, all = openTasksForState().slice();
     const order = new Map((settings.planOrder || []).map((id, index) => [id, index]));
     all.sort((a, b) => {
       const ao = order.has(a.id) ? order.get(a.id) : Infinity, bo = order.has(b.id) ? order.get(b.id) : Infinity;
@@ -875,7 +995,7 @@
     const nowDate = Core.today(), now = Core.clock(), [hh, mm] = now.split(':').map(Number);
     const nowAt = Date.parse(nowDate + 'T' + String(Math.max(8, hh)).padStart(2, '0') + ':' + String(hh < 8 ? 0 : mm).padStart(2, '0') + ':00+08:00');
     const endAt = Date.parse(nowDate + 'T22:00:00+08:00');
-    const classes = Core.getSchedule(state, nowDate).filter(row => row.start && row.end).map(row => ({ start: Date.parse(nowDate + 'T' + row.start + ':00+08:00'), end: Date.parse(nowDate + 'T' + row.end + ':00+08:00') })).sort((a, b) => a.start - b.start);
+    const classes = scheduleRowsForState(nowDate).filter(row => row.start && row.end).map(row => ({ start: Date.parse(nowDate + 'T' + row.start + ':00+08:00'), end: Date.parse(nowDate + 'T' + row.end + ':00+08:00') })).sort((a, b) => a.start - b.start);
     let cursor = nowAt;
     return all.map(task => {
       const duration = (Number(settings.taskMinutes[task.id]) || 30) * 60000;
@@ -926,7 +1046,7 @@
   }
   function collectAttachments() {
     const files = [];
-    for (const task of Core.getTasks(state)) for (const file of task.attachments || []) files.push({ file, course: task.course, source: task.source, parent: task.title, url: task.url });
+    for (const task of taskRowsForState()) for (const file of task.attachments || []) files.push({ file, course: task.course, source: task.source, parent: task.title, url: task.url });
     for (const post of teamsPosts()) for (const file of post.attachments || []) files.push({ file, course: post.channel || post.course, source: 'teams', parent: post.title, url: post.url });
     const seen = new Set();
     return files.filter(item => { const key = [item.source, item.file.id || item.file.url || item.file.title, item.course].join('|'); if (seen.has(key)) return false; seen.add(key); return true; });
@@ -989,7 +1109,7 @@
     const changes = (state.changeLog || []).slice().sort((a, b) => Date.parse(b.capturedAt) - Date.parse(a.capturedAt)).slice(0, 60);
     const names = state.settings.ecIdentityNames || [];
     const nameValue = names.join(', ');
-    const openTasks = Core.getTasks(state).filter(task => !task.completed).length;
+    const openTasks = openTaskCountForState();
     return heading('把学习安排与变化放在一起。', '搜索已读取内容，核对每个来源，再安排今天的重点。') +
       '<section class="card hub-search-card">' + cardHeader('overview', '全局搜索') + '<label class="hub-search-label" for="hub-search">作业、Teams 消息、老师反馈、成绩与附件文字</label><input id="hub-search" type="search" value="' + esc(learningQuery) + '" placeholder="搜索已读取内容" autocomplete="off"><div id="hub-search-results">' + searchResultsHTML(learningQuery) + '</div></section>' +
       '<section class="card hub-plan-card">' + cardHeader('tasks', '今日学习计划', '<span class="card-kicker">' + openTasks + ' 项待办 · 拖动可调整顺序</span>') + '<p class="hub-section-note">根据今天课表避开上课时段，按截止日期、优先级和预计耗时排入空档。时间只是本机建议，可拖动并修改。</p>' + renderPlanRows() + '</section>' +
@@ -1015,17 +1135,21 @@
     return '<section class="card gpa-forecast-card gp-card"><div class="gp-heading"><h2>' + t('学期 GPA 预测') + '</h2><span>' + (isEnglish() ? 'Uses saved course scenarios' : '使用已保存的学科情景') + '</span></div><p class="gp-intro">' + (isEnglish() ? 'Save category assumptions above to update this projection. Each course below shows whether its data is sufficient.' : '在上方保存类别假设后更新预测；逐门显示纳入结果及缺失原因。') + '</p>' + getGradePlanner().summary(currentCourses) + form + calendar + '</section>';
   }
   function renderFocusMode() {
-    const clock = Core.getClassClock(state), plan = taskPlan().slice(0, 3), rows = Core.getSchedule(state, Core.today());
+    const clock = Core.getClassClock(state), plan = taskPlan().slice(0, 3), rows = scheduleRowsForState(Core.today());
     const current = clock.current, next = clock.next;
     const clockText = current ? (isEnglish() ? 'In class · ' : '正在上课 · ') + current.start + '–' + current.end : next ? (isEnglish() ? 'Next class · ' : '下一节课程 · ') + next.start + '–' + next.end : (isEnglish() ? 'No captured class right now' : '当前没有已读取的课程');
     return '<section class="focus-view"><div class="focus-view-top"><span class="hub-kicker">' + (isEnglish() ? 'FOCUS SESSION' : '专注模式') + '</span><button class="button button-light" type="button" data-action="toggle-focus-mode">' + (isEnglish() ? 'Exit focus' : '退出专注') + '</button></div><p class="focus-date">' + esc(fmtDate(new Date(), { month: 'long', day: 'numeric', weekday: 'long' })) + '</p><h1>' + esc(current ? current.title : next ? next.title : (isEnglish() ? 'A quiet moment to study' : '给自己一段安静的学习时间')) + '</h1><p class="focus-subtitle">' + esc(clockText) + '</p><section class="focus-next-task"><small>' + (isEnglish() ? 'NEXT TASK' : '下一项任务') + '</small>' + (plan.length ? '<strong>' + esc(plan[0].task.title) + '</strong><p>' + esc((plan[0].task.course || sourceName(plan[0].task.source)) + ' · ' + (plan[0].slot ? fmtDate(plan[0].slot.start, { hour: '2-digit', minute: '2-digit', hour12: false }) : (isEnglish() ? 'Not scheduled today' : '今日暂未排入'))) + '</p>' : '<strong>' + (isEnglish() ? 'No open tasks' : '没有未完成任务') + '</strong>') + '</section><section class="focus-deadlines"><h2>' + (isEnglish() ? 'Coming deadlines' : '最近截止日期') + '</h2>' + (plan.length ? plan.map(item => '<div><span>' + esc(item.task.course || sourceName(item.task.source)) + '</span><strong>' + esc(item.task.title) + '</strong><small>' + esc(taskDue(item.task).label) + '</small></div>').join('') : '<p>—</p>') + '</section><small class="focus-course-count">' + rows.length + (isEnglish() ? ' captured classes today' : ' 节已读取课程') + '</small></section>';
   }
   function renderGrades() {
     const gpa = getGpaView();
+    const courseRows = gpa.courses.map(c => {
+      const banded = Core.estimateGPA([c]).value, linear = Core.estimateLinearGPA([c]).value;
+      return '<tr><td class="course-name">' + esc(c.name) + '</td><td>' + esc(c.term || '未确认') + '</td><td class="num">' + (c.percentage == null ? '—' : esc(Number(c.percentage).toFixed(1)) + '%') + (c.percentage == null ? '' : '<span class="grade-bar"><span style="width:' + Math.max(0, Math.min(100, Number(c.percentage) || 0)) + '%"></span></span>') + '</td><td class="num">' + (banded == null ? '未计入' : Number(banded).toFixed(2)) + '</td><td class="num">' + (linear == null ? '未计入' : linear.toFixed(2)) + '</td><td>' + (c.url ? '<button type="button" class="icon-button" data-action="open-source" data-source="managebac" data-url="' + esc(c.url) + '" aria-label="打开课程成绩">' + icon('link') + '</button>' : '') + '</td></tr>';
+    });
     return heading('看见积累，也看见进步。', '先确认成绩来自哪一门课、哪一个学期，再理解 GPA。', button(icon('link') + '打开成绩页面', 'open-source', 'data-source="managebac"')) +
       '<div class="grade-top dual-estimates"><section class="card">' + cardHeader('grades', '学校 GPA', '<span class="card-kicker">学校公布</span>') + gpaValue(gpa.official && gpa.official.value, gpa.official ? gpa.official.scale : '—') + '<p class="gpa-note">' + (gpa.official ? esc(gpa.official.label || '来自已读取的学校页面，以正式成绩单为准。') : '尚未读取到学校公布的 GPA。这里不会用参考值替代。') + '</p></section><section class="card">' + cardHeader('grades', '分档 GPA', '<span class="card-kicker">非官方 · 4.0 制</span>') + gpaValue(gpa.estimate.value, '4.00') + '<p class="gpa-note">' + esc(gpaEstimateCaption(gpa.estimate)) + '</p></section><section class="card">' + cardHeader('grades', '线性折算 GPA', '<span class="card-kicker">' + (isEnglish() ? 'Unofficial · 4.0 scale' : '非官方 · 4.0 制') + '</span>') + gpaValue(gpa.linear.value, '4.00') + '<p class="gpa-note">' + esc(gpaEstimateCaption(gpa.linear)) + '</p></section></div>' +
       '<div class="info-note">' + (isEnglish() ? 'Banded: 90/80/70/60 → 4/3/2/1, below 60 → 0. Linear: each course percentage ÷ 100 × 4; then average eligible courses without rounding individual points. Both use confirmed current-term course grades, exclude missing courses and AP weighting, and are not official school GPA.' : '分档：90/80/70/60 分 → 4/3/2/1，低于 60 分为 0。线性：每科百分制总评 ÷ 100 × 4，先按课程等权平均，最后显示两位小数。两种结果都只使用可确认的当前学期课程总评，排除缺失课程，不含 AP 加权，也不是学校官方 GPA。') + '</div>' + renderGradePie(gpa.courses, gpa.official || gpa.estimate) + '<section class="card">' + cardHeader('book', '课程成绩', '<span class="card-kicker">' + gpa.courses.length + ' 门已读取课程</span>') +
-      (gpa.courses.length ? '<div style="overflow-x:auto"><table class="grade-table"><thead><tr><th>课程</th><th>学期</th><th>百分制总评</th><th>参考绩点</th><th>线性绩点</th><th></th></tr></thead><tbody>' + gpa.courses.map(c => '<tr><td class="course-name">' + esc(c.name) + '</td><td>' + esc(c.term || '未确认') + '</td><td class="num">' + (c.percentage == null ? '—' : esc(Number(c.percentage).toFixed(1)) + '%') + (c.percentage == null ? '' : '<span class="grade-bar"><span style="width:' + Math.max(0, Math.min(100, Number(c.percentage) || 0)) + '%"></span></span>') + '</td><td class="num">' + (c.gpaEligible === false || c.percentage == null ? '未计入' : Core.estimateGPA([c]).value == null ? '未计入' : Number(Core.estimateGPA([c]).value).toFixed(2)) + '</td><td class="num">' + (Core.estimateLinearGPA([c]).value == null ? '未计入' : Core.estimateLinearGPA([c]).value.toFixed(2)) + '</td><td>' + (c.url ? '<button type="button" class="icon-button" data-action="open-source" data-source="managebac" data-url="' + esc(c.url) + '" aria-label="打开课程成绩">' + icon('link') + '</button>' : '') + '</td></tr>').join('') + '</tbody></table></div>' : empty('grades', '你的成绩，值得准确地记录', '登录 ManageBac 并打开当前学期成绩页面。读取到课程总评后，参考 GPA 会自动计算。', button('打开 ManageBac', 'open-source', 'data-source="managebac"'))) + sourceFooter('managebac') + '</section>' + renderGradeGoalSimulation(gpa.courses) + renderSemesterGpaForecast(gpa.courses) + renderKlineChartHistory('banded') + renderKlineChartHistory('linear');
+      (gpa.courses.length ? '<div style="overflow-x:auto"><table class="grade-table"><thead><tr><th>课程</th><th>学期</th><th>百分制总评</th><th>参考绩点</th><th>线性绩点</th><th></th></tr></thead><tbody>' + courseRows.join('') + '</tbody></table></div>' : empty('grades', '你的成绩，值得准确地记录', '登录 ManageBac 并打开当前学期成绩页面。读取到课程总评后，参考 GPA 会自动计算。', button('打开 ManageBac', 'open-source', 'data-source="managebac"'))) + sourceFooter('managebac') + '</section>' + renderGradeGoalSimulation(gpa.courses) + renderSemesterGpaForecast(gpa.courses) + renderKlineChartHistory('banded') + renderKlineChartHistory('linear');
   }
   function gpaHistoryTimestamp(item) {
     const raw = String(item && (item.capturedAt || item.date) || '').trim();
@@ -1284,20 +1408,83 @@
   }
   function taskSourceSections(tasks, renderRows) {
     const sources = [['teams', 'Teams 作业'], ['managebac', 'ManageBac 作业'], ['manual', '个人待办']];
+    const bySource = new Map(sources.map(([source]) => [source, []]));
+    for (const task of tasks) { const bucket = bySource.get(task.source); if (bucket) bucket.push(task); }
     return '<div class="task-source-grid">' + sources.map(([source, title]) => {
-      const rows = tasks.filter(task => task.source === source);
+      const rows = bySource.get(source);
       return rows.length ? '<section class="task-source-section task-source-' + source + '"><div class="task-source-heading"><div><p>' + t('作业来源') + '</p><h2>' + esc(t(title)) + '</h2></div><span>' + rows.length + (isEnglish() ? ' item(s)' : ' 项') + '</span></div><div class="task-source-subjects">' + taskSubjectGroups(rows, renderRows) + '</div></section>' : '';
     }).join('') + '</div>';
   }
+  // Adapt the task-card layout and urgency-bar behavior seen in ManageBac Buddy
+  // to CampusDesk's existing task model and actions.
+  function todoCardUrgency(task, now) {
+    const dueAt = task.dueAt ? Date.parse(task.dueAt) : NaN;
+    if (!Number.isFinite(dueAt)) return { band: 'unknown', progress: 0, dueAt: 0, leftText: '' };
+    const left = dueAt - now;
+    if (left <= 0) {
+      const overdueMinutes = Math.floor(-left / 60000);
+      const days = Math.floor(overdueMinutes / 1440), hours = Math.floor((overdueMinutes % 1440) / 60);
+      return { band: 'overdue', progress: 1, dueAt, leftText: isEnglish() ? (days ? 'Overdue ' + days + 'd ' + hours + 'h' : 'Overdue ' + Math.max(1, hours) + 'h') : (days ? '逾期 ' + days + ' 天 ' + hours + ' 小时' : '逾期 ' + Math.max(1, hours) + ' 小时') };
+    }
+    const hours = left / 3600000;
+    const days = Math.floor(hours / 24), remainingHours = Math.floor(hours % 24), minutes = Math.floor(left / 60000);
+    const leftText = isEnglish() ? (days ? days + 'd ' + remainingHours + 'h left' : hours >= 1 ? Math.floor(hours) + 'h ' + Math.floor((left % 3600000) / 60000) + 'm left' : Math.max(1, minutes) + 'm left') : (days ? '剩 ' + days + ' 天 ' + remainingHours + ' 小时' : hours >= 1 ? '剩 ' + Math.floor(hours) + ' 小时 ' + Math.floor((left % 3600000) / 60000) + ' 分钟' : '剩 ' + Math.max(1, minutes) + ' 分钟');
+    const band = hours <= 24 ? 'urgent' : hours <= 72 ? 'soon' : hours <= 14 * 24 ? 'blue' : 'ok';
+    // Match the upstream 72-hour urgency scale; distant work keeps a visible sliver.
+    const progress = hours <= 72 ? Math.max(0.025, Math.min(1, 1 - hours / 72)) : 0.015;
+    return { band, progress, dueAt, leftText };
+  }
+  function taskDeadlineCard(task, now) {
+    const urgency = todoCardUrgency(task, now), source = task.source === 'teams' ? 'teams' : task.source === 'managebac' ? 'managebac' : 'manual';
+    const course = task.course || (source === 'manual' ? (isEnglish() ? 'Personal task' : '个人待办') : sourceName(source));
+    const tag = source === 'teams' ? 'Teams' : source === 'managebac' ? 'ManageBac' : (isEnglish() ? 'Personal' : '个人');
+    const bandLabel = isEnglish() ? ({ overdue: 'Overdue', urgent: 'Urgent', soon: 'Soon', blue: 'Plenty of time', ok: 'Plenty of time', unknown: 'Check due date' }[urgency.band]) : ({ overdue: '已逾期', urgent: '紧急', soon: '较急', blue: '充裕', ok: '充裕', unknown: '待核对' }[urgency.band]);
+    const focused = (state.settings.focusSubjects || []).includes(course);
+    const partialLabel = String(task.dueLabel || '').replace(/^(?:homework\s+)?(?:deadline|due(?:\s+date)?|截止(?:时间|日期)?)\s*[:：]?\s*$/i, '');
+    const dueLabel = urgency.dueAt ? fmtDate(urgency.dueAt, { year: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false }) : (partialLabel || (isEnglish() ? 'Due date not provided' : '截止时间未标明'));
+    const dueNote = task.dueResolution === 'term' ? (isEnglish() ? 'Year from term · Beijing time' : '按学期补全年份 · 北京时间') : task.dueResolution === 'school-time' ? (isEnglish() ? 'Parsed in Beijing time' : '按北京时间识别') : !urgency.dueAt && partialLabel ? (isEnglish() ? 'Full date needs verification' : '完整日期待核对') : '';
+    const openSource = source === 'teams' ? 'teams' : 'managebac';
+    const cardTitle = (isEnglish() ? 'Open task details: ' : '查看待办详情：') + task.title;
+    return '<article class="todo-deadline-card card todo-band-' + urgency.band + ' todo-source-' + source + '" data-due-ms="' + urgency.dueAt + '">' +
+      '<button class="todo-card-hit" type="button" data-action="task-detail" data-id="' + esc(task.id) + '" aria-label="' + esc(cardTitle) + '"></button>' +
+      '<div class="todo-card-body"><div class="todo-card-top"><span class="todo-course"><i class="todo-course-dot" aria-hidden="true"></i><span>' + esc(course) + '</span></span><span class="todo-kind">' + esc(tag) + '</span><button class="todo-focus-button ' + (focused ? 'active' : '') + '" type="button" data-action="toggle-focus-subject" data-value="' + esc(course) + '" aria-label="' + esc((isEnglish() ? (focused ? 'Unfocus: ' : 'Focus: ') : (focused ? '取消特别关注：' : '特别关注：')) + course) + '" aria-pressed="' + focused + '">' + icon('focus') + '</button><span class="todo-urgency">' + esc(bandLabel) + '</span></div>' +
+      '<h3>' + esc(task.title) + '</h3><div class="todo-urgency-bar" role="progressbar" aria-label="' + esc(isEnglish() ? 'Deadline urgency' : '截止紧迫度') + '" aria-valuemin="0" aria-valuemax="100" aria-valuenow="' + Math.round(urgency.progress * 100) + '"><span data-todo-progress style="width:' + (urgency.progress * 100).toFixed(1) + '%"></span></div>' + (dueNote ? '<p class="todo-date-note">' + esc(dueNote) + '</p>' : '') +
+      '<div class="todo-card-footer"><button class="todo-complete-button ' + (task.completed ? 'completed' : '') + '" type="button" data-action="toggle-task" data-id="' + esc(task.id) + '" aria-label="' + esc((isEnglish() ? (task.completed ? 'Mark incomplete: ' : 'Mark complete: ') : (task.completed ? '标为未完成：' : '标为已完成：')) + task.title) + '" aria-pressed="' + Boolean(task.completed) + '">' + icon('check') + '</button><span class="todo-due-date">' + icon('clock') + '<span>' + esc(dueLabel) + '</span></span><span class="todo-time-left ' + (urgency.band === 'unknown' ? 'unknown' : '') + '" data-todo-countdown data-band="' + urgency.band + '">' + esc(urgency.leftText) + '</span>' + (task.url ? '<button class="todo-open-source" type="button" data-action="open-source" data-source="' + openSource + '" data-url="' + esc(task.url) + '">' + icon('arrow') + '<span>' + (isEnglish() ? 'Open website' : '打开网页') + '</span></button>' : '') + '</div></div></article>';
+  }
+  function updateTaskCardCountdowns(now) {
+    const stamp = Number.isFinite(now) ? now : Date.now();
+    document.querySelectorAll('.todo-deadline-card[data-due-ms], .board-due-card[data-due-ms]').forEach(card => {
+      const dueAt = Number(card.dataset.dueMs);
+      if (!dueAt) return;
+      const model = todoCardUrgency({ dueAt: new Date(dueAt).toISOString() }, stamp), countdown = card.querySelector('[data-todo-countdown]'), progress = card.querySelector('[data-todo-progress]'), bar = card.querySelector('.todo-urgency-bar');
+      if (countdown) { countdown.textContent = model.leftText; countdown.dataset.band = model.band; }
+      const badge = card.querySelector('.todo-urgency');
+      if (badge) badge.textContent = isEnglish() ? ({overdue:'Overdue',urgent:'Urgent',soon:'Soon',blue:'Plenty of time',ok:'Plenty of time'}[model.band]) : ({overdue:'已逾期',urgent:'紧急',soon:'较急',blue:'充裕',ok:'充裕'}[model.band]);
+      if (progress) progress.style.width = (model.progress * 100).toFixed(1) + '%';
+      if (bar) bar.setAttribute('aria-valuenow', String(Math.round(model.progress * 100)));
+      card.classList.remove('todo-band-overdue', 'todo-band-urgent', 'todo-band-soon', 'todo-band-blue', 'todo-band-ok');
+      card.classList.add('todo-band-' + model.band);
+    });
+  }
+  function todoCardGrid(tasks) {
+    const now = Date.now();
+    return '<div class="todo-deadline-grid">' + tasks.map(task => taskDeadlineCard(task, now)).join('') + '</div>';
+  }
   function renderTasks() {
-    const all = Core.getTasks(state), focused = new Set(state.settings.focusSubjects || []);
-    const statusTasks = all.filter(task => taskFilter === 'all' || (taskFilter === 'done' ? task.completed : taskFilter === 'overdue' ? taskDue(task).overdue : !task.completed));
-    const tasks = statusTasks.filter(task => taskSubjectFilter !== 'focus' || focused.has(task.course || '未分类'));
-    const controls = '<div class="page-tools task-tools"><div class="filter-pills">' + [['open', '未完成'], ['overdue', '已逾期'], ['done', '已完成'], ['all', '全部']].map(f => '<button type="button" class="pill ' + (taskFilter === f[0] ? 'active' : '') + '" data-action="task-filter" data-filter="' + f[0] + '">' + f[1] + '</button>').join('') + '</div><div class="filter-pills"><button type="button" class="pill ' + (taskSubjectFilter === 'all' ? 'active' : '') + '" data-action="task-subject-filter" data-filter="all">全部学科</button><button type="button" class="pill ' + (taskSubjectFilter === 'focus' ? 'active' : '') + '" data-action="task-subject-filter" data-filter="focus">特别关注</button></div><span class="subtle">' + tasks.length + (isEnglish() ? ' item(s)' : ' 项') + '</span></div>';
-    return heading('一件一件，慢慢完成。', '先分 Teams 与 ManageBac，再在各自来源内按学科整理。', button(icon('plus') + '添加待办', 'add-task', '', 'button-primary')) + controls + '<div class="info-note">勾选仅更新本机待办状态，不会提交作业、回复老师或修改 ManageBac / Teams。学科特别关注只保存在本机。</div><section class="card task-subjects-card">' + (tasks.length ? taskSourceSections(tasks) : empty('tasks', taskSubjectFilter === 'focus' ? '还没有特别关注学科的任务' : taskFilter === 'done' ? '完成的事情，会留在这里' : '这里暂时没有待办', taskSubjectFilter === 'focus' ? '在任意学科标题旁点“特别关注”，它会优先显示在这里。' : taskFilter === 'open' ? '连接 ManageBac 和 Teams 获取已读取的学校任务，或添加一个个人待办。' : '切换筛选条件，查看其他任务。', taskFilter === 'open' && taskSubjectFilter !== 'focus' ? button(icon('plus') + '添加待办', 'add-task', '', 'button-primary') : '')) + sourceFooter('managebac') + sourceFooter('teams') + '</section>';
+    const all = taskRowsForState(), focused = new Set(state.settings.focusSubjects || []), filtered = all.filter(task => taskSubjectFilter !== 'focus' || focused.has(task.course || '未分类'));
+    const overdue = filtered.filter(task => !task.completed && taskDue(task).overdue), overdueIds = new Set(overdue.map(task => task.id));
+    let tasks = filtered.filter(task => taskFilter === 'done' ? task.completed : taskFilter === 'overdue' ? overdueIds.has(task.id) : taskFilter === 'all' ? !overdueIds.has(task.id) : !task.completed && !overdueIds.has(task.id));
+    const foldedOverdue = taskFilter === 'open' ? overdue : taskFilter === 'all' ? overdue : [];
+    const count = taskFilter === 'open' || taskFilter === 'all' ? tasks.length + foldedOverdue.length : tasks.length;
+    const subtitle = isEnglish() ? count + ' open · Click a card for details; use the lower-right button to open the source page' : count + ' 项待完成 · 点卡片看详情，右下按钮打开原网页';
+    const controls = '<div class="page-tools task-tools"><div class="filter-pills">' + [['open', '未完成'], ['overdue', '已逾期'], ['done', '已完成'], ['all', '全部']].map(f => '<button type="button" class="pill ' + (taskFilter === f[0] ? 'active' : '') + '" data-action="task-filter" data-filter="' + f[0] + '">' + t(f[1]) + '</button>').join('') + '</div><div class="filter-pills"><button type="button" class="pill ' + (taskSubjectFilter === 'all' ? 'active' : '') + '" data-action="task-subject-filter" data-filter="all">' + t('全部学科') + '</button><button type="button" class="pill ' + (taskSubjectFilter === 'focus' ? 'active' : '') + '" data-action="task-subject-filter" data-filter="focus">' + t('特别关注') + '</button></div><span class="subtle">' + tasks.length + (isEnglish() ? ' item(s)' : ' 项') + '</span></div>';
+    const emptyMessage = taskSubjectFilter === 'focus' ? '还没有特别关注学科的任务' : taskFilter === 'done' ? '完成的事情，会留在这里' : '这里暂时没有待办';
+    const emptyDetail = taskSubjectFilter === 'focus' ? '点任务卡片上的星标，即可把这门学科加入特别关注。' : taskFilter === 'open' ? '连接 ManageBac 和 Teams 获取已读取的学校任务，或添加一个个人待办。' : '切换筛选条件，查看其他任务。';
+    const overdueSection = foldedOverdue.length ? '<section class="todo-overdue-section"><button class="todo-overdue-toggle" type="button" data-action="todo-overdue-toggle" aria-expanded="' + taskOverdueOpen + '"><span>' + icon('alert') + '</span><strong>' + (isEnglish() ? 'Overdue · ' + foldedOverdue.length : '已逾期 ' + foldedOverdue.length + ' 项') + '</strong><span class="todo-overdue-state">' + (isEnglish() ? (taskOverdueOpen ? 'Collapse' : 'Expand') : (taskOverdueOpen ? '收起' : '展开')) + '</span>' + icon('arrow') + '</button>' + (taskOverdueOpen ? todoCardGrid(foldedOverdue) : '') + '</section>' : '';
+    return heading('待办事项', subtitle, button(icon('plus') + t('添加待办'), 'add-task', '', 'button-primary')) + controls + '<section class="todo-page-content">' + (tasks.length ? todoCardGrid(tasks) : empty('tasks', emptyMessage, emptyDetail, taskFilter === 'open' ? button(icon('plus') + t('添加待办'), 'add-task', '', 'button-primary') : '')) + overdueSection + '<div class="todo-source-status">' + sourceFooter('managebac') + sourceFooter('teams') + '</div></section>';
   }
   function renderFeedback() {
-    const all = Core.getFeedback(state), items = all.filter(f => feedbackFilter === 'all' || !f.read);
+    const all = feedbackRowsForState(), items = all.filter(f => feedbackFilter === 'all' || !f.read);
     return heading('认真读懂，每一次反馈。', '把老师的建议带回下一次学习。', button(icon('link') + '打开 ManageBac', 'open-source', 'data-source="managebac"')) + '<div class="page-tools"><div class="filter-pills"><button type="button" class="pill ' + (feedbackFilter === 'all' ? 'active' : '') + '" data-action="feedback-filter" data-filter="all">全部反馈</button><button type="button" class="pill ' + (feedbackFilter === 'unread' ? 'active' : '') + '" data-action="feedback-filter" data-filter="unread">' + (isEnglish() ? 'Unread' : '未读') + '</button></div><span class="subtle">' + items.length + (isEnglish() ? ' item(s)' : ' 条') + '</span></div><div class="info-note">这里汇总 ManageBac 评语和 Teams 已发布的作业反馈，覆盖范围取决于同步结果。尚未读取的课程、附件或历史内容请到学校原页面查看。已读标记仅保存在本机。</div><section class="card">' + (items.length ? feedbackRows(items) : empty('feedback', feedbackFilter === 'unread' ? '没有已读取的未读反馈' : '等待老师的下一条建议', '登录 ManageBac 并打开评语页，或连接 Teams 同步已发布的作业反馈。', button('打开 ManageBac', 'open-source', 'data-source="managebac"'))) + sourceFooter('managebac') + sourceFooter('teams') + '</section>';
   }
   function renderSourceCard(source) {
@@ -1338,7 +1525,6 @@
     return '本轮已读取 ' + count('messages') + ' 条消息 · ' + count('channelsRead') + ' 个频道 · ' + count('chatsRead') + ' 个聊天 · 已发现 ' + count('attachments') + ' 个附件' + (Number.isSafeInteger(teamsAuto.attachmentsParsed) ? ' · 已提取文字 ' + teamsAuto.attachmentsParsed + ' 个附件' : '') + (Number.isSafeInteger(teamsAuto.counts.attachmentsCached) ? ' · 版本未变，复用 ' + count('attachmentsCached') + ' 份' : '');
   }
   function diagnosticsHTML(items) { return items.map(item => '<p><strong>' + esc(item.label || item.kind || 'Teams') + '</strong>：' + esc(item.reason || '部分读取') + '</p>').join(''); }
-  function setText(id,value) { const node = document.getElementById(id); if (node && node.textContent !== value) node.textContent = value; }
   function setHTML(id,value) { const node = document.getElementById(id); if (node && node.innerHTML !== value) node.innerHTML = value; }
   function updateTeamsAutoPanel() {
     setText('teams-auto-message',localizedRuntimeText(teamsAuto.message)); setText('teams-auto-counts',teamsAutoCountText());
@@ -1368,12 +1554,23 @@
     return renderTeamsBrowserSettings() + '<section class="card settings-section">' + cardHeader('teams', '关注的 Teams 页面', button(icon('plus') + '添加页面', 'add-teams-page', '', 'button-plain')) + '<p class="settings-intro">在选定浏览器打开 Teams 频道，在 CampusDesk 点击“关注浏览器当前 Teams 页”，选择页面类型并保存。同步只读取已打开的关注标签页，不会替你打开已关闭的页面。</p>' + (pages.length ? '<div class="followed-pages">' + pages.map(item => '<div class="followed-page"><div><h3>' + esc(item.label) + '<span class="task-tag">' + ({ auto: '自动识别', assignments: '作业频道', ec: 'EC 频道' }[item.kind] || '自动识别') + '</span></h3><p>' + esc(item.url) + '</p></div><div class="page-item-actions">' + button('打开', 'open-source', 'data-source="teams" data-url="' + esc(item.url) + '"') + button('编辑', 'edit-teams-page', 'data-id="' + esc(item.id) + '"') + '<button class="icon-button" type="button" data-action="remove-teams-page" data-id="' + esc(item.id) + '" aria-label="取消关注 ' + esc(item.label) + '">' + icon('trash') + '</button></div></div>').join('') + '</div>' : '<div class="empty small-empty"><h3>先关注一个常看的频道</h3><p>例如课程团队 → HOMEWORK，以及学校团队 → ENGLISH CORNER ROSTER。页面类型随时可以修改。</p></div>') + '<p class="gpa-note">仅覆盖已加载的消息文字。EC 名单保留通知原文；图片或 PDF 内容请通过附件打开。</p></section>';
   }
   function renderReminderSettings() {
-    return '<section id="reminder-settings" class="card settings-section">' + cardHeader('bell', 'Teams 作业提醒') + '<div class="settings-fields"><div class="settings-field"><div><label for="teams-notifications">截止前系统通知</label><p id="notification-status">' + esc(permissionCopy()) + '</p></div><label class="toggle" for="teams-notifications"><input id="teams-notifications" type="checkbox" ' + (state.settings.teamsNotifications ? 'checked' : '') + (!native ? ' disabled' : '') + ' aria-label="Teams 作业截止提醒"><span></span></label></div><div class="settings-field"><div><label for="reminder-minutes">提前多久提醒</label><p>如果提前提醒时间已过，将在截止时提醒。已逾期或已完成的作业不安排通知。</p></div><select id="reminder-minutes">' + [[0, '截止时'], [10, '提前 10 分钟'], [30, '提前 30 分钟'], [60, '提前 1 小时'], [1440, '提前 1 天']].map(item => '<option value="' + item[0] + '" ' + (Number(state.settings.reminderMinutes) === item[0] ? 'selected' : '') + '>' + item[1] + '</option>').join('') + '</select></div></div><p class="gpa-note">课表倒计时按北京时间每秒更新，依据已读取课节的结束和下一节开始时间计算。应用需定期运行并同步，才能发现新作业和截止时间变更；系统通知是否显示还受 Mac 通知和专注模式设置影响。</p></section>';
+    const subjects = [...new Set(openTasksForState('teams').map(task => task.course || '未分类'))].sort((a, b) => a.localeCompare(b, 'zh-CN'));
+    const selected = new Set(state.settings.reminderSubjects || []), allSubjects = selected.size === 0;
+    const resetSubjects = '<button class="button-plain reminder-subject-reset" type="button" data-action="reminder-subjects-all">' + t('恢复全部学科') + '</button>';
+    const subjectControls = subjects.length ? '<div class="reminder-subject-options">' + subjects.map((subject, index) => '<label class="reminder-subject-option" for="reminder-subject-choice-' + index + '"><input id="reminder-subject-choice-' + index + '" type="checkbox" data-reminder-subject="' + esc(subject) + '" ' + (allSubjects || selected.has(subject) ? 'checked' : '') + (!native ? ' disabled' : '') + '><span>' + esc(subject) + '</span></label>').join('') + resetSubjects + '</div>' : '<div class="reminder-subject-options reminder-no-subjects"><p class="subtle">' + t('暂无已读取学科；获取到 Teams 作业后会在这里列出。') + '</p>' + resetSubjects + '</div>';
+    return '<section id="reminder-settings" class="card settings-section">' + cardHeader('bell', 'Teams 作业提醒') + '<div class="settings-fields"><div class="settings-field"><div><label for="teams-notifications">' + t('截止前系统通知') + '</label><p id="notification-status">' + esc(t(permissionCopy())) + '</p></div><label class="toggle" for="teams-notifications"><input id="teams-notifications" type="checkbox" ' + (state.settings.teamsNotifications ? 'checked' : '') + (!native ? ' disabled' : '') + ' aria-label="' + esc(t('Teams 作业截止提醒')) + '"><span></span></label></div><div class="settings-field"><div><label for="reminder-minutes">' + t('提前多久提醒') + '</label><p>' + t('如果提前提醒时间已过，将在截止时提醒。已逾期或已完成的作业不安排通知。') + '</p></div><select id="reminder-minutes">' + [[0, '截止时'], [10, '提前 10 分钟'], [30, '提前 30 分钟'], [60, '提前 1 小时'], [1440, '提前 1 天']].map(item => '<option value="' + item[0] + '" ' + (Number(state.settings.reminderMinutes) === item[0] ? 'selected' : '') + '>' + t(item[1]) + '</option>').join('') + '</select></div><div class="settings-field reminder-subject-setting"><div><label>' + t('提醒学科') + '</label><p>' + t('取消某科可暂停该科通知；默认所有学科都可提醒。') + '</p></div>' + subjectControls + '</div></div><p class="gpa-note">' + t('课表倒计时按北京时间每秒更新，依据已读取课节的结束和下一节开始时间计算。应用需定期运行并同步，才能发现新作业和截止时间变更；系统通知是否显示还受 Mac 通知和专注模式设置影响。') + '</p></section>';
   }
   function renderAppearanceSettings() {
     const theme = state.settings.dashboardTheme || 'classic';
+    const colorTheme = state.settings.colorTheme || 'sage';
     const candleColors = state.settings.gpaCandleColors || 'red-up';
-    return '<section id="appearance-settings" class="card settings-section appearance-settings">' + cardHeader('overview', '面板样式') + '<p class="settings-intro">经典面板保留原有的信息布局；卡片看板用更紧凑的统计卡和任务卡集中展示今天的重点。两种样式使用同一份本机数据，随时可切换。</p><div class="appearance-options"><button type="button" class="appearance-option ' + (theme === 'classic' ? 'selected' : '') + '" data-action="dashboard-theme" data-theme="classic" aria-pressed="' + (theme === 'classic') + '"><span class="appearance-preview preview-classic"><i></i><i></i><i></i></span><strong>经典面板</strong><small>熟悉的课程、成绩与待办布局</small></button><button type="button" class="appearance-option ' + (theme === 'board' ? 'selected' : '') + '" data-action="dashboard-theme" data-theme="board" aria-pressed="' + (theme === 'board') + '"><span class="appearance-preview preview-board"><i></i><i></i><i></i><i></i></span><strong>卡片看板</strong><small>统计概览与密集任务卡片</small></button></div><div class="settings-fields" style="margin-top:18px"><div class="settings-field"><div><label for="gpa-candle-colors">GPA K 线涨跌颜色</label><p>选择成绩上升和下降时 K 线的颜色，设置会保存在本机。</p></div><select id="gpa-candle-colors" aria-label="GPA K 线涨跌颜色"><option value="red-up"' + (candleColors === 'red-up' ? ' selected' : '') + '>红涨绿跌</option><option value="green-up"' + (candleColors === 'green-up' ? ' selected' : '') + '>绿涨红跌</option></select></div></div></section>';
+    const colorThemes = [
+      ['sage', '自然绿', '自然、柔和的浅色默认主题'],
+      ['ocean', '海湾蓝', '清晰的冷调蓝色主题'],
+      ['ember', '暖阳橙', '温暖的沙色与深棕强调色'],
+      ['midnight', '深夜', '低亮度深色主题']
+    ];
+    return '<section id="appearance-settings" class="card settings-section appearance-settings">' + cardHeader('overview', '面板样式') + '<p class="settings-intro">经典面板保留原有的信息布局；卡片看板用更紧凑的统计卡和任务卡集中展示今天的重点。两种样式使用同一份本机数据，随时可切换。</p><div class="appearance-options"><button type="button" class="appearance-option ' + (theme === 'classic' ? 'selected' : '') + '" data-action="dashboard-theme" data-theme="classic" aria-pressed="' + (theme === 'classic') + '"><span class="appearance-preview preview-classic"><i></i><i></i><i></i></span><strong>经典面板</strong><small>熟悉的课程、成绩与待办布局</small></button><button type="button" class="appearance-option ' + (theme === 'board' ? 'selected' : '') + '" data-action="dashboard-theme" data-theme="board" aria-pressed="' + (theme === 'board') + '"><span class="appearance-preview preview-board"><i></i><i></i><i></i><i></i></span><strong>卡片看板</strong><small>统计概览与密集任务卡片</small></button></div><div class="color-theme-section"><h3>' + t('主题配色') + '</h3><p class="settings-intro">' + t('只改变 CampusDesk 的界面配色；不影响经典/卡片布局、成绩涨跌色或学校数据。') + '</p><div class="color-theme-options">' + colorThemes.map(item => '<button type="button" class="color-theme-option color-theme-' + item[0] + (colorTheme === item[0] ? ' selected' : '') + '" data-action="color-theme" data-theme="' + item[0] + '" aria-pressed="' + (colorTheme === item[0]) + '"><span class="color-theme-preview" aria-hidden="true"><i></i><i></i></span><strong>' + t(item[1]) + '</strong><small>' + t(item[2]) + '</small></button>').join('') + '</div></div><div class="settings-fields appearance-candle-setting"><div class="settings-field"><div><label for="gpa-candle-colors">GPA K 线涨跌颜色</label><p>选择成绩上升和下降时 K 线的颜色，设置会保存在本机。</p></div><select id="gpa-candle-colors" aria-label="GPA K 线涨跌颜色"><option value="red-up"' + (candleColors === 'red-up' ? ' selected' : '') + '>红涨绿跌</option><option value="green-up"' + (candleColors === 'green-up' ? ' selected' : '') + '>绿涨红跌</option></select></div></div></section>';
   }
   function renderLanguageSettings() {
     const language = state.settings.language || 'zh-CN';
@@ -1385,8 +1582,502 @@
       ['seiue', 'managebac'].map(source => '<div class="settings-field"><label for="' + source + '-url">' + t(source === 'seiue' ? '希悦网址' : '学校 ManageBac 网址') + '</label><input id="' + source + '-url" type="text" inputmode="url" autocomplete="off" spellcheck="false" value="' + esc(values[source] || '') + '" placeholder="https://school.' + (source === 'seiue' ? 'seiue.com' : 'managebac.cn') + '/"></div>').join('') +
       '</div><button class="button button-primary" type="submit">' + t('保存学校网址') + '</button></form></section>';
   }
+  const assistantContextOptions = [
+    ['tasks', '作业和待办', 'Assignments and to-dos'], ['grades', '成绩与评分权重', 'Grades and category weights'],
+    ['schedule', '今日课表', 'Today’s schedule'], ['feedback', '老师反馈', 'Teacher feedback'],
+    ['teams', 'Teams 消息与公告', 'Teams messages and notices'], ['calendar', '校历事件', 'School calendar events'],
+    ['attachments', '已读取的附件文字', 'Text extracted from attachments']
+  ];
+  function assistantCopy(zh, en) { return isEnglish() ? en : zh; }
+  // Keep these IDs in sync with CampusAssistantSetupGuide. Never accept a URL
+  // or shell command supplied by a page, model response, or imported data.
+  const assistantGuideLinks = Object.freeze({
+    'deepseek-platform': 'https://platform.deepseek.com/',
+    'deepseek-keys': 'https://platform.deepseek.com/api_keys',
+    'deepseek-pricing': 'https://api-docs.deepseek.com/zh-cn/quick_start/pricing',
+    'deepseek-docs': 'https://api-docs.deepseek.com/zh-cn/',
+    'ollama-download': 'https://ollama.com/download/mac',
+    'ollama-library': 'https://ollama.com/library/qwen3.5',
+    'ollama-docs': 'https://docs.ollama.com/cli'
+  });
+  const assistantGuideCommands = Object.freeze({
+    'qwen-small': 'ollama pull qwen3.5:4b',
+    'qwen-standard': 'ollama pull qwen3.5:9b',
+    'list-models': 'ollama ls'
+  });
+  function assistantGuideLink(id, zh, en) {
+    return '<button type="button" class="button button-light" data-action="assistant-guide-link" data-guide-id="' + id + '">' + esc(assistantCopy(zh, en)) + ' ↗</button>';
+  }
+  function assistantGuideCommand(id, zh, en) {
+    return '<div class="assistant-guide-command"><div><small>' + esc(assistantCopy(zh, en)) + '</small><code id="assistant-command-' + id + '" data-selection-key>' + esc(assistantGuideCommands[id]) + '</code></div><button type="button" class="button button-light" data-action="assistant-guide-copy" data-guide-id="' + id + '" aria-label="' + esc(assistantCopy('复制命令：', 'Copy command: ') + assistantGuideCommands[id]) + '">' + assistantCopy('复制', 'Copy') + '</button></div>';
+  }
+  function assistantGuideResult(operation, success) {
+    if (operation === 'copy') toast(success
+      ? assistantCopy('命令已复制。请自行粘贴到“终端”并按回车执行；不会自动运行。', 'Command copied. Paste it into Terminal and press Return yourself; nothing runs automatically.')
+      : assistantCopy('未能复制，请选中命令后按 ⌘C 复制。', 'Could not copy. Select the command and press ⌘C.'));
+    else if (operation === 'open' && !success) toast(assistantCopy('未能打开浏览器，请稍后重试。', 'Could not open the browser. Please try again.'));
+  }
+  async function copyAssistantGuideCommand(id) {
+    if (!themeEdition || !Object.prototype.hasOwnProperty.call(assistantGuideCommands, id)) return;
+    if (native) { send('assistantCopyGuideCommand', { id }); return; }
+    try { await navigator.clipboard.writeText(assistantGuideCommands[id]); assistantGuideResult('copy', true); }
+    catch (_) { assistantGuideResult('copy', false); }
+  }
+  function renderAssistantSetupGuides() {
+    const copy = assistantCopy;
+    const step = (zh, en, body) => '<li><strong>' + esc(copy(zh, en)) + '</strong>' + body + '</li>';
+    const text = (zh, en) => '<p>' + esc(copy(zh, en)) + '</p>';
+    const links = html => '<div class="assistant-guide-links">' + html + '</div>';
+    const deepseek = [
+      step('注册或登录官方开放平台', 'Register or sign in on the official platform',
+        text('打开 DeepSeek 开放平台，按网页提示注册、验证并登录。已有账号可直接登录；无需在 CampusDesk 输入账号密码。', 'Open the DeepSeek Platform and follow its registration, verification and sign-in steps. Existing users can sign in directly; CampusDesk does not need your account password.') + links(assistantGuideLink('deepseek-platform', '打开 DeepSeek 开放平台', 'Open DeepSeek Platform'))),
+      step('创建自己的 API 密钥', 'Create your own API key',
+        text('进入 API keys 页面，选择创建密钥，可命名为 CampusDesk。复制生成的完整密钥，稍后只粘贴到本页的密钥输入框；不要发到聊天、截图或公开仓库。', 'On the API keys page, create a key and name it CampusDesk if you like. Copy the complete key and paste it only into the key field on this page, never into chats, screenshots or public repositories.') + links(assistantGuideLink('deepseek-keys', '打开 API 密钥页面', 'Open API keys'))),
+      step('确认 API 余额与费用', 'Check API balance and costs',
+        text('API 调用按使用量计费，能使用网页聊天不代表 API 一定可用。请在开放平台检查可用余额，按需自行充值；价格以官方页面为准，CampusDesk 不会代你充值。', 'API calls are billed by usage. Access to web chat does not guarantee API availability. Check your available balance on the platform and top up yourself if needed. Consult official prices; CampusDesk never makes payments for you.') + links(assistantGuideLink('deepseek-pricing', '查看官方价格', 'View official pricing'))),
+      step('回到这里保存并选择模型', 'Save the key here and choose a model',
+        text('将 AI 接入方式设为“仅联网 DeepSeek”或“联网 DeepSeek，离线 Ollama”，粘贴密钥并点“安全保存密钥”，再刷新 DeepSeek 模型列表并选择模型。', 'Choose DeepSeek online only or DeepSeek online, Ollama offline. Paste the key, click Save key securely, then refresh the DeepSeek model list and select a model.') + text('已显示“密钥已安全保存”时无需重填。只有需要替换密钥时才点“更换密钥”。', 'If the key already shows as securely stored, do not enter it again. Use Replace key only when you want to change it.'))
+    ].join('');
+    const ollama = [
+      step('安装并打开 Ollama', 'Install and open Ollama',
+        text('从官网下载 Mac 版，拖入“应用程序”后打开，按提示完成命令行工具设置。当前官方版需 macOS 14 或更新；最新要求以官网为准。', 'Download the Mac app from the official site, drag it into Applications, open it and finish the command-line tool setup. The current release requires macOS 14 or later; check the website for current requirements.') + links(assistantGuideLink('ollama-download', '下载 Ollama for Mac', 'Download Ollama for Mac'))),
+      step('下载一个本机模型（二选一即可）', 'Download a local model (choose one)',
+        text('打开 Mac 的“终端”，复制下方一条命令，粘贴后按回车，等下载完成。4B 占用更少，9B 规模更大；根据可用内存和磁盘空间选择，不需要两款都下。', 'Open Terminal on your Mac, copy one command below, paste it and press Return. Wait for the download to finish. 4B uses fewer resources; 9B is larger. Choose for your available memory and storage; you do not need both.') + assistantGuideCommand('qwen-small', '较轻量 · Qwen3.5 4B', 'Lighter · Qwen3.5 4B') + assistantGuideCommand('qwen-standard', '较大模型 · Qwen3.5 9B', 'Larger · Qwen3.5 9B') + links(assistantGuideLink('ollama-library', '查看官方模型说明', 'View official model details'))),
+      step('确认已经下载完成', 'Check that the download finished',
+        text('运行下面的命令，列表中应出现刚下载的模型。下载需要联网；本机推理也需要额外内存，运行卡顿时可改用更小的模型。', 'Run the command below and check that your downloaded model is listed. Downloads need internet access. Running a model also uses additional memory; try a smaller model if performance is poor.') + assistantGuideCommand('list-models', '查看已安装模型', 'List installed models')),
+      step('在 CampusDesk 中选用', 'Select it in CampusDesk',
+        text('保持 Ollama 运行，选择“仅本机 Ollama”或混合模式，在“本机 Ollama 模型”旁点“刷新”，再从下拉框选中模型。无需 API 密钥；模型下载完成后才可离线使用。', 'Keep Ollama running, choose Ollama only or hybrid mode, click Refresh beside Local Ollama model and select it from the dropdown. No API key is needed. Offline use requires a fully downloaded local model.'))
+    ].join('');
+    const card = (id, number, zh, en, subZh, subEn, body, troubleshooting, footer) => '<details id="assistant-guide-' + id + '" class="assistant-guide"><summary><span class="assistant-guide-number" aria-hidden="true">' + number + '</span><span><strong>' + copy(zh, en) + '</strong><small>' + copy(subZh, subEn) + '</small></span><span class="assistant-guide-chevron" aria-hidden="true">⌄</span></summary><div class="assistant-guide-body"><ol>' + body + '</ol><div class="assistant-guide-troubleshooting"><strong>' + copy('遇到问题？', 'Troubleshooting') + '</strong>' + troubleshooting + '</div>' + links(footer) + '</div></details>';
+    return '<section class="assistant-setup-guides" aria-labelledby="assistant-guides-title"><div><h3 id="assistant-guides-title">' + copy('配置教程', 'Setup guides') + '</h3><p>' + copy('第一次使用？展开下方教程，按步骤完成配置。', 'New here? Expand a guide and follow the steps to get connected.') + '</p></div><div class="assistant-guide-grid">'
+      + card('deepseek', '01', '注册并接入 DeepSeek API', 'Set up DeepSeek API', '创建密钥 · 余额与费用 · 返回配置', 'Create a key · Balance and costs · Connect', deepseek,
+        text('401 通常表示密钥无效；402 表示余额不足。若提示“恢复密钥访问”，先恢复已有密钥，不要反复保存。', '401 usually means an invalid key; 402 means insufficient balance. If Restore key access appears, restore the existing key instead of saving it repeatedly.'), assistantGuideLink('deepseek-docs', 'DeepSeek 官方文档', 'Official DeepSeek docs'))
+      + card('ollama', '02', '安装 Ollama 并下载模型', 'Install Ollama and a model', '安装应用 · 下载模型 · 刷新列表', 'Install the app · Download · Refresh', ollama,
+        text('模型列表为空：先打开 Ollama，确认下载已完成，再回到本页刷新。请下载本机模型，不要把带 cloud 标记的云端模型当作离线模型。', 'Empty list? Open Ollama, make sure the download finished, then refresh here. Download a local model; models marked cloud are not offline models.') + text('终端提示 command not found：重新打开 Ollama，按提示完成命令行工具设置，再重新打开终端。', 'If Terminal says command not found, reopen Ollama, finish its command-line setup prompts, and open a new Terminal window.'), assistantGuideLink('ollama-docs', 'Ollama 官方命令教程', 'Official Ollama CLI guide'))
+      + '</div><p class="assistant-guide-footnote">' + copy('链接均指向官方网站，在浏览器打开。教程不会自动注册、充值、下载或执行命令；不会改变已保存的密钥。', 'Links open official websites in your browser. These guides do not register accounts, make payments, download models, run commands or change your saved key automatically.') + '</p></section>';
+  }
+  function assistantNetworkAvailable() { return typeof navigator === 'undefined' || navigator.onLine !== false; }
+  function assistantSelectedContext() {
+    const saved = state.settings.aiContextCategories;
+    return new Set(Array.isArray(saved) ? saved.filter(key => assistantContextOptions.some(item => item[0] === key)) : ['tasks', 'schedule']);
+  }
+  function assistantProvider() {
+    const value = state.settings.aiProvider;
+    // `auto` was the earlier name for online-only DeepSeek. Keep old state safe
+    // even if it reaches the UI before Core has normalized it.
+    if (value === 'auto') return 'deepseek';
+    return ['off', 'ollama', 'deepseek', 'hybrid'].includes(value) ? value : 'off';
+  }
+  function assistantModel() {
+    const value = String(state.settings.aiModel || '').trim();
+    return value && value.length <= 100 ? value : 'deepseek-flash';
+  }
+  function assistantOllamaModel() {
+    const value = String(state.settings.aiOllamaModel || '').trim();
+    return value && value.length <= 100 ? value : 'qwen3:8b';
+  }
+  function assistantKeyBlocked() { return ['locked', 'unavailable'].includes(assistantStatus.deepSeekKeyState); }
+  function assistantKeyReady() { return assistantStatus.deepSeekKeyConfigured && !assistantKeyBlocked(); }
+  function assistantKeyRecoveryButton() {
+    return '<button type="button" class="button button-light" data-action="assistant-restore-key"' + (assistantKeyRecoveryBusy ? ' disabled' : '') + '>' + (assistantKeyRecoveryBusy ? assistantCopy('正在恢复访问…', 'Restoring access…') : assistantCopy('恢复密钥访问', 'Restore key access')) + '</button>';
+  }
+  function assistantModelLabel(model) {
+    return ({ 'deepseek-flash': 'DeepSeek V4.1 Flash', 'deepseek-v4-pro': 'DeepSeek V4 Pro' })[model] || model;
+  }
+  function requestAssistantModels(provider, force = false) {
+    const catalog = assistantCatalogs[provider];
+    if (!native || !themeEdition || !catalog || catalog.loading || (provider === 'deepseek' && assistantKeyRecoveryBusy) || (!force && catalog.attempted)) return;
+    if (provider === 'deepseek' && (!assistantNetworkAvailable() || !assistantKeyReady())) return;
+    catalog.attempted = true; catalog.loading = true; catalog.error = '';
+    catalog.requestId = 'models-' + provider + '-' + (++assistantCatalogSequence);
+    if (!send('assistantListModels', { provider, requestId: catalog.requestId })) { catalog.loading = false; catalog.error = 'unavailable'; }
+  }
+  function ensureAssistantModels() {
+    if (!['settings', 'assistant'].includes(page)) return;
+    const provider = assistantProvider();
+    if (provider === 'deepseek' || provider === 'hybrid') requestAssistantModels('deepseek');
+    if (provider === 'ollama' || provider === 'hybrid') requestAssistantModels('ollama');
+  }
+  function renderAssistantModelSelect(provider, label) {
+    const catalog = assistantCatalogs[provider], local = provider === 'ollama';
+    const selected = local ? assistantOllamaModel() : assistantModel();
+    const id = local ? 'assistant-ollama-model' : 'assistant-model';
+    const options = catalog.models.map(model => '<option value="' + esc(model) + '"' + (model === selected ? ' selected' : '') + '>' + esc(assistantModelLabel(model)) + '</option>').join('');
+    const placeholder = !catalog.models.length ? '<option value="">' + assistantCopy(local ? '未发现本机模型' : '暂无可用模型', local ? 'No installed models found' : 'No available models') + '</option>'
+      : !catalog.models.includes(selected) ? '<option value="" selected disabled>' + assistantCopy('请选择模型', 'Choose a model') + '</option>' : '';
+    let note = catalog.loading ? assistantCopy('正在读取模型列表…', 'Loading models…')
+      : local ? assistantCopy('仅列出本机 Ollama 已安装的模型。', 'Only models installed in local Ollama are listed.')
+      : catalog.loaded ? assistantCopy('来自 DeepSeek 的可用模型列表。', 'Available models returned by DeepSeek.')
+      : assistantCopy('预置官方模型；保存密钥后可刷新可用列表。', 'Official model presets; save a key to refresh availability.');
+    if (catalog.error) note = ['keyAccess', 'missingKey', 'unauthorized', 'keyStore'].includes(catalog.error) ? assistantErrorText(catalog.error)
+      : assistantCopy(local ? '未能读取本机模型。请启动 Ollama 并安装模型后刷新。' : '模型列表暂不可用，可稍后刷新。', local ? 'Could not read local models. Start Ollama, install a model, then refresh.' : 'The model list is unavailable. Try refreshing later.');
+    else if (local && catalog.loaded && !catalog.models.length) note = assistantCopy('Ollama 中还没有模型。请先在 Ollama 安装模型，再点击刷新。', 'No models are installed in Ollama. Install one in Ollama, then refresh.');
+    return '<div class="assistant-model-picker"><label for="' + id + '">' + label + '</label><div class="assistant-model-picker-row"><select id="' + id + '" aria-label="' + label + '"' + (!catalog.models.length ? ' disabled' : '') + '>' + placeholder + options + '</select><button type="button" class="button button-light" data-action="assistant-refresh-models" data-provider="' + provider + '"' + (catalog.loading || (provider === 'deepseek' && (!assistantKeyReady() || !assistantNetworkAvailable())) ? ' disabled' : '') + '>' + assistantCopy('刷新', 'Refresh') + '</button></div><small role="status">' + esc(note) + '</small></div>';
+  }
+  function renderAssistantSettings() {
+    const provider = assistantProvider(), model = assistantModel(provider), ollamaModel = assistantOllamaModel(), selected = assistantSelectedContext();
+    const providerOptions = [
+      ['off', '关闭', 'Off'],
+      ['ollama', '仅本机 Ollama', 'Ollama only · Local'],
+      ['deepseek', '仅联网 DeepSeek（断网即停用，不回退到 Ollama）', 'DeepSeek online only (disabled offline; no Ollama fallback)'],
+      ['hybrid', '联网 DeepSeek，离线 Ollama', 'DeepSeek online, Ollama offline']
+    ];
+    const keyStatus = assistantKeyBlocked()
+      ? '<span class="assistant-key-state">' + (assistantStatus.deepSeekKeyState === 'locked' ? assistantCopy('已保存的密钥需要恢复访问。点击恢复后，macOS 可能要求一次授权，无需重新输入 API 密钥。', 'Restore access to the saved key. macOS may ask for one authorization after you click Restore; no API key re-entry is needed.') : assistantCopy('钥匙串暂不可用。可以重试读取，已保存的密钥会保留。', 'Keychain is temporarily unavailable. Retry access; the saved key is retained.')) + '</span>'
+      : assistantStatus.deepSeekKeyConfigured
+      ? '<span class="assistant-key-state ready">' + assistantCopy('密钥已安全保存在此主题版的钥匙串中', 'Key is stored securely in this edition’s Keychain') + '</span>'
+      : '<span class="assistant-key-state">' + assistantCopy('尚未设置 DeepSeek API 密钥', 'No DeepSeek API key saved') + '</span>';
+    const stateLabel = provider === 'off' ? ['已关闭', 'Off'] : provider === 'ollama' ? ['仅本机 Ollama', 'Ollama only · Local'] : provider === 'deepseek' ? ['仅联网 DeepSeek', 'DeepSeek online only'] : ['联网 DeepSeek · 离线 Ollama', 'DeepSeek online · Ollama offline'];
+    const modelFields = (provider === 'deepseek' || provider === 'hybrid' ? renderAssistantModelSelect('deepseek', assistantCopy('DeepSeek 模型', 'DeepSeek model')) : '')
+      + (provider === 'ollama' || provider === 'hybrid' ? renderAssistantModelSelect('ollama', assistantCopy('本机 Ollama 模型', 'Local Ollama model')) : '');
+    const showKeyEditor = assistantKeyEditing || (!assistantStatus.deepSeekKeyConfigured && !assistantKeyBlocked());
+    const keyActions = (assistantKeyBlocked() ? assistantKeyRecoveryButton() : '') + (showKeyEditor
+      ? '<input id="assistant-deepseek-key" type="password" maxlength="512" autocomplete="new-password" aria-label="DeepSeek API key" placeholder="DeepSeek API key"><button type="button" class="button button-light" data-action="assistant-save-key">' + assistantCopy('安全保存密钥', 'Save key securely') + '</button>' + (assistantKeyEditing ? '<button type="button" class="button button-plain" data-action="assistant-cancel-key-edit">' + assistantCopy('取消更换', 'Cancel replacement') + '</button>' : '')
+      : '<button type="button" class="button button-light" data-action="assistant-edit-key">' + assistantCopy('更换密钥', 'Replace key') + '</button>') + (assistantStatus.deepSeekKeyConfigured ? '<button type="button" class="button button-plain" data-action="assistant-delete-key">' + assistantCopy('删除密钥', 'Delete key') + '</button>' : '');
+    const keyBox = provider === 'deepseek' || provider === 'hybrid'
+      ? '<div class="assistant-key-box"><div>' + keyStatus + '<p>' + assistantCopy('密钥只通过原生安全桥保存到 macOS 钥匙串，不写入看板状态、备份或日志。仅联网 DeepSeek 模式会将发送内容发给 DeepSeek；混合模式联网时也会发给 DeepSeek，离线或网络请求失败时则发给本机 Ollama。', 'The key is stored through the native secure bridge in macOS Keychain, never in dashboard state, backups, or logs. DeepSeek-only mode sends submitted content to DeepSeek. Hybrid mode also sends it to DeepSeek online, and sends it to local Ollama offline or if DeepSeek cannot be reached.') + '</p></div><div class="assistant-key-actions">' + keyActions + '</div></div>' : '';
+    const modeNote = provider === 'ollama'
+      ? '<div class="assistant-local-note">' + assistantCopy('仅使用本机 Ollama；不会连接 DeepSeek 或其他云端 AI。请先启动 Ollama 并下载模型。', 'Uses Ollama only on this Mac; it never contacts DeepSeek or another cloud AI. Start Ollama and download a model first.') + '</div>'
+      : provider === 'deepseek'
+        ? '<div class="assistant-local-note">' + assistantCopy('仅使用 DeepSeek。没有网络时学习助手立即停用；任何情况下都不会改用 Ollama。', 'Uses DeepSeek only. The assistant is disabled without an internet connection and will never use Ollama.') + '</div>'
+        : provider === 'hybrid'
+          ? '<div class="assistant-local-note">' + assistantCopy('联网时优先使用 DeepSeek；离线时使用本机 Ollama。若 DeepSeek 请求因网络不可达而失败，会将同一份内容改发给 Ollama；此时请求可能已到达 DeepSeek。', 'Uses DeepSeek while online and local Ollama while offline. If a DeepSeek request fails because the network is unreachable, the same submitted content is sent to Ollama; DeepSeek may already have received it.') + '</div>'
+        : '';
+    return '<section class="card settings-section assistant-settings"><div class="assistant-section-heading"><div><p class="setup-eyebrow">CAMPUSDESK · THEME EDITION</p><h2>' + assistantCopy('学习助手', 'Learning assistant') + '</h2><p>' + assistantCopy('明确选择关闭、仅本机 Ollama、仅联网 DeepSeek，或联网 DeepSeek／离线 Ollama。点击发送即可提问，也可按需查看发送内容。', 'Choose Off, Ollama only, DeepSeek online only, or DeepSeek online with Ollama offline. Send questions directly, or optionally view the request details.') + '</p></div><span class="assistant-state-pill">' + assistantCopy(stateLabel[0], stateLabel[1]) + '</span></div><div class="assistant-settings-grid"><label>' + assistantCopy('AI 接入方式', 'AI provider') + '<select id="assistant-provider" aria-label="' + assistantCopy('AI 接入方式', 'AI provider') + '">' + providerOptions.map(item => '<option value="' + item[0] + '"' + (provider === item[0] ? ' selected' : '') + '>' + assistantCopy(item[1], item[2]) + '</option>').join('') + '</select></label>' + modelFields + '</div>' + renderAssistantSetupGuides() + keyBox + modeNote + '<div class="assistant-context-picker"><div><h3>' + assistantCopy('允许本次提问使用哪些资料', 'Data available to questions') + '</h3><p>' + assistantCopy('点击发送时会附带勾选的资料。你可以随时调整范围，或取消全部勾选。', 'Checked data is included when you send. Adjust the scope or uncheck all sources at any time.') + '</p></div><div class="assistant-context-options">' + assistantContextOptions.map(item => '<label><input type="checkbox" data-ai-context="' + item[0] + '"' + (selected.has(item[0]) ? ' checked' : '') + '><span>' + assistantCopy(item[1], item[2]) + '</span></label>').join('') + '</div></div><div class="assistant-privacy-note"><strong>' + assistantCopy('可随时停用与清除', 'You stay in control') + '</strong><p>' + assistantCopy('对话只保留在当前打开窗口的内存中；关闭或刷新窗口即清除。不会接收学校密码、登录 Cookie 或浏览器会话。', 'Conversation stays only in this open window’s memory and is cleared when it closes or reloads. School passwords, cookies, and browser sessions are never included.') + '</p></div></section>';
+  }
+  function assistantPushReference(refs, source, rawURL, label) {
+    if (!['seiue', 'managebac', 'teams'].includes(source)) return;
+    const url = (rawURL && Core.safeURL(rawURL, source)) || Core.safeURL(sourceURL(source), source);
+    if (!url || refs.some(item => item.source === source && item.url === url)) return;
+    refs.push({ source, url, label: String(label || sourceName(source)).slice(0, 140) });
+  }
+  function assistantBuildContext(selected) {
+    const context = {}, refs = [];
+    const value = (input, limit) => String(input == null ? '' : input).replace(/\s+/g, ' ').slice(0, limit || 500);
+    const tasks = taskRowsForState();
+    if (selected.has('tasks')) {
+      context.tasks = tasks.filter(item => !item.completed).slice(0, 30).map(item => {
+        assistantPushReference(refs, item.source, item.sourceURL, item.title || item.course);
+        return { title: value(item.title, 240), course: value(item.course, 160), due: value(item.dueAt || item.dueLabel, 80), requirements: value(item.requirements, 800), status: value(item.status, 80) };
+      });
+    }
+    if (selected.has('grades')) {
+      context.grades = courseRowsForState().slice(0, 30).map(course => {
+        assistantPushReference(refs, 'managebac', course.sourceURL, course.name);
+        return { course: value(course.name, 180), term: value(course.term, 100), percentage: Number.isFinite(Number(course.percentage)) ? Number(course.percentage) : null,
+          components: (course.gradeComponents || []).slice(0, 20).map(item => ({ category: value(item.category || item.name, 120), weight: value(item.weight, 40), score: value(item.score || item.percentage, 60) })) };
+      });
+    }
+    if (selected.has('schedule')) {
+      context.schedule = scheduleRowsForState(Core.today(), false).slice(0, 30).map(item => ({ title: value(item.title, 160), date: value(item.date, 32), start: value(item.start, 20), end: value(item.end, 20), room: value(item.room, 100) }));
+      assistantPushReference(refs, 'seiue', '', assistantCopy('今日课表 · 希悦', 'Today’s schedule · Seiue'));
+    }
+    if (selected.has('feedback')) {
+      context.teacherFeedback = feedbackRowsForState().slice(0, 20).map(item => {
+        assistantPushReference(refs, item.source, item.sourceURL, item.title || item.course);
+        return { course: value(item.course, 120), title: value(item.title, 180), date: value(item.date, 60), feedback: value(item.text || item.feedback || item.content, 900) };
+      });
+    }
+    if (selected.has('teams')) {
+      context.teamsMessages = Core.getTeamsPosts(state).slice(0, 20).map(item => {
+        assistantPushReference(refs, 'teams', item.sourceURL, item.channel || item.title || 'Teams');
+        return { channel: value(item.channel, 100), author: value(item.author, 100), title: value(item.title, 180), date: value(item.date, 60), message: value(item.text || item.content, 700) };
+      });
+    }
+    if (selected.has('calendar')) {
+      context.schoolCalendar = schoolCalendarRowsForState(Core.today()).slice(0, 40).map(item => ({ title: value(item.title, 180), date: value(item.startDate || item.date, 32), endDate: value(item.endDate, 32), kind: value(item.kind || item.type, 80), note: value(item.note || item.description, 300) }));
+    }
+    if (selected.has('attachments')) {
+      const rows = tasks.concat(teamsPosts());
+      context.attachmentText = rows.flatMap(row => (row.attachments || []).filter(file => file.text).map(file => {
+        assistantPushReference(refs, row.source || 'teams', row.sourceURL, file.title || file.name || row.title);
+        return { title: value(file.title || file.name, 180), course: value(row.course || row.channel, 120), text: value(file.text, 900) };
+      })).slice(0, 16);
+    }
+    return { context, refs: refs.slice(0, 12) };
+  }
+  function assistantSystemMessage() {
+    return assistantCopy('你是 CampusDesk 的学习助手。只根据用户提供的资料回答；资料不足时明确说明，不猜测学校规则、成绩或截止日期。不要把模拟结果说成学校官方记录。用简洁、可执行的语言回答。', 'You are CampusDesk’s study assistant. Answer only from the supplied data; say when information is missing and do not guess school rules, grades, or deadlines. Never present an estimate as an official school record. Be concise and actionable.');
+  }
+  function assistantErrorText(code) {
+    const errors = {
+      invalidKey: ['API 密钥格式无效，请检查后重试。', 'The API key format is invalid. Check it and try again.'],
+      keyStore: ['钥匙串暂不可用，请稍后重试。已保存的密钥会保留。', 'Keychain is temporarily unavailable. Try again later; the saved key is retained.'],
+      keyAccess: ['已保存的密钥需要恢复访问。点击“恢复密钥访问”，无需重新输入 API 密钥。', 'The saved key needs Keychain access restored. Click Restore key access; no API key re-entry is needed.'],
+      invalidRequest: ['请求内容超出限制或格式无效。', 'The request is too large or has an invalid format.'],
+      missingKey: ['请先保存 DeepSeek API 密钥。', 'Save a DeepSeek API key first.'],
+      localUnavailable: ['无法连接本机 Ollama。请确认 Ollama 已启动且模型已安装。', 'Could not reach local Ollama. Make sure it is running and the model is installed.'],
+      localModelMissing: ['Ollama 找不到此模型；请先在 Ollama 中下载，再重试。', 'Ollama cannot find this model. Download it in Ollama and try again.'],
+      network: ['无法连接 DeepSeek，请检查网络后重试。', 'Could not reach DeepSeek. Check your connection and try again.'],
+      unauthorized: ['DeepSeek API 密钥无效或已失效。', 'The DeepSeek API key is invalid or expired.'],
+      serviceRejected: ['AI 服务拒绝了请求；请检查模型设置或稍后重试。', 'The AI service rejected the request. Check the model setting or try again later.'],
+      badResponse: ['AI 服务返回的内容无法识别，请稍后重试。', 'The AI service returned an unreadable response. Try again later.']
+    };
+    const item = errors[code] || errors.badResponse;
+    return assistantCopy(item[0], item[1]);
+  }
+  function renderAssistantConversation() {
+    if (!assistantTranscript.length && !assistantBusy) return '<div class="assistant-empty"><span>' + icon('search') + '</span><strong>' + assistantCopy('问一个关于今天学习的问题', 'Ask a question about your learning') + '</strong><p>' + assistantCopy('例如：今天最先该完成哪项作业？我还缺少哪些评分组成？', 'For example: Which assignment should I start first? Which grading components are still missing?') + '</p></div>';
+    return assistantTranscript.map(item => '<article class="assistant-message ' + item.role + '"><strong>' + (item.role === 'assistant' ? 'CampusDesk AI' : assistantCopy('你', 'You')) + '</strong><pre>' + esc(item.display || item.content) + '</pre></article>').join('') + (assistantBusy ? '<div class="assistant-typing" role="status">' + assistantCopy('正在等待模型回答…', 'Waiting for the model…') + '</div>' : '');
+  }
+  function renderAssistantReferences() {
+    if (!assistantReferences.length) return '';
+    return '<div class="assistant-references"><h3>' + assistantCopy('本次使用的本机来源', 'Local sources used for this answer') + '</h3><div>' + assistantReferences.map((item, index) => '<button type="button" class="button button-light" data-action="assistant-reference" data-index="' + index + '">' + esc(sourceName(item.source) + ' · ' + item.label) + '</button>').join('') + '</div><p>' + assistantCopy('这些链接仅在本机显示，没有包含在发送给模型的请求中。', 'These links are displayed locally and are not included in the model request.') + '</p></div>';
+  }
+  function assistantPresentation() {
+    const provider = assistantProvider(), model = assistantModel(provider);
+    const offline = !assistantNetworkAvailable();
+    const strictOffline = provider === 'deepseek' && offline;
+    const needsKey = provider === 'deepseek' || (provider === 'hybrid' && !offline);
+    const localActive = provider === 'ollama' || (provider === 'hybrid' && offline);
+    const catalog = assistantCatalogs[localActive ? 'ollama' : 'deepseek'];
+    const missingModel = provider !== 'off' && catalog.loaded && !catalog.models.includes(localActive ? assistantOllamaModel() : model);
+    const keyBlocked = needsKey && assistantKeyBlocked();
+    const sendDisabled = !native || provider === 'off' || assistantBusy || (needsKey && !assistantKeyReady()) || strictOffline || missingModel;
+    const providerLabel = provider === 'ollama' ? assistantCopy('仅本机 Ollama', 'Ollama only · Local') : provider === 'deepseek' ? assistantCopy('仅联网 DeepSeek', 'DeepSeek online only') : provider === 'hybrid' ? assistantCopy('联网 DeepSeek · 离线 Ollama', 'DeepSeek online · Ollama offline') : assistantCopy('已关闭', 'Off');
+    const disclosure = provider === 'deepseek'
+      ? strictOffline
+        ? assistantCopy('当前无网络，学习助手已停用。本模式只使用 DeepSeek，断网不会改用 Ollama。', 'No internet connection. The assistant is disabled. This mode uses DeepSeek only and never switches to Ollama.')
+        : assistantCopy('发送给 DeepSeek · 包含你的问题、当前对话和所选资料。断网时停用。', 'Sent to DeepSeek · Includes your question, this conversation, and selected data. Disabled offline.')
+      : provider === 'hybrid'
+        ? assistantCopy(offline ? '当前离线，发送到本机 Ollama。联网时使用 DeepSeek；网络请求失败时改用 Ollama。' : '当前发送给 DeepSeek；离线或网络请求失败时改用本机 Ollama。', offline ? 'Offline: sent to local Ollama. Online requests use DeepSeek, with Ollama as the network-failure fallback.' : 'Sent to DeepSeek now; local Ollama is used offline or after a network failure.')
+        : provider === 'ollama'
+          ? assistantCopy('发送到本机 Ollama · 问题、当前对话和所选资料仅在这台 Mac 上处理。', 'Sent to local Ollama · Your question, this conversation, and selected data are processed on this Mac.')
+          : assistantCopy('AI 已关闭。到连接与设置的“学习助手”卡片选择接入方式后即可使用。', 'AI is off. Choose a provider in the Learning Assistant section of Settings to enable it.');
+    const activeModel = provider === 'ollama' || (provider === 'hybrid' && offline) ? assistantOllamaModel() : model;
+    const placeholder = strictOffline ? assistantCopy('联网后才能使用 DeepSeek', 'DeepSeek is unavailable offline') : assistantCopy('例如：根据当前截止时间，帮我安排今晚的学习顺序。', 'For example: Based on the due dates, help me plan tonight’s study order.');
+    return { provider, strictOffline, sendDisabled, providerLabel, disclosure, activeModel, placeholder, keyBlocked, missingModel };
+  }
+  function renderAssistantProviderSwitch(view) {
+    return '<div class="assistant-provider-switch" role="group" aria-label="' + assistantCopy('选择回答方式', 'Choose response provider') + '"><span>' + assistantCopy('回答方式', 'Answer with') + '</span>' + [['ollama', '本机 Ollama', 'Local Ollama'], ['deepseek', '联网 DeepSeek', 'Online DeepSeek'], ['hybrid', '自动切换', 'Automatic']].map(item => '<button type="button" class="button button-light" data-action="assistant-switch-provider" data-provider="' + item[0] + '" aria-pressed="' + (view.provider === item[0]) + '"' + (assistantBusy ? ' disabled' : '') + '>' + assistantCopy(item[1], item[2]) + '</button>').join('') + '</div>';
+  }
+  function renderAssistantRecovery(view) {
+    if (view.keyBlocked) return '<p>' + esc(assistantErrorText(assistantStatus.deepSeekKeyState === 'unavailable' ? 'keyStore' : 'keyAccess')) + '</p>' + assistantKeyRecoveryButton();
+    if (view.missingModel) return '<p>' + assistantCopy('请先选择可用模型；本机模型需先在 Ollama 安装。', 'Choose an available model first. Local models must be installed in Ollama.') + '</p><button type="button" class="button button-light" data-action="assistant-open-key-settings">' + assistantCopy('选择模型', 'Choose model') + '</button>';
+    return '';
+  }
+  function assistantScopeSummary() {
+    const selected = assistantSelectedContext();
+    const labels = assistantContextOptions.filter(item => selected.has(item[0])).map(item => assistantCopy(item[1], item[2]));
+    return labels.length ? assistantCopy('附带资料：', 'Included data: ') + labels.join(isEnglish() ? ', ' : '、') : assistantCopy('不附带学习资料，仅发送问题和当前对话', 'No study data included; question and conversation only');
+  }
+  function updateAssistantWorkspace() {
+    if (page !== 'assistant') return;
+    const view = assistantPresentation();
+    const updateHTML = (id, html) => {
+      const element = document.getElementById(id);
+      if (element && element.innerHTML !== html) element.innerHTML = html;
+    };
+    updateHTML('assistant-chat-log', renderAssistantConversation());
+    updateHTML('assistant-source-references', renderAssistantReferences());
+    updateHTML('assistant-disclosure', esc(view.disclosure));
+    updateHTML('assistant-provider-switch', renderAssistantProviderSwitch(view));
+    const questionInput = document.getElementById('assistant-question');
+    if (questionInput) { questionInput.disabled = view.strictOffline; questionInput.placeholder = view.placeholder; }
+    updateHTML('assistant-recovery', renderAssistantRecovery(view));
+    updateHTML('assistant-context-summary', esc(assistantScopeSummary()));
+    const badge = document.getElementById('assistant-provider-badge');
+    if (badge) { badge.textContent = view.providerLabel; badge.className = 'assistant-provider-badge ' + view.provider; }
+    const modelLabel = document.getElementById('assistant-model-label');
+    if (modelLabel) modelLabel.textContent = assistantCopy('模型：', 'Model: ') + view.activeModel;
+    const clearButton = document.getElementById('assistant-clear');
+    if (clearButton) clearButton.disabled = !assistantTranscript.length;
+    updateAssistantSendControls(view);
+  }
+  function updateAssistantSendControls(view = assistantPresentation()) {
+    const sendButton = document.getElementById('assistant-send');
+    if (sendButton) {
+      sendButton.disabled = view.sendDisabled || !assistantQuestionDraft.trim();
+      sendButton.textContent = assistantBusy ? assistantCopy('回复中…', 'Replying…') : assistantCopy('发送', 'Send');
+    }
+    const reviewButton = document.getElementById('assistant-review-button');
+    if (reviewButton) reviewButton.disabled = view.sendDisabled || !assistantQuestionDraft.trim();
+  }
+  function renderAssistant() {
+    if (!themeEdition) return renderOverview();
+    const view = assistantPresentation();
+    const disabled = view.sendDisabled || !assistantQuestionDraft.trim() ? ' disabled' : '';
+    return heading('学习助手', '选择资料范围后即可发送问题。') + '<section class="card assistant-workspace"><div class="assistant-workspace-top"><div><span id="assistant-provider-badge" class="assistant-provider-badge ' + view.provider + '">' + esc(view.providerLabel) + '</span><span id="assistant-model-label" class="assistant-model-label">' + assistantCopy('模型：', 'Model: ') + esc(view.activeModel) + '</span></div><button id="assistant-clear" type="button" class="button button-light" data-action="assistant-clear"' + (!assistantTranscript.length ? ' disabled' : '') + '>' + assistantCopy('清除本次对话', 'Clear this conversation') + '</button></div><div id="assistant-provider-switch">' + renderAssistantProviderSwitch(view) + '</div><div id="assistant-disclosure" class="assistant-disclosure">' + esc(view.disclosure) + '</div><div id="assistant-recovery" class="assistant-recovery" role="status">' + renderAssistantRecovery(view) + '</div><div id="assistant-chat-log" class="assistant-chat-log" aria-live="polite">' + renderAssistantConversation() + '</div><div id="assistant-source-references">' + renderAssistantReferences() + '</div><div class="assistant-compose"><label for="assistant-question">' + assistantCopy('你的问题', 'Your question') + '</label><textarea id="assistant-question" maxlength="6000"' + (view.strictOffline ? ' disabled' : '') + ' placeholder="' + view.placeholder + '">' + esc(assistantQuestionDraft) + '</textarea><div id="assistant-context-summary" class="assistant-context-summary">' + esc(assistantScopeSummary()) + '</div><div class="assistant-compose-footer"><span>' + assistantCopy('⌘ / Ctrl + Enter 发送 · Enter 换行', '⌘ / Ctrl + Enter to send · Enter for a new line') + '</span><div class="assistant-compose-actions"><button id="assistant-review-button" type="button" class="button button-plain" data-action="assistant-review"' + disabled + '>' + assistantCopy('查看发送内容', 'View request') + '</button><button id="assistant-send" type="button" class="button button-primary" data-action="assistant-send"' + disabled + '>' + (assistantBusy ? assistantCopy('回复中…', 'Replying…') : assistantCopy('发送', 'Send')) + '</button></div></div></div></section>';
+  }
+  function assistantBuildPendingRequest() {
+    const provider = assistantProvider(), model = provider === 'ollama' ? assistantOllamaModel() : assistantModel(), question = String(assistantQuestionDraft || '').trim().slice(0, 6000);
+    if (!native) { toast(assistantCopy('学习助手仅在主题版 Mac 应用中可用。', 'The assistant is available in the Theme Edition Mac app only.')); return null; }
+    if (provider === 'off') { toast(assistantCopy('请先选择一个 AI 接入方式。', 'Choose an AI provider first.')); return null; }
+    if (provider === 'deepseek' && !assistantNetworkAvailable()) { toast(assistantCopy('当前离线；此模式只使用 DeepSeek，已停用且不会回退到 Ollama。', 'You are offline. DeepSeek-only mode is disabled and will not fall back to Ollama.')); return null; }
+    if (!question) { toast(assistantCopy('请先输入问题。', 'Enter a question first.')); return null; }
+    const view = assistantPresentation();
+    if (view.keyBlocked) { toast(assistantErrorText('keyAccess')); return null; }
+    if (view.missingModel) { toast(assistantCopy('请先在设置中选择可用模型。', 'Choose an available model in Settings first.')); return null; }
+    if ((provider === 'deepseek' || (provider === 'hybrid' && assistantNetworkAvailable())) && !assistantKeyReady()) { navigate('settings'); toast(assistantCopy('联网使用 DeepSeek 前，请先在设置中安全保存 API 密钥。', 'Save a DeepSeek API key securely in Settings before using DeepSeek online.')); return null; }
+    const built = assistantBuildContext(assistantSelectedContext());
+    const userContent = assistantCopy('问题：', 'Question: ') + question + '\n\n' + assistantCopy('本机学习资料（JSON）：\n', 'Selected study data (JSON):\n') + JSON.stringify(built.context, null, 2);
+    const history = assistantTranscript.slice(-8).map(item => ({ role: item.role, content: item.content }));
+    const messages = [{ role: 'system', content: assistantSystemMessage() }].concat(history, [{ role: 'user', content: userContent }]);
+    const serialized = JSON.stringify(messages);
+    if (serialized.length > 40_000) { toast(assistantCopy('本次资料过多，请在设置中减少资料类别后重试。', 'This request is too large. Reduce selected data categories in Settings and try again.')); return null; }
+    return { provider, model, fallbackModel: provider === 'hybrid' ? assistantOllamaModel() : '', networkAvailable: assistantNetworkAvailable(), messages, question, userContent, refs: built.refs };
+  }
+  function openAssistantReview() {
+    if (assistantBusy || assistantQuestionComposing) return;
+    const editor = document.getElementById('assistant-question');
+    if (editor) assistantQuestionDraft = String(editor.value || '').slice(0, 6000);
+    const request = assistantBuildPendingRequest();
+    if (!request) return;
+    assistantPendingRequest = request;
+    const body = document.getElementById('assistant-confirm-content');
+    const onlineRequest = request.provider === 'deepseek' || (request.provider === 'hybrid' && request.networkAvailable);
+    const sendLabel = assistantCopy('发送', 'Send');
+    const reviewWarning = request.provider === 'hybrid'
+      ? assistantCopy((request.networkAvailable ? '当前联网：' : '当前离线：') + '接收方可能包括 DeepSeek 和本机 Ollama。联网时使用 DeepSeek，离线时使用 Ollama；网络请求失败时同一内容会改发给 Ollama，此时 DeepSeek 可能已经收到。', (request.networkAvailable ? 'Currently online: ' : 'Currently offline: ') + 'Recipients may include DeepSeek and local Ollama. DeepSeek is used online and Ollama offline. After a network failure, the same content is sent to Ollama and DeepSeek may already have received it.')
+      : onlineRequest
+        ? assistantCopy('内容只会发送到联网 DeepSeek。若断网，本次请求停用，不会转发给 Ollama。', 'Messages go only to online DeepSeek. If offline, this request is disabled and will not be sent to Ollama.')
+        : assistantCopy('以下完整消息只会发送到本机 Ollama，不会连接 DeepSeek 或其他外部模型服务。', 'The exact messages below go only to local Ollama. No DeepSeek or other external model service is contacted.');
+    body.innerHTML = '<div class="dialog-heading"><h2 id="assistant-confirm-title">' + assistantCopy('发送内容', 'Request details') + '</h2><button type="button" class="icon-button" data-action="assistant-cancel-review" aria-label="' + assistantCopy('关闭', 'Close') + '">×</button></div><p class="assistant-review-warning">' + reviewWarning + '</p><p class="assistant-preview-question">' + esc(request.question) + '</p><p class="assistant-context-summary">' + esc(assistantScopeSummary()) + '</p><details class="assistant-request-details"><summary>' + assistantCopy('查看完整请求', 'Show complete request') + '</summary><pre class="assistant-request-preview">' + esc(JSON.stringify(request.messages, null, 2)) + '</pre></details><div class="dialog-actions"><button type="button" class="button button-light" data-action="assistant-cancel-review">' + assistantCopy('返回修改', 'Go back') + '</button><button type="button" class="button button-primary" data-action="assistant-confirm-send">' + sendLabel + '</button></div>';
+    showDialog('assistant-confirm-dialog');
+  }
+  function sendAssistantQuestion() {
+    if (assistantBusy || assistantQuestionComposing) return;
+    const editor = document.getElementById('assistant-question');
+    if (editor) assistantQuestionDraft = String(editor.value || '').slice(0, 6000);
+    const request = assistantBuildPendingRequest();
+    if (request) dispatchAssistantRequest(request);
+  }
+  function confirmAssistantSend() { dispatchAssistantRequest(assistantPendingRequest); }
+  function dispatchAssistantRequest(request) {
+    if (!request || assistantBusy) return;
+    if (request.provider === 'deepseek' && !assistantNetworkAvailable()) {
+      assistantPendingRequest = null; closeDialog('assistant-confirm-dialog');
+      toast(assistantCopy('网络已断开；仅联网 DeepSeek 模式已停用，没有发送内容，也不会回退到 Ollama。', 'The connection was lost. DeepSeek-only mode is disabled; nothing was sent and there is no Ollama fallback.'));
+      render(); return;
+    }
+    assistantPendingRequest = null;
+    closeDialog('assistant-confirm-dialog');
+    assistantQuestionDraft = '';
+    const editor = document.getElementById('assistant-question');
+    if (editor) { editor.value = ''; resizeAssistantQuestionField(editor); }
+    assistantReferences = request.refs;
+    assistantTranscript.push({ role: 'user', content: request.userContent, display: request.question });
+    if (assistantTranscript.length > 12) assistantTranscript = assistantTranscript.slice(-12);
+    const requestID = window.crypto && window.crypto.randomUUID ? window.crypto.randomUUID() : 'ai-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10);
+    assistantBusy = true; assistantActiveRequestID = requestID; assistantSentQuestion = request.question; render();
+    if (!send('assistantRequest', { requestId: requestID, provider: request.provider, model: request.model, fallbackModel: request.fallbackModel, networkAvailable: assistantNetworkAvailable(), messages: request.messages })) {
+      assistantBusy = false; assistantActiveRequestID = ''; assistantTranscript.pop();
+      assistantQuestionDraft = request.question;
+      const currentEditor = document.getElementById('assistant-question');
+      if (currentEditor) { currentEditor.value = assistantQuestionDraft; resizeAssistantQuestionField(currentEditor); }
+      render();
+      toast(assistantCopy('无法启动 AI 请求，请确认这是已安装的主题版应用。', 'Could not start the AI request. Make sure this is the installed Theme Edition app.'));
+    }
+  }
   function renderSettings() {
-    return heading('让它适合你的每一天。', '学校系统各自登录；课表、任务和频道原文保存在本机。') + (!native ? '<div class="browser-banner">这是网页预览。登录、会话管理与自动读取只在 Mac 应用中可用。</div>' : '') + '<div class="source-grid">' + renderSourceCard('seiue') + renderSourceCard('managebac') + renderSourceCard('teams') + '</div>' + renderLanguageSettings() + renderAppearanceSettings() + renderTeamsSettings() + renderSchoolSettings() + '<section class="card settings-section">' + cardHeader('settings', '日常偏好') + '<div class="settings-fields"><div class="settings-field"><div><label for="refresh-minutes">自动刷新间隔</label><p>应用正在运行且电脑联网时，尝试更新已连接的数据。</p></div><select id="refresh-minutes">' + [[5, '每 5 分钟'], [15, '每 15 分钟'], [30, '每 30 分钟'], [60, '每小时']].map(o => '<option value="' + o[0] + '" ' + (Number(state.settings.refreshMinutes) === o[0] ? 'selected' : '') + '>' + o[1] + '</option>').join('') + '</select></div><div class="settings-field"><div><label for="self-study">空白课节显示为自习</label><p>只处理希悦明确给出时间的空白课节。</p></div><label class="toggle" for="self-study"><input id="self-study" type="checkbox" ' + (state.settings.selfStudy ? 'checked' : '') + ' aria-label="空白课节显示为自习"><span></span></label></div><div class="settings-field"><div><label>显示时区</label><p>在不同地区使用 Mac，也按北京的上课时间展示。</p></div><span class="subtle">Asia / Shanghai · UTC+8</span></div></div></section><section class="card settings-section">' + cardHeader('cloud', '数据与备份') + '<div class="settings-fields"><div class="settings-field"><div><label>导出或恢复本机数据</label><p>包含课程缓存、个人待办及 GPA 记录。也包含 Teams 消息、EC 通知和提醒设置。备份不包含登录会话或密码。</p></div><div class="backup-actions">' + button('导出备份', 'export') + button('导入备份', 'import') + '</div></div></div></section><div class="info-note">希悦和 ManageBac 配置后在应用内登录并读取页面。Teams 默认使用本机 Chrome 或 Edge 已登录页面读取，也可选配 Microsoft Graph 授权；应用运行时定期同步。权限不足、网络中断或接口限制会在同步状态中提示，现有内容作为缓存保留。</div><p class="footer-note">CampusDesk 0.5.3 本地预览版 · 独立学习工具，与希悦、ManageBac 及 Microsoft 无隶属关系。</p>';
+    return heading('让它适合你的每一天。', '学校系统各自登录；课表、任务和频道原文保存在本机。') + (!native ? '<div class="browser-banner">这是网页预览。登录、会话管理与自动读取只在 Mac 应用中可用。</div>' : '') + renderSetupWizardSettings() + '<div class="source-grid">' + renderSourceCard('seiue') + renderSourceCard('managebac') + renderSourceCard('teams') + '</div>' + renderLanguageSettings() + renderAppearanceSettings() + (themeEdition ? renderAssistantSettings() : '') + renderTeamsSettings() + renderSchoolSettings() + '<section class="card settings-section">' + cardHeader('settings', '日常偏好') + '<div class="settings-fields"><div class="settings-field"><div><label for="refresh-minutes">自动刷新间隔</label><p>应用正在运行且电脑联网时，尝试更新已连接的数据。</p></div><select id="refresh-minutes">' + [[5, '每 5 分钟'], [15, '每 15 分钟'], [30, '每 30 分钟'], [60, '每小时']].map(o => '<option value="' + o[0] + '" ' + (Number(state.settings.refreshMinutes) === o[0] ? 'selected' : '') + '>' + o[1] + '</option>').join('') + '</select></div><div class="settings-field"><div><label for="self-study">空白课节显示为自习</label><p>只处理希悦明确给出时间的空白课节。</p></div><label class="toggle" for="self-study"><input id="self-study" type="checkbox" ' + (state.settings.selfStudy ? 'checked' : '') + ' aria-label="空白课节显示为自习"><span></span></label></div><div class="settings-field"><div><label>显示时区</label><p>在不同地区使用 Mac，也按北京的上课时间展示。</p></div><span class="subtle">Asia / Shanghai · UTC+8</span></div></div></section><section class="card settings-section">' + cardHeader('cloud', '数据与备份') + '<div class="settings-fields"><div class="settings-field"><div><label>导出或恢复本机数据</label><p>包含课程缓存、个人待办及 GPA 记录。也包含 Teams 消息、EC 通知和提醒设置。备份不包含登录会话或密码。</p></div><div class="backup-actions">' + button('导出备份', 'export') + button('导入备份', 'import') + '</div></div></div></section><div class="info-note">希悦和 ManageBac 配置后在应用内登录并读取页面。Teams 默认使用本机 Chrome 或 Edge 已登录页面读取，也可选配 Microsoft Graph 授权；应用运行时定期同步。权限不足、网络中断或接口限制会在同步状态中提示，现有内容作为缓存保留。</div><p class="footer-note">' + esc(appVersionLabel) + ' · ' + assistantCopy('独立学习工具，与希悦、ManageBac 及 Microsoft 无隶属关系。', 'Independent learning tool, not affiliated with Seiue, ManageBac, or Microsoft.') + '</p>';
+  }
+
+  const setupWizardSteps = [
+    { title: '欢迎使用', icon: 'overview' }, { title: '认识一下你', icon: 'ec' },
+    { title: '连接 ManageBac', icon: 'grades' }, { title: '连接 Microsoft Teams', icon: 'teams' },
+    { title: '导入希悦课表', icon: 'schedule' }, { title: '连接学习助手', icon: 'search' },
+    { title: '挑一个主题', icon: 'overview' }, { title: '提醒偏好', icon: 'settings' },
+    { title: '完成', icon: 'check' }
+  ];
+  function setupCopy(zh, en) { return isEnglish() ? en : zh; }
+  function setupWizardIndex() {
+    if (setupWizardMode === 'version-intro') return 0;
+    const raw = Number(state.settings.setupWizardStep);
+    return Number.isInteger(raw) ? Math.max(0, Math.min(setupWizardSteps.length - 1, raw)) : 0;
+  }
+  function renderSetupWizardSettings() {
+    if (!themeEdition) return '';
+    return '<section class="card settings-section setup-wizard-entry"><div><h2>' + setupCopy('首次设置向导', 'First-run setup guide') + '</h2><p>' + setupCopy('连接学校平台、选择主题并设置提醒。可以稍后继续，不会更改已有学校数据。', 'Connect school platforms, choose a theme, and set reminders. You can resume later; existing school data will not be changed.') + '</p></div><div class="source-actions">' + button(setupCopy('继续向导', 'Resume guide'), 'setup-wizard-resume', '', 'button-primary') + button(setupCopy('从头开始', 'Start over'), 'setup-wizard-restart') + '</div></section>';
+  }
+  function setupWizardStepBody(index) {
+    if (index === 0) {
+      if (setupWizardMode === 'version-intro') return '<div class="setup-welcome"><p class="setup-eyebrow">CAMPUSDESK · ' + esc(appVersionLabel) + '</p><h1 id="setup-wizard-title">' + setupCopy('欢迎使用新版 CampusDesk', 'Welcome to the new CampusDesk') + '</h1><p class="setup-lede">' + setupCopy('这是你首次打开 ' + appVersionLabel + '。你的设置、学校连接和本机数据都会保留；这次只展示新版提示，不会重走首次设置。', 'This is your first launch of ' + appVersionLabel + '. Your settings, school connections, and local data are preserved. This is only a version welcome; setup will not restart.') + '</p><div class="setup-privacy-note"><strong>' + setupCopy('首次设置状态与版本提示分开保存', 'Setup completion and version welcome are tracked separately') + '</strong><p>' + setupCopy('你可以在“连接与设置”中随时手动重新打开完整向导。', 'You can reopen the full setup guide any time from Connections & Settings.') + '</p></div></div>';
+      return '<div class="setup-welcome"><p class="setup-eyebrow">CAMPUSDESK · THEME EDITION</p><h1 id="setup-wizard-title">' + setupCopy('欢迎使用', 'Welcome') + '</h1><p class="setup-lede">' + setupCopy('把学校里的课程、作业、消息和成绩整理到一个窗口。大约几分钟即可完成，任何一步都能跳过。', 'Bring classes, assignments, messages, and grades into one place. Setup takes a few minutes, and every step can be skipped.') + '</p><div class="setup-feature-list"><div><span>' + icon('grades') + '</span><p><strong>ManageBac</strong><small>' + setupCopy('作业、截止时间、成绩与评语', 'Assignments, deadlines, grades, and feedback') + '</small></p></div><div><span>' + icon('teams') + '</span><p><strong>Microsoft Teams</strong><small>' + setupCopy('课程频道、聊天、作业与 EC 公告', 'Class channels, chats, assignments, and EC notices') + '</small></p></div><div><span>' + icon('schedule') + '</span><p><strong>' + setupCopy('希悦课表', 'Seiue schedule') + '</strong><small>' + setupCopy('课程、上课时间与教室', 'Classes, periods, and rooms') + '</small></p></div><div><span>' + icon('search') + '</span><p><strong>' + setupCopy('学习助手', 'Learning assistant') + '</strong><small>' + setupCopy('点击发送，基于选定资料回答问题', 'Send a question to get answers using your selected data') + '</small></p></div></div><div class="setup-privacy-note"><strong>' + setupCopy('学校登录留在学校页面', 'School sign-in stays on school pages') + '</strong><p>' + setupCopy('CampusDesk 不会在此向你索取学校密码。同步内容保存在本机；AI 助手默认关闭，仅在你主动发送问题时使用所选资料。', 'CampusDesk will not ask for school passwords here. Synced content stays on this Mac. The AI assistant is off by default and uses selected data only when you send a question.') + '</p></div></div>';
+    }
+    if (index === 1) return '<div class="setup-step-content"><p class="setup-eyebrow">01 · PROFILE</p><h1 id="setup-wizard-title">' + setupCopy('先认识一下你', 'A little about you') + '</h1><p class="setup-lede">' + setupCopy('可填写你在 English Corner 名单上使用的姓名或别名，仅用于在已读取的名单中定位你；留空也可继续。', 'Optionally enter the name or aliases used on English Corner rosters. They are only used to find your name in captured rosters; you can leave this blank.') + '</p><label class="setup-label" for="setup-identity-names">' + setupCopy('姓名 / 英文名 / 常用别名', 'Name / English name / aliases') + '</label><input id="setup-identity-names" type="text" maxlength="500" value="' + esc(setupWizardNameDraft) + '" placeholder="' + setupCopy('多个名称用逗号分隔', 'Separate names with commas') + '"><small class="setup-help">' + setupCopy('只保存在此主题版 CampusDesk 的本机数据中。', 'Saved only in this Theme Edition’s local data.') + '</small></div>';
+    if (index === 2 || index === 3 || index === 4) {
+      const source = index === 2 ? 'managebac' : index === 3 ? 'teams' : 'seiue';
+      const name = source === 'managebac' ? 'ManageBac' : source === 'teams' ? 'Microsoft Teams' : setupCopy('希悦', 'Seiue');
+      const detail = source === 'managebac' ? setupCopy('同步课程成绩、作业与老师反馈。', 'Sync course grades, assignments, and teacher feedback.') : source === 'teams' ? setupCopy('读取你有权查看的课程频道、聊天和 EC 公告。', 'Read course channels, chats, and EC notices you are allowed to access.') : setupCopy('同步课表、节次时间与教室。', 'Sync your schedule, period times, and rooms.');
+      return '<div class="setup-step-content"><p class="setup-eyebrow">0' + (index - 1) + ' · CONNECTION</p><h1 id="setup-wizard-title">' + setupCopy('连接', 'Connect') + ' ' + name + '</h1><p class="setup-lede">' + detail + '</p><div class="setup-connection-card"><span>' + icon(source === 'seiue' ? 'schedule' : source === 'managebac' ? 'grades' : 'teams') + '</span><div><strong>' + name + '</strong><p>' + setupCopy('在学校原页面完成登录；CampusDesk 不保存账号密码。', 'Sign in on the original school page. CampusDesk does not store school passwords.') + '</p></div></div><div class="setup-privacy-note"><strong>' + setupCopy('登录和授权可稍后完成', 'You can sign in later') + '</strong><p>' + setupCopy('连接按钮会打开 CampusDesk 已有的安全连接流程，不会覆盖已同步的课程、作业或账号。', 'The connection button opens CampusDesk’s existing sign-in flow and will not replace captured classes, assignments, or accounts.') + '</p></div><button class="button button-primary" type="button" data-action="setup-wizard-connect" data-source="' + source + '">' + setupCopy('现在连接', 'Connect now') + '</button></div>';
+    }
+    if (index === 5) return '<div class="setup-step-content"><p class="setup-eyebrow">05 · AI ASSISTANT</p><h1 id="setup-wizard-title">' + setupCopy('学习助手', 'Learning assistant') + '</h1><p class="setup-lede">' + setupCopy('选择以下四种模式之一。输入区会显示接收方和资料范围，点击发送即可提问。', 'Choose one of four modes. The composer shows the recipient and data scope; click Send to ask.') + '</p><label class="setup-label" for="setup-ai-provider">' + setupCopy('接入方式', 'Provider') + '</label><select id="setup-ai-provider"><option value="off"' + (assistantProvider() === 'off' ? ' selected' : '') + '>' + setupCopy('关闭', 'Off') + '</option><option value="ollama"' + (assistantProvider() === 'ollama' ? ' selected' : '') + '>' + setupCopy('仅本机 Ollama', 'Ollama only · Local') + '</option><option value="deepseek"' + (assistantProvider() === 'deepseek' ? ' selected' : '') + '>' + setupCopy('仅联网 DeepSeek（断网即停用，不回退到 Ollama）', 'DeepSeek online only (disabled offline; no Ollama fallback)') + '</option><option value="hybrid"' + (assistantProvider() === 'hybrid' ? ' selected' : '') + '>' + setupCopy('联网 DeepSeek，离线 Ollama', 'DeepSeek online, Ollama offline') + '</option></select><div class="setup-ai-preview"><span>' + icon('search') + '</span><div><strong>' + setupCopy('发送前会明确标出接收方', 'Recipients are shown before sending') + '</strong><p>' + setupCopy('关闭：不调用模型。仅本机 Ollama：内容只发到本机。仅联网 DeepSeek：只发到 DeepSeek，断网停用。联网 DeepSeek、离线 Ollama：联网时发给 DeepSeek，离线时发给 Ollama；若网络请求失败，同一内容可能已到达 DeepSeek 后再发给 Ollama。', 'Off: no model is called. Ollama only: content stays on this Mac. DeepSeek only: DeepSeek receives it; disabled offline. Hybrid: DeepSeek online, Ollama offline; if a network request fails, DeepSeek may have received the content before it is retried locally.') + '</p></div></div><button type="button" class="button button-light" data-action="setup-ai-configure">' + setupCopy('打开学习助手设置', 'Open assistant settings') + '</button><div class="setup-ai-status">' + setupCopy('API 密钥、本机模型和可使用的资料类别可以稍后设置。', 'API keys, local models, and allowed data categories can be configured later.') + '</div></div>';
+    if (index === 6) {
+      const themes = [['sage', '自然绿', 'Soft green'], ['ocean', '海湾蓝', 'Ocean blue'], ['ember', '暖阳橙', 'Warm amber'], ['midnight', '深夜', 'Midnight']];
+      return '<div class="setup-step-content"><p class="setup-eyebrow">06 · APPEARANCE</p><h1 id="setup-wizard-title">' + setupCopy('挑一个主题', 'Choose a theme') + '</h1><p class="setup-lede">' + setupCopy('主题只改变界面外观，不会影响 GPA、任务状态或学校数据。之后可在设置里随时切换。', 'Themes only change the interface. They do not affect GPA, task status, or school data, and can be changed later in Settings.') + '</p><div class="setup-theme-grid">' + themes.map(item => '<button type="button" class="setup-theme-choice ' + ((state.settings.colorTheme || 'sage') === item[0] ? 'selected' : '') + '" data-action="setup-wizard-theme" data-theme="' + item[0] + '"><span class="setup-theme-swatch ' + item[0] + '"></span><strong>' + setupCopy(item[1], item[2]) + '</strong>' + ((state.settings.colorTheme || 'sage') === item[0] ? '<small>' + setupCopy('当前主题', 'Current') + '</small>' : '') + '</button>').join('') + '</div></div>';
+    }
+    if (index === 7) return '<div class="setup-step-content"><p class="setup-eyebrow">07 · REMINDERS</p><h1 id="setup-wizard-title">' + setupCopy('要不要提醒你', 'Would you like reminders?') + '</h1><p class="setup-lede">' + setupCopy('只对已读取到明确截止时间的 Teams 未完成作业安排本机通知。你可以随时关闭。', 'Local notifications are scheduled only for open Teams assignments with a confirmed due date. You can turn them off at any time.') + '</p><label class="setup-reminder-choice"><input id="setup-notifications" type="checkbox" ' + (state.settings.teamsNotifications ? 'checked' : '') + '><span><strong>' + setupCopy('开启作业截止提醒', 'Enable assignment deadline reminders') + '<small>' + setupCopy('首次开启时，macOS 会询问通知权限。', 'macOS will ask for notification permission the first time.') + '</small></strong></span></label></div>';
+    return '<div class="setup-step-content setup-complete"><span class="setup-done-icon">' + icon('check') + '</span><p class="setup-eyebrow">CAMPUSDESK · READY</p><h1 id="setup-wizard-title">' + setupCopy('准备就绪', 'You’re all set') + '</h1><p class="setup-lede">' + setupCopy('已连接的数据会显示在总览中。同步范围与最近读取状态都能在连接设置里查看。', 'Connected data appears on your overview. Review sync coverage and recent read status in Connections & Settings.') + '</p><div class="setup-privacy-note"><strong>' + setupCopy('还没连接也没关系', 'It’s okay if you haven’t connected everything') + '</strong><p>' + setupCopy('每项都可以之后再配置；现有本机数据和原版 CampusDesk 都保持不变。', 'You can finish any step later. Existing local data and the original CampusDesk remain unchanged.') + '</p></div></div>';
+  }
+  function renderSetupWizard() {
+    const host = document.getElementById('setup-wizard-content');
+    if (!host) return;
+    const index = setupWizardIndex(), current = setupWizardSteps[index];
+    const labels = ['Welcome', 'About you', 'Connect ManageBac', 'Connect Microsoft Teams', 'Import Seiue schedule', 'Learning assistant', 'Choose a theme', 'Reminder preferences', 'Done'];
+    const visibleSteps = setupWizardMode === 'version-intro' ? [setupWizardSteps[0]] : setupWizardSteps;
+    const rail = visibleSteps.map((item, i) => '<div class="setup-rail-item active"><span>' + icon(item.icon) + '</span><strong>' + (setupWizardMode === 'version-intro' ? setupCopy('新版提示', 'Version welcome') : setupCopy(item.title, labels[i])) + '</strong></div>').join('');
+    const progress = setupWizardMode === 'version-intro' ? 100 : Math.round((index + 1) / setupWizardSteps.length * 100);
+    const skipLabel = setupWizardMode === 'version-intro' ? setupCopy('稍后', 'Later') : index === setupWizardSteps.length - 1 ? setupCopy('稍后再说', 'Later') : setupCopy('跳过这一步', 'Skip this step');
+    const nextLabel = setupWizardMode === 'version-intro' ? setupCopy('进入看板', 'Open dashboard') : index === setupWizardSteps.length - 1 ? setupCopy('完成', 'Finish') : setupCopy('继续', 'Continue');
+    host.innerHTML = '<div class="setup-wizard-layout"><aside class="setup-wizard-rail"><div class="setup-brand-mark">C<span>·</span></div><h2>CampusDesk</h2><p>' + setupCopy(setupWizardMode === 'version-intro' ? '版本欢迎' : '首次设置向导', setupWizardMode === 'version-intro' ? 'Version welcome' : 'First-run setup') + '</p><div class="setup-rail-list">' + rail + '</div></aside><section class="setup-wizard-main"><button class="setup-wizard-close" type="button" data-action="setup-wizard-close" aria-label="' + setupCopy('暂时关闭', 'Close for now') + '">×</button><div class="setup-wizard-progress"><span style="width:' + progress + '%"></span></div>' + setupWizardStepBody(index) + '<footer class="setup-wizard-footer">' + (index > 0 ? '<button class="button button-light" type="button" data-action="setup-wizard-back">' + setupCopy('上一步', 'Back') + '</button>' : '<span></span>') + '<div><button class="button button-plain" type="button" data-action="setup-wizard-skip">' + skipLabel + '</button><button class="button button-primary" type="button" data-action="setup-wizard-next">' + nextLabel + '</button></div></footer></section></div>';
+  }
+  function consumeSetupWizardRequest(request) {
+    if (!request || request.sequence <= setupWizardHandledSequence) return;
+    setupWizardHandledSequence = request.sequence;
+    if (!themeEdition) return;
+    setupWizardDismissedThisSession = false;
+    setupWizardMode = request.mode === 'version-intro' ? 'version-intro' : 'setup';
+    setupWizardNameDraft = (state.settings.ecIdentityNames || []).join(', ');
+    if (setupWizardMode === 'setup' && request.mode !== 'resume') { state.settings.setupWizardStep = 0; persist(); }
+    renderSetupWizard();
+    showDialog('setup-wizard-dialog');
+  }
+  function requestSetupWizard(mode) {
+    // A monotonically increasing sequence makes repeated identical requests
+    // observable (including a second restart while the dialog is already open).
+    consumeSetupWizardRequest({ sequence: ++setupWizardRequestSequence, mode });
+  }
+  function maybeOpenSetupWizard() {
+    if (!themeEdition || setupWizardDismissedThisSession || document.getElementById('setup-wizard-dialog')?.open) return;
+    if (state.settings.setupWizardCompleted) {
+      if (state.settings.setupWizardIntroVersion !== setupWizardReleaseVersion) requestSetupWizard('version-intro');
+      return;
+    }
+    requestSetupWizard('resume');
+  }
+  function closeSetupWizard() {
+    const input = document.getElementById('setup-identity-names');
+    if (input) setupWizardNameDraft = input.value;
+    if (setupWizardMode === 'version-intro') state.settings.setupWizardIntroVersion = setupWizardReleaseVersion;
+    else state.settings.setupWizardStep = setupWizardIndex();
+    persist(); setupWizardDismissedThisSession = true; closeDialog('setup-wizard-dialog');
+  }
+  function advanceSetupWizard(skip) {
+    if (setupWizardMode === 'version-intro') {
+      state.settings.setupWizardIntroVersion = setupWizardReleaseVersion;
+      persist(); setupWizardDismissedThisSession = true; closeDialog('setup-wizard-dialog');
+      toast(setupCopy('已了解新版提示。首次设置和已有数据均未更改。', 'Version welcome dismissed. Setup and existing data are unchanged.'));
+      return;
+    }
+    const index = setupWizardIndex();
+    const input = document.getElementById('setup-identity-names');
+    if (index === 1 && input) {
+      setupWizardNameDraft = input.value.slice(0, 500);
+      state.settings.ecIdentityNames = [...new Set(setupWizardNameDraft.split(/[，,;\n]/).map(value => value.trim()).filter(Boolean))].slice(0, 10);
+    }
+    if (index === 5) {
+      const provider = document.getElementById('setup-ai-provider')?.value;
+      if (['off', 'ollama', 'deepseek', 'hybrid'].includes(provider)) state.settings.aiProvider = provider;
+    }
+    if (index === 8) {
+      state.settings.setupWizardCompleted = true; state.settings.setupWizardIntroVersion = setupWizardReleaseVersion; delete state.settings.setupWizardStep;
+      persist(); setupWizardDismissedThisSession = true; closeDialog('setup-wizard-dialog');
+      toast(setupCopy('首次设置已完成。之后可在连接与设置中重新打开向导。', 'Setup complete. Reopen the guide from Connections & Settings any time.'));
+      return;
+    }
+    state.settings.setupWizardStep = Math.min(8, index + 1);
+    persist(); renderSetupWizard();
   }
   function navigate(target) {
     if (!pageNames[target]) return;
@@ -1397,14 +2088,16 @@
     if (window.scrollY > 0) window.scrollTo({ top: 0, behavior: 'auto' });
   }
   function renderNav() {
-    const openCount = Core.getTasks(state).filter(t => !t.completed).length;
+    const openCount = openTaskCountForState();
     const nav = document.getElementById('nav');
-    const signature = (isEnglish() ? 'en-US' : 'zh-CN') + ':' + openCount;
+    const signature = (isEnglish() ? 'en-US' : 'zh-CN') + ':' + openCount + ':' + themeEdition;
     if (nav.dataset.renderSignature !== signature) {
-      nav.innerHTML = ['overview', 'learning', 'schedule', 'grades', 'tasks', 'feedback', 'teams', 'ec'].map(key => '<button type="button" class="nav-item ' + (page === key ? 'active' : '') + '" data-page="' + key + '" ' + (page === key ? 'aria-current="page"' : '') + '><span class="icon">' + icon(key === 'learning' ? 'search' : key) + '</span>' + pageName(key) + (key === 'tasks' && openCount ? '<span class="nav-count">' + openCount + '</span>' : '') + '</button>').join('');
+      const pages = ['overview', 'learning', 'schedule', 'grades', 'tasks', 'feedback', 'teams', 'ec'];
+      if (themeEdition) pages.push('assistant');
+      nav.innerHTML = pages.map(key => '<button type="button" class="nav-item ' + (page === key ? 'active' : '') + '" data-page="' + key + '" ' + (page === key ? 'aria-current="page"' : '') + '><span class="icon">' + icon(key === 'learning' || key === 'assistant' ? 'search' : key) + '</span>' + pageName(key) + (key === 'tasks' && openCount ? '<span class="nav-count">' + openCount + '</span>' : '') + '</button>').join('');
       nav.dataset.renderSignature = signature;
     }
-    for (const item of Array.from(nav.children || [])) {
+    for (const item of nav.children || []) {
       if (!item || !item.dataset || !item.dataset.page) continue;
       const active = item.dataset.page === page;
       item.classList.toggle('active', active);
@@ -1412,9 +2105,10 @@
       else item.removeAttribute('aria-current');
     }
     document.querySelector('.settings-nav').classList.toggle('active', page === 'settings');
-    document.getElementById('settings-icon').innerHTML = icon('settings');
+    const settingsIcon = document.getElementById('settings-icon');
+    if (settingsIcon && !settingsIcon.firstElementChild) settingsIcon.innerHTML = icon('settings');
   }
-  function setText(id, value) { const node = document.getElementById(id); if (node) node.textContent = value; }
+  function setText(id, value) { const node = document.getElementById(id), text = String(value == null ? '' : value); if (node && node.textContent !== text) node.textContent = text; }
   function updateStaticChrome() {
     const locale = isEnglish() ? 'en-US' : 'zh-CN';
     if (document.documentElement) document.documentElement.lang = locale;
@@ -1427,19 +2121,30 @@
     setText('breadcrumb-home', t('我的校园'));
     setText('sync-label', t('同步数据'));
     const focusButton = document.getElementById('focus-button');
-    if (focusButton) { focusButton.innerHTML = icon('focus') + '<span>' + (isEnglish() ? (state.settings.focusMode ? 'Exit focus' : 'Focus') : (state.settings.focusMode ? '退出专注' : '专注模式')) + '</span>'; focusButton.setAttribute('aria-pressed', String(Boolean(state.settings.focusMode))); }
+    if (focusButton) {
+      const focusLabel = isEnglish() ? (state.settings.focusMode ? 'Exit focus' : 'Focus') : (state.settings.focusMode ? '退出专注' : '专注模式');
+      if (focusButton.dataset.label !== focusLabel) { focusButton.innerHTML = icon('focus') + '<span>' + focusLabel + '</span>'; focusButton.dataset.label = focusLabel; }
+      const pressed = String(Boolean(state.settings.focusMode));
+      if (focusButton.getAttribute('aria-pressed') !== pressed) focusButton.setAttribute('aria-pressed', pressed);
+    }
   }
   function updateStatus() {
-    const busy = Object.values(statuses).some(s => s.busy);
+    const statusRows = Object.values(statuses);
+    const active = statusRows.find(s => s.busy), busy = Boolean(active);
     const sync = document.getElementById('sync-button');
     sync.disabled = busy; sync.classList.toggle('syncing', busy);
-    const sourceTimes = ['seiue', 'managebac', 'teams'].map(s => sourceStatus(s).lastCapturedAt).filter(Boolean).sort();
-    const active = Object.values(statuses).find(s => s.busy);
-    document.getElementById('global-status').textContent = busy ? localizedRuntimeText(active.message || t('正在读取学校页面…')) : sourceTimes.length ? t('最近读取 ') + lastUpdated(sourceTimes[sourceTimes.length - 1]) : t('尚未同步');
+    let latest = '';
+    for (const source of ['seiue', 'managebac', 'teams']) {
+      const capturedAt = sourceStatus(source).lastCapturedAt;
+      if (capturedAt && capturedAt > latest) latest = capturedAt;
+    }
+    const label = busy ? localizedRuntimeText(active.message || t('正在读取学校页面…')) : latest ? t('最近读取 ') + lastUpdated(latest) : t('尚未同步');
+    const status = document.getElementById('global-status');
+    if (status && status.textContent !== label) status.textContent = label;
   }
   function updateMenu(clock) {
     clock = clock || Core.getClassClock(state);
-    const count = Core.getTasks(state).filter(t => !t.completed).length;
+    const count = openTaskCountForState();
     const title = clock.phase === 'break' || clock.phase === 'lunch' ? (clock.phase === 'break' ? '课间 ' : '午间 ') + clock.remainingLabel : clock.current ? clock.current.title + ' · ' + clock.remainingLabel : clock.next ? (clock.next.start || '') + ' ' + clock.next.title : count ? count + ' 项待办' : 'CampusDesk';
     if (title !== lastMenuTitle) { send('setMenuTitle', { title: title }); lastMenuTitle = title; }
     const isGap = (clock.phase === 'break' || clock.phase === 'lunch') && clock.next && clock.next.start;
@@ -1466,6 +2171,20 @@
     } catch (_) { /* A changing native selection must not interrupt rendering. */ }
     return current;
   }
+  function resizeAssistantQuestionField(field) {
+    if (!field || field.id !== 'assistant-question') return;
+    field.style.height = 'auto';
+    const contentHeight = Number(field.scrollHeight) || 112;
+    const maxHeight = 300;
+    field.style.height = Math.min(maxHeight, Math.max(112, contentHeight)) + 'px';
+    field.style.overflowY = contentHeight > maxHeight ? 'auto' : 'hidden';
+  }
+  function flushDeferredAssistantRender() {
+    if (!assistantRenderDeferred || page !== 'assistant') return;
+    if (document.activeElement && document.activeElement.id === 'assistant-question') return;
+    assistantRenderDeferred = false;
+    render();
+  }
   function restoreReading(saved) {
     if (!saved) return;
     for (const id of saved.details) { const node = document.getElementById(id); if (node) node.open = true; }
@@ -1483,11 +2202,19 @@
     window.scrollTo(saved.x,Math.max(0,y));
   }
   function render() {
-    cachedSearchIndex = null;
-    teamsPostsCache = new Map();
-    ecSearchIndex = null;
-    ecSearchBuildProgress = 0;
-    ecSearchBuildToken++;
+    // Replacing the page DOM while WebKit's textarea is focused interrupts
+    // marked-text composition (notably Chinese Pinyin). Keep the live editor
+    // mounted until blur, and render the newest state immediately afterwards.
+    const assistantEditor = page === 'assistant' && document.activeElement && document.activeElement.id === 'assistant-question'
+      ? document.activeElement : null;
+    if (assistantEditor) {
+      assistantQuestionDraft = String(assistantEditor.value || '').slice(0, 6000);
+      assistantRenderDeferred = true;
+      updateStatus();
+      updateAssistantWorkspace();
+      return;
+    }
+    assistantRenderDeferred = false;
     const pageChanged = renderedPage !== null && renderedPage !== page;
     const saved = renderedPage === page ? readingState(document.getElementById('content')) : null;
     const dateForm = renderedPage === page && page === 'grades' ? document.getElementById('gpa-term-dates-form') : null;
@@ -1495,6 +2222,7 @@
     const retainedDateInputs = editingTerm ? ['gpa-term-start', 'gpa-term-end'].map(id => document.getElementById(id)).filter(Boolean) : [];
     const retainedPlanForm = renderedPage === page && page === 'grades' && gradePlanner ? gradePlanner.retain() : null;
     const retainedSchoolInputs = renderedPage === page && page === 'settings' && schoolConfigurationDraft ? ['seiue-url', 'managebac-url'].map(id => document.getElementById(id)).filter(Boolean) : [];
+    const retainedAssistantKey = renderedPage === page && page === 'settings' && document.activeElement?.id === 'assistant-deepseek-key' ? document.activeElement : null;
     const graphConfigOpen = page === 'settings' && document.getElementById('graph-configuration') && document.getElementById('graph-configuration').open;
     const shell = document.getElementById('app-shell');
     // Unrelated sync/status renders must not throw away the user's chart view.
@@ -1508,15 +2236,21 @@
         deferGpaChartDispose(oldChart, window.klinecharts);
       }
     }
-    if (shell) { shell.dataset.dashboardTheme = state.settings.dashboardTheme || 'classic'; shell.dataset.focusMode = String(Boolean(state.settings.focusMode)); }
+    if (shell) { shell.dataset.dashboardTheme = state.settings.dashboardTheme || 'classic'; shell.dataset.colorTheme = state.settings.colorTheme || 'sage'; shell.dataset.focusMode = String(Boolean(state.settings.focusMode)); }
+    if (document.documentElement) document.documentElement.dataset.colorTheme = state.settings.colorTheme || 'sage';
     renderNav();
     updateStaticChrome();
-    document.getElementById('breadcrumb-page').textContent = pageName(page);
-    document.getElementById('sidebar-clock').textContent = Core.clock();
-    document.getElementById('sync-icon').innerHTML = icon('refresh');
+    setText('breadcrumb-page', pageName(page));
+    setText('sidebar-clock', Core.clock());
+    const syncIcon = document.getElementById('sync-icon');
+    if (syncIcon && !syncIcon.firstElementChild) syncIcon.innerHTML = icon('refresh');
     const pageRenderers = { overview: renderOverview, learning: renderLearning, schedule: renderSchedule, grades: renderGrades, tasks: renderTasks, feedback: renderFeedback, teams: renderTeams, ec: renderEC, settings: renderSettings };
+    if (themeEdition) pageRenderers.assistant = renderAssistant;
     const content = document.getElementById('content');
     content.innerHTML = localizedHTML(state.settings.focusMode ? renderFocusMode : pageRenderers[page]);
+    if (retainedAssistantKey) document.getElementById('assistant-deepseek-key')?.replaceWith(retainedAssistantKey);
+    ensureAssistantModels();
+    resizeAssistantQuestionField(document.getElementById('assistant-question'));
     if (gradePlanner) gradePlanner.restore(retainedPlanForm);
     // Sync may refresh the page while either date is only partially typed.
     // Keep both editing controls, not just the one that currently has focus.
@@ -1579,7 +2313,7 @@
     return value && Number.isFinite(time) ? new Date(time + 8 * 60 * 60 * 1000).toISOString().slice(0, 16) : '';
   }
   function openTaskDetail(id) {
-    const task = Core.getTasks(state).find(item => item.id === id);
+    const task = taskRowsForState().find(item => item.id === id);
     if (!task) { toast('这条任务暂时无法找到，请刷新后重试。'); return; }
     detailTaskId = id;
     const teams = task.source === 'teams', due = taskDue(task), source = teams ? 'teams' : 'managebac';
@@ -1611,7 +2345,8 @@
   function syncReminders() {
     if (!native) return;
     const now = Date.now(), lead = Number(state.settings.reminderMinutes == null ? 30 : state.settings.reminderMinutes) * 60000;
-    const items = state.settings.teamsNotifications ? Core.getTasks(state).filter(task => task.source === 'teams' && !task.completed).map(task => {
+    const allowedSubjects = new Set(state.settings.reminderSubjects || []);
+    const items = state.settings.teamsNotifications ? openTasksForState('teams').filter(task => !allowedSubjects.size || allowedSubjects.has(task.course || '未分类')).map(task => {
       const due = new Date(task.dueAt || '').getTime(), url = Core.safeURL(task.url, 'teams');
       if (!Number.isFinite(due) || due <= now || !url) return null;
       const fire = due - lead > now ? due - lead : due;
@@ -1646,7 +2381,91 @@
     if (!target) return;
     if (target.dataset.page) { navigate(target.dataset.page); return; }
     const action = target.dataset.action;
-    if (action === 'connect-source') startQuickConnection(target.dataset.source);
+    if (action === 'setup-wizard-close') closeSetupWizard();
+    else if (action === 'setup-wizard-next' || action === 'setup-wizard-skip') advanceSetupWizard();
+    else if (action === 'setup-wizard-back') {
+      const input = document.getElementById('setup-identity-names');
+      if (input) setupWizardNameDraft = input.value.slice(0, 500);
+      state.settings.setupWizardStep = Math.max(0, setupWizardIndex() - 1);
+      persist(); renderSetupWizard();
+    }
+    else if (action === 'setup-wizard-resume') requestSetupWizard('resume');
+    else if (action === 'setup-wizard-restart') requestSetupWizard('restart');
+    else if (action === 'setup-wizard-connect') {
+      const source = target.dataset.source;
+      if (!['seiue', 'managebac', 'teams'].includes(source)) return;
+      // Keep the wizard modal mounted while the native school window opens.
+      // When the user returns from sign-in, the exact step they started from
+      // is still visible instead of silently disappearing for the session.
+      startQuickConnection(source);
+    }
+    else if (action === 'setup-ai-configure') {
+      const provider = document.getElementById('setup-ai-provider')?.value;
+      if (['off', 'ollama', 'deepseek', 'hybrid'].includes(provider)) state.settings.aiProvider = provider;
+      state.settings.setupWizardStep = setupWizardIndex(); persist(); closeSetupWizard(); navigate('assistant');
+    }
+    else if (action === 'assistant-switch-provider') {
+      const provider = target.dataset.provider;
+      if (!themeEdition || assistantBusy || !['ollama', 'deepseek', 'hybrid'].includes(provider)) return;
+      state.settings.aiProvider = provider;
+      assistantPendingRequest = null;
+      persist();
+      updateAssistantWorkspace();
+    }
+    else if (action === 'assistant-send') sendAssistantQuestion();
+    else if (action === 'assistant-open-key-settings') {
+      navigate('settings');
+      const input = document.getElementById('assistant-deepseek-key') || document.getElementById('assistant-ollama-model');
+      if (input) { input.scrollIntoView({ block: 'center', behavior: 'smooth' }); input.focus(); }
+    }
+    else if (action === 'assistant-refresh-models') { requestAssistantModels(target.dataset.provider, true); render(); }
+    else if (action === 'assistant-guide-link') {
+      const id = target.dataset.guideId;
+      if (!themeEdition || !Object.prototype.hasOwnProperty.call(assistantGuideLinks, id)) return;
+      if (native) send('assistantOpenGuide', { id });
+      else window.open(assistantGuideLinks[id], '_blank', 'noopener,noreferrer');
+    }
+    else if (action === 'assistant-guide-copy') { copyAssistantGuideCommand(target.dataset.guideId); }
+    else if (action === 'assistant-review') openAssistantReview();
+    else if (action === 'assistant-confirm-send') confirmAssistantSend();
+    else if (action === 'assistant-cancel-review') { assistantPendingRequest = null; closeDialog('assistant-confirm-dialog'); }
+    else if (action === 'assistant-edit-key') {
+      if (assistantKeyRecoveryBusy) return;
+      assistantKeyEditing = true; render();
+      document.getElementById('assistant-deepseek-key')?.focus();
+    }
+    else if (action === 'assistant-cancel-key-edit') { assistantKeyEditing = false; render(); }
+    else if (action === 'assistant-restore-key') {
+      if (!native || !themeEdition || assistantKeyRecoveryBusy) return;
+      assistantKeyRecoveryBusy = true;
+      if (!send('assistantRestoreDeepSeekKey')) { assistantKeyRecoveryBusy = false; toast(assistantErrorText('keyStore')); }
+      render();
+    }
+    else if (action === 'assistant-save-key') {
+      if (!themeEdition || !native || assistantKeyRecoveryBusy) return;
+      const input = document.getElementById('assistant-deepseek-key'), key = String(input && input.value || '').trim();
+      if (!key) { toast(assistantCopy('请先粘贴 DeepSeek API 密钥。', 'Paste a DeepSeek API key first.')); return; }
+      if (input) input.value = '';
+      if (!send('assistantSaveDeepSeekKey', { key })) toast(assistantCopy('无法连接 macOS 钥匙串。', 'Could not reach macOS Keychain.'));
+    }
+    else if (action === 'assistant-delete-key') {
+      if (!themeEdition || !native || assistantKeyRecoveryBusy || !window.confirm(assistantCopy('删除保存在主题版中的 DeepSeek API 密钥？', 'Delete the DeepSeek API key saved for this Theme Edition?'))) return;
+      send('assistantDeleteDeepSeekKey');
+    }
+    else if (action === 'assistant-clear') {
+      assistantTranscript = []; assistantReferences = []; assistantQuestionDraft = ''; assistantBusy = false; assistantActiveRequestID = '';
+      render(); toast(assistantCopy('当前窗口中的对话和来源引用已清除。', 'Conversation and source references in this window were cleared.'));
+    }
+    else if (action === 'assistant-reference') {
+      const ref = assistantReferences[Number(target.dataset.index)];
+      if (ref) openSource(ref.source, ref.url);
+    }
+    else if (action === 'setup-wizard-theme') {
+      const theme = target.dataset.theme;
+      if (!['sage', 'ocean', 'ember', 'midnight'].includes(theme)) return;
+      state.settings.colorTheme = theme; persist(); render(); renderSetupWizard();
+    }
+    else if (action === 'connect-source') startQuickConnection(target.dataset.source);
     else if (action === 'connection-options') startQuickConnection(target.dataset.source, true);
     else if (action === 'close-quick-connect') { pendingQuickConnection = null; closeDialog('quick-connect-dialog'); }
     else if (action === 'sync-school') { if (['seiue', 'managebac'].includes(target.dataset.source)) send('syncSchool', { source: target.dataset.source }); }
@@ -1692,6 +2511,12 @@
       state.settings.dashboardTheme = theme; persist(); render();
       toast(theme === 'board' ? '已切换到卡片看板。' : '已切换回经典面板。');
     }
+    else if (action === 'color-theme') {
+      const theme = target.dataset.theme;
+      if (!['sage', 'ocean', 'ember', 'midnight'].includes(theme)) return;
+      state.settings.colorTheme = theme; persist(); render();
+      toast(t({ sage: '界面配色已切换为自然绿。', ocean: '界面配色已切换为海湾蓝。', ember: '界面配色已切换为暖阳橙。', midnight: '界面配色已切换为深夜。' }[theme]));
+    }
     else if (action === 'appearance-settings') {
       navigate('settings');
       const settings = document.getElementById('appearance-settings');
@@ -1727,11 +2552,11 @@
     else if (action === 'task-detail') openTaskDetail(target.dataset.id);
     else if (action === 'close-detail') { detailTaskId = null; closeDialog('detail-dialog'); }
     else if (action === 'toggle-detail-task') {
-      const item = Core.getTasks(state).find(task => task.id === target.dataset.id);
+      const item = taskRowsForState().find(task => task.id === target.dataset.id);
       if (item) { state.taskChecks[item.id] = !item.completed; persist(); render(); openTaskDetail(item.id); }
     }
     else if (action === 'save-task-due') {
-      const task = Core.getTasks(state).find(item => item.id === target.dataset.id && item.source === 'teams');
+      const task = taskRowsForState().find(item => item.id === target.dataset.id && item.source === 'teams');
       if (!task) return;
       const value = document.getElementById('detail-due').value;
       const date = value ? new Date(value + ':00+08:00') : null;
@@ -1778,16 +2603,17 @@
     else if (action === 'add-task') { document.getElementById('task-form').reset(); openTaskDialog(); document.getElementById('task-title').focus(); }
     else if (action === 'close-task') closeTaskDialog();
     else if (action === 'toggle-task') {
-      const item = Core.getTasks(state).find(t => t.id === target.dataset.id);
+      const item = taskRowsForState().find(t => t.id === target.dataset.id);
       if (item) { state.taskChecks[item.id] = !item.completed; persist(); render(); }
     } else if (action === 'delete-task') {
       const id = target.dataset.id;
       if (!window.confirm('删除这条个人待办？')) return;
       state.manualTasks = state.manualTasks.filter(t => t.id !== id); delete state.taskChecks[id]; persist(); render();
     } else if (action === 'toggle-feedback') {
-      const item = Core.getFeedback(state).find(f => f.id === target.dataset.id);
+      const item = feedbackRowsForState().find(f => f.id === target.dataset.id);
       if (item) { state.feedbackRead[item.id] = !item.read; persist(); render(); }
     } else if (action === 'task-filter') { taskFilter = target.dataset.filter; render(); }
+    else if (action === 'todo-overdue-toggle') { taskOverdueOpen = !taskOverdueOpen; render(); }
     else if (action === 'task-subject-filter') { taskSubjectFilter = target.dataset.filter === 'focus' ? 'focus' : 'all'; render(); }
     else if (action === 'feedback-filter') { feedbackFilter = target.dataset.filter; render(); }
     else if (action === 'prev-day') shiftDate(-1);
@@ -1848,11 +2674,46 @@
       if (target.dataset.source === 'teams') { toast('Teams 退出登录请在 ' + teamsBrowserName() + ' 中操作。'); return; }
       send('clearSession', { source: target.dataset.source });
     }
+    else if (action === 'reminder-subjects-all') { state.settings.reminderSubjects = []; persist(); render(); toast(t('已恢复所有学科提醒。')); }
   });
   document.addEventListener('change', event => {
     const el = event.target;
     if (getGradePlanner().change(el)) return;
-    if (el.id === 'ec-date-filter') { ecDateFilter=/^(?:all|unknown|\d{4}-\d{2}-\d{2})$/.test(el.value)?el.value:'all';ecVisibleLimit=MESSAGE_PAGE_SIZE;updateECResults(); }
+    if (el.id === 'assistant-provider' || el.id === 'setup-ai-provider') {
+      const provider = el.value;
+      if (!themeEdition || !['off', 'ollama', 'deepseek', 'hybrid'].includes(provider)) return;
+      const oldRemoteModel = String(state.settings.aiModel || '');
+      const oldLocalModel = String(state.settings.aiOllamaModel || '');
+      if (!oldRemoteModel || !oldRemoteModel.startsWith('deepseek')) state.settings.aiModel = 'deepseek-flash';
+      if (!oldLocalModel) state.settings.aiOllamaModel = 'qwen3:8b';
+      state.settings.aiProvider = provider; persist();
+      if (el.id === 'setup-ai-provider') renderSetupWizard(); else render();
+    }
+    else if (el.id === 'assistant-model') {
+      if (!themeEdition || !assistantCatalogs.deepseek.models.includes(el.value)) return;
+      state.settings.aiModel = el.value; persist();
+      toast(assistantCopy('已切换 DeepSeek 模型。', 'DeepSeek model selected.'));
+    }
+    else if (el.id === 'assistant-ollama-model') {
+      if (!themeEdition || !assistantCatalogs.ollama.models.includes(el.value)) return;
+      state.settings.aiOllamaModel = el.value; persist();
+      toast(assistantCopy('已切换本机 Ollama 模型。', 'Local Ollama model selected.'));
+    }
+    else if (el.matches('[data-ai-context]')) {
+      if (!themeEdition) return;
+      const key = el.dataset.aiContext, selected = assistantSelectedContext();
+      if (!assistantContextOptions.some(item => item[0] === key)) return;
+      if (el.checked) selected.add(key); else selected.delete(key);
+      state.settings.aiContextCategories = [...selected]; persist();
+    }
+    else if (el.id === 'setup-notifications') {
+      if (!native && el.checked) { el.checked = false; toast('系统通知需要使用 CampusDesk Mac 应用。'); return; }
+      state.settings.teamsNotifications = Boolean(el.checked);
+      if (el.checked) send('requestNotifications');
+      persist();
+      toast(el.checked ? '已启用作业截止提醒。' : '作业截止提醒已关闭。');
+    }
+    else if (el.id === 'ec-date-filter') { ecDateFilter=/^(?:all|unknown|\d{4}-\d{2}-\d{2})$/.test(el.value)?el.value:'all';ecVisibleLimit=MESSAGE_PAGE_SIZE;updateECResults(); }
     else if (el.matches('[data-plan-minutes]')) {
       const id = el.dataset.planMinutes, value = Number(el.value);
       if (!id || ![15, 30, 45, 60, 90, 120].includes(value)) return;
@@ -1903,13 +2764,55 @@
       if (el.checked) send('requestNotifications');
       persist(); toast(el.checked ? '已启用 Teams 截止提醒，请允许 Mac 通知。' : 'Teams 作业提醒已关闭。');
     }
-    else if (el.id === 'reminder-minutes') { state.settings.reminderMinutes = Number(el.value); persist(); toast('作业提醒时间已更新。'); }
+    else if (el.id === 'reminder-minutes') { state.settings.reminderMinutes = Number(el.value); persist(); toast(t('作业提醒时间已更新。')); }
+    else if (el.matches('[data-reminder-subject]')) {
+      const subject = el.dataset.reminderSubject;
+      if (!subject || subject.length > 120) return;
+      const available = [...new Set(openTasksForState('teams').map(task => task.course || '未分类'))];
+      const configured = state.settings.reminderSubjects || [];
+      const selected = new Set(configured.length ? configured : available);
+      if (el.checked) selected.add(subject); else selected.delete(subject);
+      state.settings.reminderSubjects = available.length && available.every(value => selected.has(value)) && selected.size === available.length ? [] : [...selected].sort((a, b) => a.localeCompare(b, 'zh-CN'));
+      persist(); render(); toast(t('提醒筛选已更新。'));
+    }
     else if (el.id === 'seiue-url' || el.id === 'managebac-url') {
       captureSchoolConfigurationDraft();
     }
   });
+  window.addEventListener('online', () => { if (themeEdition && page === 'assistant' && ['deepseek', 'hybrid'].includes(assistantProvider())) render(); });
+  window.addEventListener('offline', () => { if (themeEdition && page === 'assistant' && ['deepseek', 'hybrid'].includes(assistantProvider())) render(); });
+  document.addEventListener('compositionstart', event => {
+    if (event.target && event.target.id === 'assistant-question') assistantQuestionComposing = true;
+  });
+  document.addEventListener('compositionend', event => {
+    if (!event.target || event.target.id !== 'assistant-question') return;
+    assistantQuestionComposing = false;
+    assistantQuestionDraft = String(event.target.value || '').slice(0, 6000);
+    resizeAssistantQuestionField(event.target);
+    updateAssistantSendControls();
+  });
+  document.addEventListener('focusout', event => {
+    if (!event.target || event.target.id !== 'assistant-question') return;
+    assistantQuestionDraft = String(event.target.value || '').slice(0, 6000);
+    // Let the same pointer/keyboard event finish (for example, clicking
+    // “Send”) before refreshing the page after the editor blurs.
+    window.setTimeout(flushDeferredAssistantRender, 0);
+  });
+  document.addEventListener('keydown', event => {
+    if (!event.target || event.target.id !== 'assistant-question' || event.key !== 'Enter') return;
+    if (!(event.metaKey || event.ctrlKey) || event.repeat || event.isComposing || assistantQuestionComposing || event.keyCode === 229) return;
+    event.preventDefault();
+    assistantQuestionDraft = String(event.target.value || '').slice(0, 6000);
+    sendAssistantQuestion();
+  });
   document.addEventListener('input', event => {
     if (getGradePlanner().input(event.target)) return;
+    if (event.target.id === 'assistant-question') {
+      assistantQuestionDraft = String(event.target.value || '').slice(0, 6000);
+      resizeAssistantQuestionField(event.target);
+      updateAssistantSendControls();
+      return;
+    }
     if (event.target.id === 'seiue-url' || event.target.id === 'managebac-url') {
       captureSchoolConfigurationDraft(); return;
     }
@@ -2144,7 +3047,63 @@
     receive: function (event) {
       if (!event || typeof event !== 'object') return;
       try {
-        if (event.type === 'schoolCalendarFile') { importSchoolCalendarText(event.text, event.fileName); }
+        if (event.type === 'assistantStatus') {
+          const keyWasReady = assistantKeyReady();
+          assistantStatus.deepSeekKeyConfigured = event.deepSeekKeyConfigured === true;
+          assistantStatus.deepSeekKeyState = ['missing', 'stored', 'locked', 'unavailable'].includes(event.deepSeekKeyState) ? event.deepSeekKeyState : (assistantStatus.deepSeekKeyConfigured ? 'stored' : 'missing');
+          if ((assistantKeyReady() && !keyWasReady) || ['keySaved', 'keyDeleted', 'keyRestored'].includes(event.notice)) {
+            Object.assign(assistantCatalogs.deepseek, { attempted: false, loaded: false, loading: false, error: '', requestId: '' });
+          }
+          if (['keySaved', 'keyDeleted', 'keyRestored'].includes(event.notice)) assistantKeyEditing = false;
+          if (['keyRestored', 'keyRecoveryFinished'].includes(event.notice)) assistantKeyRecoveryBusy = false;
+          if (event.notice === 'keySaved') toast(assistantCopy('DeepSeek API 密钥已安全保存。', 'DeepSeek API key saved securely.'));
+          else if (event.notice === 'keyRestored') toast(assistantCopy('已恢复密钥访问，可继续使用学习助手。', 'Key access restored. The assistant is ready.'));
+          else if (event.notice === 'keyDeleted') toast(assistantCopy('DeepSeek API 密钥已删除。', 'DeepSeek API key deleted.'));
+          if (event.errorCode) toast(assistantErrorText(event.errorCode));
+          if (themeEdition && ['assistant', 'settings'].includes(page)) render();
+        }
+        else if (event.type === 'assistantGuideResult') {
+          if (themeEdition) assistantGuideResult(event.operation, event.success === true);
+        }
+        else if (event.type === 'assistantModels') {
+          const catalog = assistantCatalogs[event.provider];
+          if (!catalog || catalog.requestId !== event.requestId) return;
+          catalog.loading = false;
+          catalog.error = typeof event.errorCode === 'string' ? event.errorCode : '';
+          if (!catalog.error && Array.isArray(event.models)) {
+            catalog.models = [...new Set(event.models.filter(value => typeof value === 'string' && /^[A-Za-z0-9._:/-]{1,100}$/.test(value)))].slice(0, 100);
+            catalog.loaded = true;
+            const setting = event.provider === 'ollama' ? 'aiOllamaModel' : 'aiModel';
+            const selected = event.provider === 'ollama' ? assistantOllamaModel() : assistantModel();
+            if (catalog.models.length && !catalog.models.includes(selected)) { state.settings[setting] = catalog.models[0]; persist(); }
+          }
+          if (themeEdition && ['assistant', 'settings'].includes(page)) render();
+        }
+        else if (event.type === 'assistantResponse') {
+          if (event.requestId !== assistantActiveRequestID) return;
+          assistantBusy = false; assistantActiveRequestID = '';
+          if (['keyAccess', 'missingKey', 'keyStore'].includes(event.errorCode)) {
+            assistantStatus.deepSeekKeyState = event.errorCode === 'missingKey' ? 'missing' : event.errorCode === 'keyAccess' ? 'locked' : 'unavailable';
+            const editor = document.getElementById('assistant-question');
+            const draft = editor ? String(editor.value || '') : assistantQuestionDraft;
+            if (!draft.trim()) {
+              assistantQuestionDraft = assistantSentQuestion;
+              if (editor) { editor.value = assistantQuestionDraft; resizeAssistantQuestionField(editor); }
+            }
+          }
+          assistantSentQuestion = '';
+          if (typeof event.answer === 'string' && event.answer.trim()) {
+            const providerName = event.providerUsed === 'ollama' ? 'Ollama' : 'DeepSeek';
+            const reason = event.fallbackReason === 'offline' ? assistantCopy('（当前离线）', ' (offline)') : event.fallbackReason === 'deepseekUnavailable' ? assistantCopy('（DeepSeek 网络不可达，已改用本机）', ' (DeepSeek unreachable; used local model)') : '';
+            const attribution = assistantCopy('\n\n— 本次由 ' + providerName + ' 回复' + reason, '\n\n— Answered by ' + providerName + reason);
+            assistantTranscript.push({ role: 'assistant', content: event.answer.slice(0, 100_000), display: event.answer.slice(0, 100_000) + attribution });
+          }
+          else assistantTranscript.push({ role: 'assistant', content: assistantErrorText(event.errorCode), display: assistantErrorText(event.errorCode) });
+          if (assistantTranscript.length > 12) assistantTranscript = assistantTranscript.slice(-12);
+          if (page === 'assistant') render();
+          if (event.errorCode) toast(assistantErrorText(event.errorCode));
+        }
+        else if (event.type === 'schoolCalendarFile') { importSchoolCalendarText(event.text, event.fileName); }
         else if (event.type === 'schoolCalendarPDF') { previewSchoolCalendarPDF(event.text, event.fileName); }
         else if (event.type === 'schoolCalendarFileError') { toast(t(event.message || '无法读取校历文件。')); }
         else if (event.type === 'schoolConfiguration') { applySchoolConfiguration(event.config, event.saved === true); }
@@ -2153,7 +3112,7 @@
           quickConnectionError('学校网址未能保存，请检查网址及本机磁盘写入权限后重试。');
           toast(t('学校网址未能保存，请检查网址及本机磁盘写入权限后重试。'));
         }
-        else if (event.type === 'state') { state = event.state && Object.keys(event.state).length ? Core.validateState(event.state) : Core.emptyState(); render(); syncReminders(); }
+        else if (event.type === 'state') { state = event.state && Object.keys(event.state).length ? Core.validateState(event.state) : Core.emptyState(); invalidateDerivedCaches(); render(); syncReminders(); maybeOpenSetupWizard(); }
         else if (event.type === 'teamsAutoStatus') {
           teamsAuto.running = Boolean(event.running);
           ['phase','message','updatedAt','coverage'].forEach(key => { if (typeof event[key] === 'string') teamsAuto[key] = event[key].slice(0,1600); });
@@ -2215,7 +3174,8 @@
           }
           statuses.teams = { busy: graphStatus.busy, message: graphStatus.message || graphStatusCopy() };
           const connectionChanged=priorConnection!==JSON.stringify([graphStatus.configured,graphStatus.connected,graphStatus.authRequired,graphStatus.requiresAdminConsent,graphStatus.clientId,graphStatus.tenant]);
-          if(connectionChanged && ['settings','teams','ec','overview'].includes(page))render();else updateGraphProgress();
+          if (!graphStatus.busy && graphBatchRenderPending) flushGraphBatchRender();
+          else if(connectionChanged && ['settings','teams','ec','overview'].includes(page))render();else updateGraphProgress();
         }
         else if (event.type === 'graphBatch') {
           if (!window.CampusGraph) throw new Error('Teams 数据适配文件未能加载，请重新安装完整应用。');
@@ -2238,7 +3198,9 @@
             }
             send('graphBatchProcessed', acknowledgement);
           }
-          render();
+          // Keep the durable save and native acknowledgement per batch, but
+          // avoid rebuilding message/EC indexes and the whole DOM for every page.
+          scheduleGraphBatchRender();
         }
         else if (event.type === 'graphReset') {
           state = Core.resetTeamsData(state);
@@ -2300,16 +3262,22 @@
       }).then(text => {
         if (text.length > 8192) throw new Error('School configuration too large');
         Core.configureSchools(JSON.parse(text));
-      }).catch(() => {}).finally(() => { restoreBrowserState(); render(); });
-    } else restoreBrowserState();
+      }).catch(() => {}).finally(() => { restoreBrowserState(); render(); maybeOpenSetupWizard(); });
+    } else { restoreBrowserState(); maybeOpenSetupWizard(); }
   }
   document.getElementById('quick-connect-dialog').addEventListener('cancel', () => { pendingQuickConnection = null; });
+  if (window.campusDesktop && typeof window.campusDesktop.onEvent === 'function') {
+    window.campusDesktop.onEvent(event => window.CampusDesk.receive(event));
+  }
   render();
+  updateTaskCardCountdowns();
   send('ready');
   send('requestGraphStatus');
   send('requestTeamsAutoStatus');
   setInterval(() => {
     document.getElementById('sidebar-clock').textContent = Core.clock();
+    const todoMinute = Math.floor(Date.now() / 60000);
+    if (todoMinute !== lastTodoCountdownMinute) { lastTodoCountdownMinute = todoMinute; updateTaskCardCountdowns(); }
     const clock = updateClock(); updateMenu(clock);
     const today = Core.today(), boundary = clock.phase + ':' + (clock.current && clock.current.id || '') + ':' + (clock.next && clock.next.id || '');
     const dialogOpen = ['task-dialog', 'detail-dialog', 'teams-page-dialog'].some(id => document.getElementById(id).open);

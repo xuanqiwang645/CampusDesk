@@ -6,8 +6,8 @@ const vm = require('node:vm');
 const fs = require('node:fs');
 const path = require('node:path');
 const root = path.join(__dirname, '..');
-function harness({ native = true, hash = '#overview', saved = null, idle = false } = {}) {
-  const nodes = new Map(), listeners = {}, intervals = [], sent = [], opened = [], store = new Map(), idleQueue = [];
+function harness({ native = true, hash = '#overview', saved = null, idle = false, themeEdition = false, online = true, appVersion = '1.0.0' } = {}) {
+  const nodes = new Map(), listeners = {}, windowListeners = {}, intervals = [], sent = [], opened = [], store = new Map(), idleQueue = [], timeouts = [];
   let instant = Date.parse('2026-09-19T00:41:28Z');
   class Clock extends Date { constructor(...args) { super(...(args.length ? args : [instant])); } static now() { return instant; } }
   class Element {
@@ -15,7 +15,8 @@ function harness({ native = true, hash = '#overview', saved = null, idle = false
     set innerHTML(html) { for (const id of this.children) nodes.delete(id); this.children = []; this.html = html; this.writes++; scan(html, this); }
     get innerHTML() { return this.html || ''; }
     addEventListener(type, cb) { this.events[type] = cb; }
-    setAttribute(name, value) { if (name === 'open') this.open = true; this[name] = value; }
+    getAttribute(name) { return Object.hasOwn(this.attributes, name) ? this.attributes[name] : null; }
+    setAttribute(name, value) { this.attributes[name] = String(value); if (name === 'open') this.open = true; this[name] = value; }
     removeAttribute(name) { if (name === 'open') this.open = false; }
     matches(selector) { return selector.split(',').some(part => { const match = /^\[([\w-]+)\]$/.exec(part.trim()); return Boolean(match && Object.hasOwn(this.attributes, match[1])); }); }
     animate(keyframes, options) { const animation = { keyframes, options, cancelled: false }; this.animations.push(animation); return { cancel() { animation.cancelled = true; }, set onfinish(callback) { animation.onfinish = callback; } }; }
@@ -33,16 +34,18 @@ function harness({ native = true, hash = '#overview', saved = null, idle = false
       node.tagName=match[0].match(/^<([a-z]+)/i)[1].toUpperCase();for(const attribute of match[0].matchAll(/\s([\w-]+)(?:="([^"]*)")?/g))node.attributes[attribute[1]]=attribute[2] || '';
       for (const [name, value] of Object.entries(node.attributes)) if (name.startsWith('data-')) node.dataset[name.slice(5).replace(/-([a-z])/g, (_, letter) => letter.toUpperCase())] = value;
       node.value = value ? value[1] : ''; node.checked = /\bchecked\b/.test(match[0]);
+      if (node.tagName === 'TEXTAREA') node.value = html.slice(match.index + match[0].length).split('</textarea>')[0].replace(/&(?:amp|lt|gt|quot|#39);/g, entity => ({ '&amp;': '&', '&lt;': '<', '&gt;': '>', '&quot;': '"', '&#39;': "'" })[entity]);
       nodes.set(node.id, node); if (owner) owner.children.push(node.id);
     }
   }
   scan(fs.readFileSync(path.join(root, 'Resources/index.html'), 'utf8'));
   nodes.set('settings-nav', new Element('settings-nav'));
   if (saved) store.set('campusdesk.browser.v1', JSON.stringify(saved));
-  const ctx = { Date: Clock, Intl, URL, URLSearchParams, Blob, setTimeout: () => 1, clearTimeout() {}, setInterval: (cb, ms) => { intervals.push({ cb, ms }); return intervals.length; }, console,
-    location: { hash }, localStorage: { getItem: key => store.get(key), setItem: (key, value) => store.set(key, value) },
-    document: { getElementById: id => nodes.get(id) || null, querySelector: selector => selector === '.settings-nav' ? nodes.get('settings-nav') : null, createElement: () => new Element(), addEventListener: (event, cb) => (listeners[event] ||= []).push(cb) },
-    addEventListener() {}, scrollX:0,scrollY:0,scrollTo(x,y) {this.scrollX=x;this.scrollY=y;}, requestAnimationFrame: callback => { callback(instant); return 1; }, confirm: () => true, open: (...args) => opened.push(args), crypto: { randomUUID: () => 'test-uuid' }
+  const ctx = { Date: Clock, Intl, URL, URLSearchParams, Blob, CampusDeskThemeEdition: themeEdition, CampusDeskAppVersion: { version: appVersion, name: 'Orion' }, setTimeout: () => 1, clearTimeout() {}, setInterval: (cb, ms) => { intervals.push({ cb, ms }); return intervals.length; }, console,
+    location: { hash }, navigator: { onLine: online }, localStorage: { getItem: key => store.get(key), setItem: (key, value) => store.set(key, value) },
+    setTimeout: callback => { timeouts.push(callback); return timeouts.length; },
+    document: { documentElement: { dataset: {} }, getElementById: id => nodes.get(id) || null, querySelectorAll: () => [], querySelector: selector => selector === '.settings-nav' ? nodes.get('settings-nav') : null, createElement: () => new Element(), addEventListener: (event, cb) => (listeners[event] ||= []).push(cb) },
+    addEventListener: (event, callback) => (windowListeners[event] ||= []).push(callback), scrollX:0,scrollY:0,scrollTo(x,y) {this.scrollX=x;this.scrollY=y;}, requestAnimationFrame: callback => { callback(instant); return 1; }, confirm: () => true, open: (...args) => opened.push(args), crypto: { randomUUID: () => 'test-uuid' }
   };
   if (idle) ctx.requestIdleCallback = callback => { idleQueue.push(callback); return idleQueue.length; };
   ctx.window = ctx;
@@ -61,18 +64,785 @@ function harness({ native = true, hash = '#overview', saved = null, idle = false
     input: (id, value) => { const element = nodes.get(id); assert.ok(element, id); element.value = value; for (const listener of listeners.input || []) listener({ target: element }); },
     runIdleStep: () => { const callback = idleQueue.shift(); if (callback) callback({ timeRemaining: () => 50 }); },
     drainIdle: () => { let steps = 0; while (idleQueue.length && steps++ < 1000) { const callback = idleQueue.shift(); callback({ timeRemaining: () => 50 }); } assert.ok(steps < 1000, 'idle work should finish'); },
+    composition: (type, id, value) => { const target = nodes.get(id); assert.ok(target, id); if (value !== undefined) target.value = value; for (const listener of listeners[type] || []) listener({ type, target, data: '', isComposing: type === 'compositionstart' }); },
+    blur: id => { const target = nodes.get(id); assert.ok(target, id); if (ctx.document.activeElement === target) ctx.document.activeElement = null; for (const listener of listeners.focusout || []) listener({ type: 'focusout', target, relatedTarget: null }); },
+    keydown: (id, key, modifiers = {}) => { const target = nodes.get(id); assert.ok(target, id); let prevented = false; for (const listener of listeners.keydown || []) listener(Object.assign({ type: 'keydown', target, key, keyCode: key === 'Enter' ? 13 : 0, preventDefault() { prevented = true; } }, modifiers)); return prevented; },
+    flushTimeouts: () => { let steps = 0; while (timeouts.length && steps++ < 1000) timeouts.shift()(); assert.ok(steps < 1000, 'queued timers should finish'); },
     submit: id => { const target = nodes.get(id), event = { target, preventDefault() {} }; if (target.events.submit) target.events.submit(event); for (const listener of listeners.submit || []) listener(event); },
     receive: event => { ctx.__eventJSON = JSON.stringify(event); vm.runInContext('CampusDesk.receive(JSON.parse(__eventJSON))', ctx); },
+    setOnline: value => { ctx.navigator.onLine = value; for (const callback of windowListeners[value ? 'online' : 'offline'] || []) callback(); },
     tick: milliseconds => { instant += milliseconds; for (const timer of intervals) timer.cb(); },
     last: action => sent.filter(item => item.action === action).at(-1)
   };
 }
+test('chat provider buttons preserve draft and route online requests locally when Ollama is selected', () => {
+  const app = harness({ themeEdition: true, hash: '#assistant', online: true });
+  app.input('assistant-question', 'Keep this question');
+  const input = app.node('assistant-question');
+  app.click({ action: 'assistant-switch-provider', provider: 'ollama' });
+  assert.equal(app.last('saveState').state.settings.aiProvider, 'ollama');
+  assert.equal(app.node('assistant-question'), input);
+  assert.equal(input.value, 'Keep this question');
+  app.click({ action: 'assistant-send' });
+  assert.equal(app.last('assistantRequest').provider, 'ollama');
+  app.click({ action: 'assistant-switch-provider', provider: 'deepseek' });
+  assert.equal(app.last('saveState').state.settings.aiProvider, 'ollama', 'cannot switch during a response');
+  app.receive({ type: 'assistantResponse', requestId: 'test-uuid', answer: 'Done', providerUsed: 'ollama' });
+  app.click({ action: 'assistant-switch-provider', provider: 'deepseek' });
+  assert.equal(app.last('saveState').state.settings.aiProvider, 'deepseek');
+  app.setOnline(false);
+  app.click({ action: 'assistant-switch-provider', provider: 'ollama' });
+  assert.equal(app.node('assistant-question').disabled, false);
+});
 function teamsSnapshot(tasks = []) {
   return { source: 'teams', url: 'https://teams.microsoft.com/v2/#/channels/test', title: 'Class channel', capturedAt: '2026-09-19T00:41:00Z', coverage: 'visible', warnings: ['仅覆盖已加载消息'], tasks, posts: [
     { id: 'notice-ec', title: 'EC ANNOUNCEMENT', text: 'Roster notice\nGroup A: Student One\nCheck the original PDF.', kind: 'ec', author: 'Teacher', recipient: 'Grade 10 A', channel: 'ENGLISH CORNER ROSTER', date: '2026-09-18T08:00:00Z', url: 'https://teams.microsoft.com/v2/#/channels/test', attachments: [{ title: 'Roster.pdf', url: 'https://school.sharepoint.com/Shared%20Documents/Roster.pdf' }] },
     { id: 'work-message', title: 'Writing task', text: 'Write a paragraph.\nExplain your evidence.', kind: 'assignment', recipient: 'Grade 10 A', channel: 'HOMEWORK', dateLabel: '5:18 PM', url: 'https://teams.microsoft.com/v2/#/channels/test' }
   ] };
 }
+function assistantModelOptions(app, id) {
+  const select = new RegExp('<select id="' + id + '"[^>]*>([\\s\\S]*?)<\\/select>').exec(app.node('content').innerHTML);
+  assert.ok(select, 'Missing model dropdown: ' + id);
+  return [...select[1].matchAll(/<option value="([^"]+)"/g)].map(match => match[1]);
+}
+
+test('learning assistant and setup wizard are isolated to CampusDesk Theme Edition', () => {
+  const original = harness({ hash: '#assistant' });
+  assert.doesNotMatch(original.node('nav').innerHTML, /data-page="assistant"/);
+  assert.doesNotMatch(original.node('content').innerHTML, /assistant-workspace/);
+  assert.equal(original.ctx.CampusCore.emptyState().settings.aiProvider, undefined);
+
+  const theme = harness({ hash: '#assistant', themeEdition: true });
+  assert.match(theme.node('nav').innerHTML, /data-page="assistant"/);
+  const themeState = theme.ctx.CampusCore.emptyState();
+  assert.equal(themeState.settings.aiProvider, 'off');
+  assert.equal(themeState.settings.setupWizardCompleted, false);
+  themeState.settings.setupWizardStep = 5;
+  theme.receive({ type: 'state', state: themeState });
+  assert.equal(theme.node('setup-wizard-dialog').open, true);
+  assert.match(theme.node('setup-wizard-content').innerHTML, /setup-ai-provider/);
+  assert.equal((theme.node('setup-wizard-content').innerHTML.match(/<option value=/g) || []).length, 4);
+
+  theme.node('setup-ai-provider').value = 'deepseek';
+  theme.change('setup-ai-provider');
+  assert.equal(theme.last('saveState').state.settings.aiProvider, 'deepseek');
+  theme.node('setup-ai-provider').value = 'hybrid';
+  theme.change('setup-ai-provider');
+  assert.equal(theme.last('saveState').state.settings.aiProvider, 'hybrid');
+  assert.match(theme.node('setup-wizard-content').innerHTML, /仅联网 DeepSeek（断网即停用，不回退到 Ollama）/);
+  assert.match(theme.node('setup-wizard-content').innerHTML, /联网 DeepSeek，离线 Ollama/);
+  assert.doesNotMatch(theme.node('setup-wizard-content').innerHTML, /联网限定模式/);
+  theme.click({ action: 'setup-ai-configure' });
+  assert.equal(theme.node('setup-wizard-dialog').open, false);
+  assert.match(theme.node('content').innerHTML, /assistant-workspace/);
+  assert.match(theme.node('content').innerHTML, /data-action="assistant-send"/);
+  assert.match(theme.node('content').innerHTML, /data-action="assistant-review"/);
+});
+
+test('completed setup gets one version welcome after upgrade; legacy completion migrates without reopening setup', () => {
+  const upgraded = harness({ themeEdition: true, appVersion: '1.0.1' });
+  const old = upgraded.ctx.CampusCore.emptyState();
+  old.settings.setupWizardCompleted = true;
+  old.settings.setupWizardStep = 6;
+  delete old.settings.setupWizardIntroVersion;
+  const migrated = upgraded.ctx.CampusCore.validateState(old);
+  assert.equal(migrated.settings.setupWizardCompleted, true, 'legacy wizard completion remains intact');
+  assert.equal(migrated.settings.setupWizardIntroVersion, '', 'old boolean-only state is eligible for one version welcome');
+  migrated.settings.setupWizardIntroVersion = 'x'.repeat(41);
+  assert.throws(() => upgraded.ctx.CampusCore.validateState(migrated), /文本字段过长/);
+  migrated.settings.setupWizardIntroVersion = '';
+  upgraded.receive({ type: 'state', state: migrated });
+  assert.equal(upgraded.node('setup-wizard-dialog').open, true);
+  assert.match(upgraded.node('setup-wizard-content').innerHTML, /欢迎使用新版 CampusDesk/);
+  assert.doesNotMatch(upgraded.node('setup-wizard-content').innerHTML, /连接 ManageBac/);
+  upgraded.click({ action: 'setup-wizard-next' });
+  assert.equal(upgraded.node('setup-wizard-dialog').open, false);
+  assert.equal(upgraded.last('saveState').state.settings.setupWizardCompleted, true);
+  assert.equal(upgraded.last('saveState').state.settings.setupWizardIntroVersion, '1.0.1');
+
+  const sameVersion = harness({ themeEdition: true, appVersion: '1.0.1' });
+  const saved = sameVersion.ctx.CampusCore.emptyState();
+  saved.settings.setupWizardCompleted = true;
+  saved.settings.setupWizardIntroVersion = '1.0.1';
+  sameVersion.receive({ type: 'state', state: saved });
+  assert.equal(sameVersion.node('setup-wizard-dialog').open, false, 'reopening the same version does not replay welcome');
+});
+
+test('setup guide restart is a sequenced flow request and repeated restarts rebuild it', () => {
+  const app = harness({ themeEdition: true });
+  const saved = app.ctx.CampusCore.emptyState();
+  saved.settings.setupWizardCompleted = true;
+  saved.settings.setupWizardIntroVersion = '1.0.0';
+  app.receive({ type: 'state', state: saved });
+  assert.equal(app.node('setup-wizard-dialog').open, false);
+  app.click({ action: 'setup-wizard-restart' });
+  assert.equal(app.node('setup-wizard-dialog').open, true);
+  app.click({ action: 'setup-wizard-next' });
+  assert.match(app.node('setup-wizard-content').innerHTML, /先认识一下你/);
+  app.click({ action: 'setup-wizard-restart' });
+  assert.match(app.node('setup-wizard-content').innerHTML, /首次设置向导/);
+  const writes = app.node('setup-wizard-content').writes;
+  app.click({ action: 'setup-wizard-restart' });
+  assert.ok(app.node('setup-wizard-content').writes > writes, 'a repeated same-mode request is not dropped');
+});
+
+test('DeepSeek-only mode is disabled offline and never falls back to Ollama', () => {
+  const offline = harness({ hash: '#assistant', themeEdition: true, online: false });
+  const offlineState = offline.ctx.CampusCore.emptyState();
+  offlineState.settings.setupWizardCompleted = true;
+  offlineState.settings.aiProvider = 'deepseek';
+  offline.receive({ type: 'state', state: offlineState });
+  offline.receive({ type: 'assistantStatus', deepSeekKeyConfigured: true });
+  assert.match(offline.node('content').innerHTML, /已停用|disabled offline/i);
+  assert.equal(offline.node('assistant-question').attributes.disabled, '');
+  assert.match(offline.node('content').innerHTML, /data-action="assistant-send" disabled/);
+  offline.setOnline(true);
+  assert.equal(offline.node('assistant-question').attributes.disabled, undefined);
+  assert.doesNotMatch(offline.node('content').innerHTML, /离线时已停用|Disabled offline; no Ollama fallback/);
+  offline.setOnline(false);
+  offline.input('assistant-question', 'What should I study?');
+  offline.click({ action: 'assistant-send' });
+  assert.equal(offline.sent.filter(row => row.action === 'assistantRequest').length, 0);
+  assert.equal(offline.node('assistant-question').value, 'What should I study?');
+  assert.equal(offline.node('assistant-confirm-dialog').open, false);
+
+  const online = harness({ hash: '#assistant', themeEdition: true, online: true });
+  const onlineState = online.ctx.CampusCore.emptyState();
+  onlineState.settings.setupWizardCompleted = true;
+  onlineState.settings.aiProvider = 'deepseek';
+  online.receive({ type: 'state', state: onlineState });
+  online.receive({ type: 'assistantStatus', deepSeekKeyConfigured: true });
+  online.input('assistant-question', 'What should I study?');
+  online.click({ action: 'assistant-send' });
+  assert.equal(online.sent.filter(row => row.action === 'assistantRequest').length, 1);
+  assert.equal(online.node('assistant-confirm-dialog').open, false);
+  assert.equal(online.last('assistantRequest').provider, 'deepseek');
+  assert.equal(online.last('assistantRequest').networkAvailable, true);
+});
+
+test('assistant settings expose exactly four modes, migrate the old online-only value, and keep local models separate', () => {
+  const app = harness({ hash: '#settings', themeEdition: true });
+  const state = app.ctx.CampusCore.emptyState();
+  state.settings.setupWizardCompleted = true;
+  state.settings.aiProvider = 'auto';
+  state.settings.aiModel = 'deepseek-chat';
+  app.receive({ type: 'state', state });
+  let html = app.node('content').innerHTML;
+  const providerSelect = /<select id="assistant-provider"[^>]*>(.*?)<\/select>/.exec(html)?.[1] || '';
+  assert.deepEqual([...providerSelect.matchAll(/<option value="([^"]+)"/g)].map(match => match[1]), ['off', 'ollama', 'deepseek', 'hybrid']);
+  assert.match(providerSelect, /value="deepseek" selected/);
+  assert.doesNotMatch(providerSelect, /auto/);
+
+  app.change('assistant-provider', { value: 'hybrid' });
+  html = app.node('content').innerHTML;
+  assert.match(html, /id="assistant-model"/);
+  assert.match(html, /id="assistant-ollama-model"/);
+  assert.equal(app.last('saveState').state.settings.aiModel, 'deepseek-chat');
+  assert.equal(app.last('saveState').state.settings.aiOllamaModel, 'qwen3:8b');
+});
+
+test('Ollama-only requests use the separately saved local model and never request DeepSeek', () => {
+  const app = harness({ hash: '#assistant', themeEdition: true });
+  const state = app.ctx.CampusCore.emptyState();
+  state.settings.setupWizardCompleted = true;
+  state.settings.aiProvider = 'ollama';
+  state.settings.aiModel = 'deepseek-chat';
+  state.settings.aiOllamaModel = 'llama3.2';
+  app.receive({ type: 'state', state });
+  app.input('assistant-question', 'What should I study?');
+  app.click({ action: 'assistant-send' });
+  assert.equal(app.sent.filter(row => row.action === 'assistantRequest').length, 1);
+  assert.equal(app.node('assistant-confirm-dialog').open, false);
+  assert.equal(app.last('assistantRequest').provider, 'ollama');
+  assert.equal(app.last('assistantRequest').model, 'llama3.2');
+  assert.equal(app.last('assistantRequest').fallbackModel, '');
+});
+
+test('hybrid assistant sends directly with the current network route and reports the actual provider', () => {
+  const offline = harness({ hash: '#assistant', themeEdition: true, online: false });
+  const offlineState = offline.ctx.CampusCore.emptyState();
+  offlineState.settings.setupWizardCompleted = true;
+  offlineState.settings.aiProvider = 'hybrid';
+  offline.receive({ type: 'state', state: offlineState });
+  offline.input('assistant-question', 'What should I study?');
+  offline.click({ action: 'assistant-send' });
+  assert.equal(offline.sent.filter(row => row.action === 'assistantRequest').length, 1);
+  assert.equal(offline.node('assistant-confirm-dialog').open, false);
+  assert.equal(offline.last('assistantRequest').provider, 'hybrid');
+  assert.equal(offline.last('assistantRequest').networkAvailable, false);
+  assert.equal(offline.last('assistantRequest').fallbackModel, 'qwen3:8b');
+  offline.receive({ type: 'assistantResponse', requestId: 'test-uuid', answer: 'Local answer', providerUsed: 'ollama', fallbackReason: 'offline' });
+  assert.match(offline.node('content').innerHTML, /本次由 Ollama 回复（当前离线）/);
+
+  const online = harness({ hash: '#assistant', themeEdition: true, online: true });
+  const onlineState = online.ctx.CampusCore.emptyState();
+  onlineState.settings.setupWizardCompleted = true;
+  onlineState.settings.aiProvider = 'hybrid';
+  online.receive({ type: 'state', state: onlineState });
+  online.receive({ type: 'assistantStatus', deepSeekKeyConfigured: true });
+  online.input('assistant-question', 'What should I study?');
+  online.click({ action: 'assistant-send' });
+  assert.equal(online.sent.filter(row => row.action === 'assistantRequest').length, 1);
+  assert.equal(online.node('assistant-confirm-dialog').open, false);
+  assert.equal(online.last('assistantRequest').provider, 'hybrid');
+  assert.equal(online.last('assistantRequest').networkAvailable, true);
+  assert.equal(online.last('assistantRequest').fallbackModel, 'qwen3:8b');
+  online.receive({ type: 'assistantResponse', requestId: 'test-uuid', answer: 'Cloud answer', providerUsed: 'deepseek' });
+  assert.match(online.node('content').innerHTML, /本次由 DeepSeek 回复/);
+});
+
+test('optional AI request preview never sends by itself and API keys never enter saved dashboard state', () => {
+  const app = harness({ hash: '#assistant', themeEdition: true });
+  const themeState = app.ctx.CampusCore.emptyState();
+  themeState.settings.setupWizardStep = 5;
+  app.receive({ type: 'state', state: themeState });
+  app.node('setup-ai-provider').value = 'deepseek';
+  app.change('setup-ai-provider');
+  app.click({ action: 'setup-ai-configure' });
+  app.receive({ type: 'assistantStatus', deepSeekKeyConfigured: true });
+  app.input('assistant-question', 'Which task should I do first?');
+  app.click({ action: 'assistant-review' });
+  assert.equal(app.node('assistant-confirm-dialog').open, true);
+  assert.match(app.node('assistant-confirm-content').innerHTML, /Which task should I do first\?/);
+  assert.match(app.node('assistant-confirm-content').innerHTML, /DeepSeek/);
+  assert.match(app.node('assistant-confirm-content').innerHTML, /<details\b[^>]*>[\s\S]*assistant-request-preview/);
+  assert.doesNotMatch(app.node('assistant-confirm-content').innerHTML, /<details\b[^>]*\bopen(?:[\s=>])/);
+  assert.equal(app.sent.filter(row => row.action === 'assistantRequest').length, 0);
+  app.click({ action: 'assistant-cancel-review' });
+  assert.equal(app.sent.filter(row => row.action === 'assistantRequest').length, 0);
+  app.click({ action: 'assistant-review' });
+  app.click({ action: 'assistant-confirm-send' });
+  const request = app.last('assistantRequest');
+  assert.equal(request.provider, 'deepseek');
+  assert.match(request.messages.at(-1).content, /Which task should I do first\?/);
+  assert.equal(JSON.stringify(app.last('saveState').state).includes('api-key'), false);
+});
+
+test('assistant input survives background refreshes without interrupting CJK composition', () => {
+  const app = harness({ hash: '#assistant', themeEdition: true });
+  const themeState = app.ctx.CampusCore.emptyState();
+  themeState.settings.setupWizardCompleted = true;
+  themeState.settings.aiProvider = 'ollama';
+  app.receive({ type: 'state', state: themeState });
+  const editor = app.node('assistant-question');
+  editor.focus();
+  const composingDraft = '今天要先复习生物，再完成数学作业。';
+  editor.value = composingDraft;
+  app.composition('compositionstart', 'assistant-question');
+  app.input('assistant-question', composingDraft);
+  app.composition('compositionend', 'assistant-question', composingDraft);
+  const contentWrites = app.node('content').writes;
+
+  const refreshed = app.ctx.CampusCore.emptyState();
+  refreshed.settings.setupWizardCompleted = true;
+  refreshed.settings.aiProvider = 'ollama';
+  app.receive({ type: 'state', state: refreshed });
+  assert.equal(app.node('assistant-question'), editor, 'background updates must not replace a focused editor');
+  assert.equal(app.node('content').writes, contentWrites, 'background updates must defer the page repaint');
+  assert.equal(editor.value, composingDraft);
+
+  app.blur('assistant-question');
+  app.flushTimeouts();
+  assert.match(app.node('content').innerHTML, /今天要先复习生物，再完成数学作业。/, 'the full draft must remain visible after repaint');
+  app.click({ action: 'assistant-review' });
+  assert.equal(app.node('assistant-confirm-dialog').open, true);
+  assert.match(app.node('assistant-confirm-content').innerHTML, /今天要先复习生物，再完成数学作业。/);
+  assert.equal(app.sent.filter(row => row.action === 'assistantRequest').length, 0, 'review must not send before explicit confirmation');
+});
+
+test('assistant Cmd-or-Ctrl-Enter sends once directly while ordinary Enter remains available for text', () => {
+  for (const modifier of ['metaKey', 'ctrlKey']) {
+    const app = harness({ hash: '#assistant', themeEdition: true });
+    const themeState = app.ctx.CampusCore.emptyState();
+    themeState.settings.setupWizardCompleted = true;
+    themeState.settings.aiProvider = 'ollama';
+    app.receive({ type: 'state', state: themeState });
+    const editor = app.node('assistant-question');
+    editor.focus();
+    app.input('assistant-question', '请帮我安排复习顺序');
+    assert.equal(app.keydown('assistant-question', 'Enter'), false);
+    assert.equal(app.sent.filter(row => row.action === 'assistantRequest').length, 0);
+    assert.equal(app.keydown('assistant-question', 'Enter', { [modifier]: true }), true);
+    assert.equal(app.node('assistant-confirm-dialog').open, false);
+    assert.equal(app.sent.filter(row => row.action === 'assistantRequest').length, 1);
+    assert.match(app.last('assistantRequest').messages.at(-1).content, /请帮我安排复习顺序/);
+    assert.equal(app.node('assistant-question'), editor);
+    assert.equal(editor.value, '');
+  }
+});
+
+test('assistant send shortcut respects composition state, event flags, and legacy IME key codes', () => {
+  const app = harness({ hash: '#assistant', themeEdition: true });
+  const state = app.ctx.CampusCore.emptyState();
+  state.settings.setupWizardCompleted = true;
+  state.settings.aiProvider = 'ollama';
+  app.receive({ type: 'state', state });
+  const editor = app.node('assistant-question');
+  editor.focus();
+  app.input('assistant-question', '还在输入中文');
+  app.composition('compositionstart', 'assistant-question');
+  assert.equal(app.keydown('assistant-question', 'Enter', { metaKey: true }), false);
+  app.composition('compositionend', 'assistant-question', '中文输入完成');
+  assert.equal(app.keydown('assistant-question', 'Enter', { ctrlKey: true, isComposing: true }), false);
+  assert.equal(app.keydown('assistant-question', 'Enter', { metaKey: true, keyCode: 229 }), false);
+  assert.equal(app.sent.filter(row => row.action === 'assistantRequest').length, 0);
+  assert.equal(app.node('assistant-confirm-dialog').open, false);
+  assert.equal(editor.value, '中文输入完成');
+  assert.equal(app.keydown('assistant-question', 'Enter', { metaKey: true }), true);
+  assert.equal(app.sent.filter(row => row.action === 'assistantRequest').length, 1);
+  assert.match(app.last('assistantRequest').messages.at(-1).content, /中文输入完成/);
+});
+
+test('one assistant primary send dispatches once, keeps the focused editor, and renders the response without consuming the next draft', () => {
+  const app = harness({ hash: '#assistant', themeEdition: true });
+  const state = app.ctx.CampusCore.emptyState();
+  state.settings.setupWizardCompleted = true;
+  state.settings.aiProvider = 'ollama';
+  app.receive({ type: 'state', state });
+  const editor = app.node('assistant-question');
+  editor.focus();
+  app.input('assistant-question', '先完成哪项作业？');
+  app.click({ action: 'assistant-send' });
+  assert.equal(app.sent.filter(row => row.action === 'assistantRequest').length, 1);
+  assert.equal(app.node('assistant-confirm-dialog').open, false);
+  assert.equal(app.node('assistant-question'), editor);
+  assert.equal(app.ctx.document.activeElement, editor);
+  assert.equal(editor.value, '');
+  assert.match(app.node('assistant-chat-log').innerHTML, /先完成哪项作业？/);
+
+  app.input('assistant-question', '下一题正在输入');
+  app.click({ action: 'assistant-send' });
+  app.keydown('assistant-question', 'Enter', { metaKey: true });
+  assert.equal(app.sent.filter(row => row.action === 'assistantRequest').length, 1, 'busy state must block duplicate clicks and shortcuts');
+  assert.equal(editor.value, '下一题正在输入');
+
+  const response = { type: 'assistantResponse', requestId: app.last('assistantRequest').requestId, answer: '先完成明天截止的作业。', providerUsed: 'ollama' };
+  app.receive(response);
+  assert.match(app.node('assistant-chat-log').innerHTML, /先完成明天截止的作业。/);
+  assert.doesNotMatch(app.node('assistant-chat-log').innerHTML, /assistant-typing/);
+  assert.equal(app.node('assistant-question'), editor);
+  assert.equal(app.ctx.document.activeElement, editor);
+  assert.equal(editor.value, '下一题正在输入');
+  app.receive(response);
+  app.receive({ type: 'assistantStatus', deepSeekKeyConfigured: true });
+  app.receive({ type: 'state', state });
+  app.tick(60_000);
+  app.flushTimeouts();
+  assert.equal(app.sent.filter(row => row.action === 'assistantRequest').length, 1, 'response, status, state, and timer events must never resend');
+  assert.equal((app.node('assistant-chat-log').innerHTML.match(/先完成明天截止的作业。/g) || []).length, 1);
+  assert.equal(editor.value, '下一题正在输入');
+});
+
+test('assistant failure reports the error without retrying or discarding the next draft', () => {
+  const app = harness({ hash: '#assistant', themeEdition: true });
+  const state = app.ctx.CampusCore.emptyState();
+  state.settings.setupWizardCompleted = true;
+  state.settings.aiProvider = 'ollama';
+  app.receive({ type: 'state', state });
+  const editor = app.node('assistant-question');
+  editor.focus();
+  app.input('assistant-question', 'Question that fails');
+  app.click({ action: 'assistant-send' });
+  app.input('assistant-question', 'Unsaved next question');
+  const response = { type: 'assistantResponse', requestId: app.last('assistantRequest').requestId, errorCode: 'localUnavailable' };
+  app.receive(response);
+  app.receive(response);
+  app.receive({ type: 'state', state });
+  app.flushTimeouts();
+  assert.equal(app.sent.filter(row => row.action === 'assistantRequest').length, 1);
+  assert.match(app.node('assistant-chat-log').innerHTML, /无法连接本机 Ollama|Could not reach local Ollama/);
+  assert.doesNotMatch(app.node('assistant-chat-log').innerHTML, /assistant-typing/);
+  assert.equal(app.node('assistant-question'), editor);
+  assert.equal(editor.value, 'Unsaved next question');
+  assert.equal(app.node('assistant-confirm-dialog').open, false);
+});
+
+test('assistant primary send rejects disabled providers, blank questions, missing keys, and browser previews without dispatch', () => {
+  const cases = [
+    { provider: 'off', draft: '保留这段未发送的问题' },
+    { provider: 'ollama', draft: '  \n  ' },
+    { provider: 'deepseek', draft: '缺少密钥时保留问题' },
+    { provider: 'hybrid', draft: '联网混合模式也需要密钥' },
+    { provider: 'ollama', draft: '网页预览不发送', native: false }
+  ];
+  for (const item of cases) {
+    const app = harness({ hash: '#assistant', themeEdition: true, native: item.native !== false });
+    const state = app.ctx.CampusCore.emptyState();
+    state.settings.setupWizardCompleted = true;
+    state.settings.aiProvider = item.provider;
+    app.receive({ type: 'state', state });
+    const editor = app.node('assistant-question');
+    editor.focus();
+    app.input('assistant-question', item.draft);
+    app.click({ action: 'assistant-send' });
+    assert.equal(app.sent.filter(row => row.action === 'assistantRequest').length, 0, item.provider + ': invalid request must not dispatch');
+    assert.equal(app.node('assistant-confirm-dialog').open, false);
+    assert.equal(editor.value, item.draft, item.provider + ': a rejected send must retain the draft');
+  }
+});
+
+test('assistant direct send includes only the currently selected context categories and keeps source links local', () => {
+  const app = harness({ hash: '#assistant', themeEdition: true });
+  const state = app.ctx.CampusCore.emptyState();
+  state.settings.setupWizardCompleted = true;
+  state.settings.aiProvider = 'ollama';
+  state.settings.aiContextCategories = ['tasks'];
+  app.receive({ type: 'state', state });
+  app.receive({ type: 'snapshot', snapshot: teamsSnapshot([task({ title: 'Selected assignment', requirements: 'Selected instructions' })]) });
+  app.receive({ type: 'snapshot', snapshot: schedule() });
+  app.input('assistant-question', 'Use the selected assignments');
+  app.click({ action: 'assistant-send' });
+  const request = app.last('assistantRequest');
+  assert.ok(request);
+  const userContent = request.messages.at(-1).content;
+  const context = JSON.parse(userContent.slice(userContent.indexOf('{')));
+  assert.deepEqual(Object.keys(context), ['tasks']);
+  assert.equal(context.tasks[0].title, 'Selected assignment');
+  assert.equal(context.tasks[0].requirements, 'Selected instructions');
+  assert.doesNotMatch(JSON.stringify(request.messages), /EC ANNOUNCEMENT|Roster notice|School calendar|https:\/\//);
+  assert.equal(app.node('assistant-confirm-dialog').open, false);
+});
+
+test('inaccessible DeepSeek keys stay inline, block dispatch, and retain the question until explicit settings navigation', () => {
+  for (const keyState of ['locked', 'unavailable']) {
+    const app = harness({ hash: '#assistant', themeEdition: true });
+    const state = app.ctx.CampusCore.emptyState();
+    state.settings.setupWizardCompleted = true;
+    state.settings.aiProvider = 'deepseek';
+    app.receive({ type: 'state', state });
+    app.receive({ type: 'assistantStatus', deepSeekKeyConfigured: keyState === 'locked', deepSeekKeyState: keyState });
+    assert.match(app.node('content').innerHTML, /data-action="assistant-restore-key"/);
+    app.input('assistant-question', '保留这道尚未发送的问题');
+    app.click({ action: 'assistant-send' });
+    assert.equal(app.sent.filter(row => row.action === 'assistantRequest').length, 0, keyState + ': protected credentials must block a network request');
+    assert.equal(app.node('assistant-confirm-dialog').open, false);
+    assert.match(app.node('content').innerHTML, /assistant-workspace/, 'a blocked send must not navigate away automatically');
+    assert.equal(app.node('assistant-question').value, '保留这道尚未发送的问题');
+    app.click({ action: 'assistant-open-key-settings' });
+    assert.match(app.node('content').innerHTML, /assistant-settings/);
+    assert.equal(app.sent.filter(row => row.action === 'assistantRequest').length, 0);
+    app.click({ page: 'assistant' });
+    assert.equal(app.node('assistant-question').value, '保留这道尚未发送的问题');
+  }
+});
+
+test('a silent Keychain access failure restores an untouched question, preserves a new draft, and never retries a send', () => {
+  for (const nextDraft of ['', '另一个正在编辑的问题']) {
+    const app = harness({ hash: '#assistant', themeEdition: true });
+    const state = app.ctx.CampusCore.emptyState();
+    state.settings.setupWizardCompleted = true;
+    state.settings.aiProvider = 'deepseek';
+    app.receive({ type: 'state', state });
+    app.receive({ type: 'assistantStatus', deepSeekKeyConfigured: true, deepSeekKeyState: 'stored' });
+    const editor = app.node('assistant-question');
+    editor.focus();
+    app.input('assistant-question', '这道题尚未发给模型');
+    app.click({ action: 'assistant-send' });
+    assert.equal(app.sent.filter(row => row.action === 'assistantRequest').length, 1);
+    if (nextDraft) app.input('assistant-question', nextDraft);
+    const failure = { type: 'assistantResponse', requestId: app.last('assistantRequest').requestId, errorCode: 'keyAccess' };
+    app.receive(failure);
+    assert.equal(app.node('assistant-question'), editor);
+    assert.equal(editor.value, nextDraft || '这道题尚未发给模型');
+    assert.match(app.node('assistant-chat-log').innerHTML, /恢复密钥访问|restore.*key.*access/i);
+    assert.equal(app.node('assistant-confirm-dialog').open, false);
+    app.receive(failure);
+    app.click({ action: 'assistant-send' });
+    assert.equal(app.sent.filter(row => row.action === 'assistantRequest').length, 1, 'an inaccessible key must stop repeated send clicks');
+    app.receive({ type: 'assistantStatus', deepSeekKeyConfigured: true, deepSeekKeyState: 'stored' });
+    app.receive({ type: 'state', state });
+    app.flushTimeouts();
+    assert.equal(app.sent.filter(row => row.action === 'assistantRequest').length, 1, 'a later key-status refresh must never resend an old question');
+    assert.equal(editor.value, nextDraft || '这道题尚未发给模型');
+  }
+});
+
+test('inaccessible DeepSeek credentials do not block Ollama or offline hybrid requests', () => {
+  for (const options of [{ provider: 'ollama', online: true }, { provider: 'hybrid', online: false }]) {
+    const app = harness({ hash: '#assistant', themeEdition: true, online: options.online });
+    const state = app.ctx.CampusCore.emptyState();
+    state.settings.setupWizardCompleted = true;
+    state.settings.aiProvider = options.provider;
+    app.receive({ type: 'state', state });
+    app.receive({ type: 'assistantStatus', deepSeekKeyConfigured: true, deepSeekKeyState: 'locked' });
+    app.input('assistant-question', 'Use the local model');
+    app.click({ action: 'assistant-send' });
+    assert.equal(app.sent.filter(row => row.action === 'assistantRequest').length, 1);
+    assert.equal(app.last('assistantRequest').provider, options.provider);
+    assert.equal(app.last('assistantRequest').networkAvailable, options.online);
+    assert.equal(app.node('assistant-confirm-dialog').open, false);
+  }
+});
+
+test('DeepSeek models are selectable presets refreshed from the service and arbitrary names cannot be saved', () => {
+  const app = harness({ hash: '#settings', themeEdition: true });
+  const state = app.ctx.CampusCore.emptyState();
+  state.settings.setupWizardCompleted = true;
+  state.settings.aiProvider = 'deepseek';
+  app.receive({ type: 'state', state });
+  assert.equal(app.node('assistant-model').tagName, 'SELECT');
+  assert.doesNotMatch(app.node('content').innerHTML, /<input\b[^>]*id="assistant-model"/);
+  assert.deepEqual(assistantModelOptions(app, 'assistant-model'), ['deepseek-flash', 'deepseek-v4-pro']);
+  assert.equal(app.sent.filter(row => row.action === 'assistantListModels').length, 0, 'missing credentials must not start model discovery');
+  app.receive({ type: 'assistantStatus', deepSeekKeyConfigured: true, deepSeekKeyState: 'stored' });
+  const request = app.last('assistantListModels');
+  assert.equal(request.provider, 'deepseek');
+  assert.equal(app.sent.filter(row => row.action === 'assistantRequest').length, 0, 'model discovery must not send a chat question');
+  app.receive({ type: 'assistantModels', provider: 'deepseek', requestId: request.requestId, models: ['deepseek-v4-pro', 'deepseek-flash', 'deepseek-v4-pro', 'deepseek-next'] });
+  assert.deepEqual(assistantModelOptions(app, 'assistant-model'), ['deepseek-v4-pro', 'deepseek-flash', 'deepseek-next']);
+  app.change('assistant-model', { value: 'deepseek-v4-pro' });
+  assert.equal(app.last('saveState').state.settings.aiModel, 'deepseek-v4-pro');
+  const saves = app.sent.filter(row => row.action === 'saveState').length;
+  app.change('assistant-model', { value: 'unlisted-arbitrary-model' });
+  assert.equal(app.sent.filter(row => row.action === 'saveState').length, saves);
+  app.click({ page: 'assistant' });
+  app.input('assistant-question', 'Use the model I selected');
+  app.click({ action: 'assistant-send' });
+  assert.equal(app.last('assistantRequest').model, 'deepseek-v4-pro');
+});
+
+test('Ollama lists only discovered installed models and ignores stale model-list replies', () => {
+  const app = harness({ hash: '#settings', themeEdition: true });
+  const state = app.ctx.CampusCore.emptyState();
+  state.settings.setupWizardCompleted = true;
+  state.settings.aiProvider = 'ollama';
+  state.settings.aiOllamaModel = 'legacy-unlisted-model';
+  app.receive({ type: 'state', state });
+  assert.equal(app.node('assistant-ollama-model').tagName, 'SELECT');
+  assert.deepEqual(assistantModelOptions(app, 'assistant-ollama-model'), []);
+  assert.doesNotMatch(app.node('content').innerHTML, /<input\b[^>]*id="assistant-ollama-model"/);
+  const first = app.last('assistantListModels');
+  assert.equal(first.provider, 'ollama');
+  app.click({ action: 'assistant-refresh-models', provider: 'ollama' });
+  assert.equal(app.sent.filter(row => row.action === 'assistantListModels').length, 1, 'refresh clicks must not duplicate a pending lookup');
+  app.receive({ type: 'assistantModels', provider: 'ollama', requestId: first.requestId, models: ['qwen3:8b', 'llama3.2', 'qwen3:8b'] });
+  assert.deepEqual(assistantModelOptions(app, 'assistant-ollama-model'), ['qwen3:8b', 'llama3.2']);
+  assert.equal(app.last('saveState').state.settings.aiOllamaModel, 'qwen3:8b', 'an unavailable saved model is replaced by an installed model');
+  app.change('assistant-ollama-model', { value: 'llama3.2' });
+  assert.equal(app.last('saveState').state.settings.aiOllamaModel, 'llama3.2');
+  const saves = app.sent.filter(row => row.action === 'saveState').length;
+  app.change('assistant-ollama-model', { value: 'not-installed' });
+  assert.equal(app.sent.filter(row => row.action === 'saveState').length, saves);
+  app.click({ action: 'assistant-refresh-models', provider: 'ollama' });
+  const latest = app.last('assistantListModels');
+  assert.notEqual(latest.requestId, first.requestId);
+  app.receive({ type: 'assistantModels', provider: 'ollama', requestId: first.requestId, models: ['stale-model'] });
+  assert.deepEqual(assistantModelOptions(app, 'assistant-ollama-model'), ['qwen3:8b', 'llama3.2']);
+  app.receive({ type: 'assistantModels', provider: 'ollama', requestId: latest.requestId, models: ['llama3.2', 'newly-installed:small'] });
+  assert.deepEqual(assistantModelOptions(app, 'assistant-ollama-model'), ['llama3.2', 'newly-installed:small']);
+  assert.equal(app.sent.filter(row => row.action === 'assistantRequest').length, 0);
+  app.click({ page: 'assistant' });
+  app.input('assistant-question', 'Use my installed model');
+  app.click({ action: 'assistant-send' });
+  assert.equal(app.last('assistantRequest').model, 'llama3.2');
+});
+
+test('empty or unavailable Ollama model lists show recovery guidance and never trigger chat sends', () => {
+  const app = harness({ hash: '#settings', themeEdition: true });
+  const state = app.ctx.CampusCore.emptyState();
+  state.settings.setupWizardCompleted = true;
+  state.settings.aiProvider = 'ollama';
+  app.receive({ type: 'state', state });
+  app.receive({ type: 'assistantModels', provider: 'ollama', requestId: app.last('assistantListModels').requestId, models: [] });
+  assert.deepEqual(assistantModelOptions(app, 'assistant-ollama-model'), []);
+  assert.equal(app.node('assistant-ollama-model').attributes.disabled, '');
+  assert.match(app.node('content').innerHTML, /Ollama 中还没有模型|No models are installed in Ollama/);
+  app.click({ page: 'assistant' });
+  app.input('assistant-question', 'Wait for an installed model');
+  app.click({ action: 'assistant-send' });
+  assert.equal(app.sent.filter(row => row.action === 'assistantRequest').length, 0);
+  assert.equal(app.node('assistant-question').value, 'Wait for an installed model');
+  app.click({ page: 'settings' });
+  app.click({ action: 'assistant-refresh-models', provider: 'ollama' });
+  app.receive({ type: 'assistantModels', provider: 'ollama', requestId: app.last('assistantListModels').requestId, errorCode: 'localUnavailable' });
+  assert.match(app.node('content').innerHTML, /启动 Ollama.*安装模型.*刷新|Start Ollama, install a model, then refresh/);
+  assert.deepEqual(assistantModelOptions(app, 'assistant-ollama-model'), []);
+  assert.equal(app.sent.filter(row => row.action === 'assistantListModels').length, 2, 'failed discovery waits for another explicit refresh');
+  assert.equal(app.sent.filter(row => row.action === 'assistantRequest').length, 0);
+});
+
+test('setup guides are collapsed, bilingual, and available before choosing a provider', () => {
+  for (const language of ['zh-CN', 'en-US']) {
+    for (const provider of ['off', 'ollama', 'deepseek', 'hybrid']) {
+      const app = harness({ hash: '#settings', themeEdition: true });
+      const state = app.ctx.CampusCore.emptyState();
+      Object.assign(state.settings, { language, aiProvider: provider, setupWizardCompleted: true });
+      app.receive({ type: 'state', state });
+      for (const id of ['assistant-guide-deepseek', 'assistant-guide-ollama']) {
+        assert.equal(app.node(id).tagName, 'DETAILS');
+        assert.equal(app.node(id).open, false);
+      }
+      const html = app.node('content').innerHTML;
+      const guide = html.match(/<section class="assistant-setup-guides"[\s\S]*?<\/section>/)[0];
+      assert.match(guide, /ollama pull qwen3\.5:4b/);
+      assert.match(guide, /ollama pull qwen3\.5:9b/);
+      assert.match(guide, /ollama ls/);
+      assert.match(guide, /401.*402/);
+      assert.doesNotMatch(guide, /data-action="assistant-(?:save-key|delete-key|send|edit-key)"/);
+      if (language === 'en-US') assert.doesNotMatch(guide, /[\u4e00-\u9fff]/);
+      else assert.match(guide, /已显示“密钥已安全保存”时无需重填/);
+      assert.equal(app.sent.filter(row => row.action === 'assistantRequest').length, 0);
+    }
+  }
+  assert.doesNotMatch(harness({ hash: '#settings' }).node('content').innerHTML, /assistant-setup-guides/);
+});
+
+test('open setup guides and key drafts survive model and key-status refreshes', () => {
+  const app = harness({ hash: '#settings', themeEdition: true });
+  const state = app.ctx.CampusCore.emptyState();
+  Object.assign(state.settings, { aiProvider: 'hybrid', setupWizardCompleted: true });
+  app.receive({ type: 'state', state });
+  app.node('assistant-guide-deepseek').open = true;
+  app.node('assistant-guide-ollama').open = true;
+  app.input('assistant-deepseek-key', 'synthetic-key-draft');
+  app.node('assistant-deepseek-key').focus();
+  app.receive({ type: 'assistantModels', provider: 'ollama', requestId: app.last('assistantListModels').requestId, models: ['qwen3.5:9b'] });
+  assert.equal(app.node('assistant-guide-deepseek').open, true);
+  assert.equal(app.node('assistant-guide-ollama').open, true);
+  assert.equal(app.node('assistant-deepseek-key').value, 'synthetic-key-draft');
+  app.blur('assistant-deepseek-key');
+  app.receive({ type: 'assistantStatus', deepSeekKeyConfigured: true, deepSeekKeyState: 'stored' });
+  assert.equal(app.node('assistant-guide-deepseek').open, true);
+  assert.equal(app.node('assistant-guide-ollama').open, true);
+  assert.doesNotMatch(app.node('content').innerHTML, /id="assistant-deepseek-key"/);
+});
+
+test('tutorial links and command copies use matching native allowlists, never arbitrary input', () => {
+  const app = harness({ hash: '#settings', themeEdition: true });
+  const swift = fs.readFileSync(path.join(root, 'Sources/AssistantSetupGuide.swift'), 'utf8');
+  const html = app.node('content').innerHTML;
+  for (const [id, value] of [...swift.matchAll(/"([\w-]+)": "([^"\n]+)"/g)].map(match => [match[1], match[2]])) {
+    assert.match(html, new RegExp('data-guide-id="' + id + '"'));
+    const isLink = value.startsWith('https://');
+    app.click({ action: isLink ? 'assistant-guide-link' : 'assistant-guide-copy', guideId: id });
+    assert.deepEqual(app.last(isLink ? 'assistantOpenGuide' : 'assistantCopyGuideCommand'), { action: isLink ? 'assistantOpenGuide' : 'assistantCopyGuideCommand', id });
+    if (!isLink) assert.ok(html.includes(value), 'copied command must exactly match visible command');
+  }
+  const count = app.sent.length;
+  for (const id of ['__proto__', 'constructor', 'https://example.com/', 'qwen-small; touch unsafe']) {
+    app.click({ action: 'assistant-guide-link', guideId: id });
+    app.click({ action: 'assistant-guide-copy', guideId: id });
+  }
+  assert.equal(app.sent.length, count);
+  assert.equal(app.sent.filter(row => /assistant(?:Request|SaveDeepSeekKey|DeleteDeepSeekKey)/.test(row.action)).length, 0);
+  const original = harness({ hash: '#settings' });
+  original.click({ action: 'assistant-guide-link', guideId: 'deepseek-platform' });
+  original.click({ action: 'assistant-guide-copy', guideId: 'qwen-small' });
+  assert.equal(original.last('assistantOpenGuide'), undefined);
+  assert.equal(original.last('assistantCopyGuideCommand'), undefined);
+});
+
+test('tutorial web preview opens only official links and reports clipboard failures honestly', async () => {
+  const app = harness({ hash: '#settings', themeEdition: true, native: false });
+  app.click({ action: 'assistant-guide-link', guideId: 'ollama-download' });
+  assert.deepEqual(app.opened.at(-1), ['https://ollama.com/download/mac', '_blank', 'noopener,noreferrer']);
+  const copied = [];
+  app.ctx.navigator.clipboard = { writeText: async text => copied.push(text) };
+  app.click({ action: 'assistant-guide-copy', guideId: 'qwen-standard' });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(copied, ['ollama pull qwen3.5:9b']);
+  assert.match(app.node('toast').textContent, /命令已复制|Command copied/);
+  app.ctx.navigator.clipboard = { writeText: async () => { throw new Error('denied'); } };
+  app.click({ action: 'assistant-guide-copy', guideId: 'list-models' });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.match(app.node('toast').textContent, /未能复制|Could not copy/);
+});
+
+test('stored DeepSeek keys show a saved status instead of asking for another save', () => {
+  const app = harness({ hash: '#settings', themeEdition: true });
+  const state = app.ctx.CampusCore.emptyState();
+  state.settings.setupWizardCompleted = true;
+  state.settings.aiProvider = 'deepseek';
+  app.receive({ type: 'state', state });
+  app.receive({ type: 'assistantStatus', deepSeekKeyConfigured: true, deepSeekKeyState: 'stored' });
+  assert.doesNotMatch(app.node('content').innerHTML, /id="assistant-deepseek-key"|data-action="assistant-save-key"/);
+  assert.match(app.node('content').innerHTML, /data-action="assistant-edit-key"/);
+  app.click({ action: 'assistant-edit-key' });
+  assert.match(app.node('content').innerHTML, /id="assistant-deepseek-key"/);
+  app.click({ action: 'assistant-cancel-key-edit' });
+  assert.doesNotMatch(app.node('content').innerHTML, /id="assistant-deepseek-key"/);
+  assert.equal(app.sent.filter(row => row.action === 'assistantSaveDeepSeekKey').length, 0);
+});
+
+test('DeepSeek key recovery is explicit, single-flight, preserves drafts and never auto-sends', () => {
+  const app = harness({ hash: '#assistant', themeEdition: true });
+  const state = app.ctx.CampusCore.emptyState();
+  state.settings.setupWizardCompleted = true;
+  state.settings.aiProvider = 'deepseek';
+  app.receive({ type: 'state', state });
+  app.receive({ type: 'assistantStatus', deepSeekKeyConfigured: true, deepSeekKeyState: 'locked' });
+  assert.equal(app.sent.filter(row => row.action === 'assistantRestoreDeepSeekKey').length, 0);
+  app.input('assistant-question', '恢复后保留我的问题');
+  app.click({ action: 'assistant-restore-key' });
+  app.click({ action: 'assistant-restore-key' });
+  assert.equal(app.sent.filter(row => row.action === 'assistantRestoreDeepSeekKey').length, 1);
+  app.receive({ type: 'assistantStatus', deepSeekKeyConfigured: true, deepSeekKeyState: 'locked', notice: 'keyRecoveryFinished', errorCode: 'keyAccess' });
+  assert.equal(app.node('assistant-question').value, '恢复后保留我的问题');
+  app.click({ action: 'assistant-restore-key' });
+  assert.equal(app.sent.filter(row => row.action === 'assistantRestoreDeepSeekKey').length, 2);
+  app.receive({ type: 'assistantStatus', deepSeekKeyConfigured: true, deepSeekKeyState: 'stored', notice: 'keyRestored' });
+  assert.equal(app.node('assistant-question').value, '恢复后保留我的问题');
+  assert.doesNotMatch(app.node('content').innerHTML, /data-action="assistant-restore-key"/);
+  assert.equal(app.sent.filter(row => row.action === 'assistantSaveDeepSeekKey' || row.action === 'assistantRequest').length, 0);
+});
+
+test('key-status and model-list updates preserve focused credential input and a focused question', () => {
+  const app = harness({ hash: '#settings', themeEdition: true });
+  const state = app.ctx.CampusCore.emptyState();
+  state.settings.setupWizardCompleted = true;
+  state.settings.aiProvider = 'deepseek';
+  app.receive({ type: 'state', state });
+  app.receive({ type: 'assistantStatus', deepSeekKeyConfigured: true, deepSeekKeyState: 'stored' });
+  app.click({ action: 'assistant-edit-key' });
+  const keyInput = app.node('assistant-deepseek-key');
+  keyInput.focus();
+  app.input('assistant-deepseek-key', 'synthetic-unsaved-key-draft');
+  keyInput.setSelectionRange(7, 13);
+  app.receive({ type: 'assistantModels', provider: 'deepseek', requestId: app.last('assistantListModels').requestId, models: ['deepseek-flash', 'deepseek-v4-pro'] });
+  app.receive({ type: 'assistantStatus', deepSeekKeyConfigured: true, deepSeekKeyState: 'locked' });
+  assert.equal(app.node('assistant-deepseek-key'), keyInput);
+  assert.equal(app.ctx.document.activeElement, keyInput);
+  assert.equal(keyInput.value, 'synthetic-unsaved-key-draft');
+  assert.equal(keyInput.selectionStart, 7);
+  assert.equal(keyInput.selectionEnd, 13);
+  assert.equal(JSON.stringify(app.sent.filter(row => row.action === 'saveState')).includes('synthetic-unsaved-key-draft'), false);
+  app.receive({ type: 'assistantStatus', deepSeekKeyConfigured: true, deepSeekKeyState: 'stored' });
+  app.click({ action: 'assistant-refresh-models', provider: 'deepseek' });
+  const refresh = app.last('assistantListModels');
+  app.click({ page: 'assistant' });
+  const question = app.node('assistant-question');
+  question.focus();
+  app.input('assistant-question', '模型列表更新时不要打断这句话');
+  question.setSelectionRange(4, 9);
+  app.receive({ type: 'assistantModels', provider: 'deepseek', requestId: refresh.requestId, models: ['deepseek-v4-pro'] });
+  app.receive({ type: 'assistantStatus', deepSeekKeyConfigured: true, deepSeekKeyState: 'stored' });
+  assert.equal(app.node('assistant-question'), question);
+  assert.equal(app.ctx.document.activeElement, question);
+  assert.equal(question.value, '模型列表更新时不要打断这句话');
+  assert.equal(question.selectionStart, 4);
+  assert.equal(question.selectionEnd, 9);
+  assert.equal(app.last('saveState').state.settings.aiModel, 'deepseek-v4-pro');
+  assert.equal(app.sent.filter(row => row.action === 'assistantRequest').length, 0);
+});
+
+test('school sign-in from the setup wizard keeps the wizard open on the same step', () => {
+  const app = harness({ themeEdition: true });
+  const themeState = app.ctx.CampusCore.emptyState();
+  themeState.settings.setupWizardStep = 2;
+  app.receive({ type: 'state', state: themeState });
+  assert.equal(app.node('setup-wizard-dialog').open, true);
+  assert.match(app.node('setup-wizard-content').innerHTML, /连接 ManageBac/);
+
+  app.click({ action: 'setup-wizard-connect', source: 'managebac' });
+  assert.equal(app.node('setup-wizard-dialog').open, true);
+  assert.match(app.node('setup-wizard-content').innerHTML, /连接 ManageBac/);
+  assert.equal(app.last('connectSchool').source, 'managebac');
+
+  app.receive({ type: 'status', source: 'managebac', message: '登录成功', busy: false });
+  app.receive({ type: 'snapshot', snapshot: { source: 'managebac', url: 'https://example-school.managebac.cn/', capturedAt: '2026-09-26T02:00:00Z', coverage: 'complete', warnings: [], grades: [], tasks: [], feedback: [] } });
+  assert.equal(app.node('setup-wizard-dialog').open, true);
+  assert.match(app.node('setup-wizard-content').innerHTML, /连接 ManageBac/);
+});
 function task(overrides = {}) { return Object.assign({ id: 'writing', title: 'Writing <task>', course: 'English', dueAt: '2026-09-19T02:00:00Z', requirements: 'Read the source.\nExplain <your> evidence.', status: 'open', url: 'https://teams.microsoft.com/v2/#/channels/test', attachments: [{ title: 'Guide.pdf', url: 'https://school.sharepoint.com/Guide.pdf' }] }, overrides); }
 function schedule() { return { source: 'seiue', url: 'https://example-school.seiue.com/timetable', capturedAt: '2026-09-19T00:40:00Z', warnings: [], schedule: [
   { id: 'math', date: '2026-09-19', start: '08:00', end: '08:40', title: 'Math', room: '201' },
@@ -90,7 +860,9 @@ test('dashboard appearance setting switches between the preserved classic panel 
   assert.equal(app.node('app-shell').dataset.dashboardTheme, 'board');
   app.click({ page: 'overview' });
   assert.match(app.node('content').innerHTML, /集中处理最重要的事/);
+  assert.match(app.node('content').innerHTML, /task-source-grid/);
   assert.match(app.node('content').innerHTML, /board-task-grid/);
+  assert.match(app.node('content').innerHTML, /data-todo-countdown/);
   assert.match(app.node('class-clock-detail').textContent, /下节 English · 08:50–09:30/);
   app.click({ action: 'appearance-settings' });
   assert.match(app.node('content').innerHTML, /经典面板/);
@@ -98,6 +870,31 @@ test('dashboard appearance setting switches between the preserved classic panel 
   assert.equal(app.node('app-shell').dataset.dashboardTheme, 'classic');
   app.click({ page: 'overview' });
   assert.match(app.node('content').innerHTML, /今天，也有条不紊/);
+});
+
+test('color presets are independent of dashboard layout and keep English labels complete', () => {
+  const app = harness();
+  app.click({ page: 'settings' });
+  assert.match(app.node('content').innerHTML, /主题配色/);
+  app.click({ action: 'color-theme', theme: 'ocean' });
+  assert.equal(app.node('app-shell').dataset.colorTheme, 'ocean');
+  assert.equal(app.node('app-shell').dataset.dashboardTheme, 'classic');
+  assert.equal(app.ctx.document.documentElement.dataset.colorTheme, 'ocean');
+  assert.match(app.node('content').innerHTML, /清晰的冷调蓝色主题/);
+  assert.match(app.node('content').innerHTML, /<option value="red-up" selected>/);
+  app.click({ action: 'dashboard-theme', theme: 'board' });
+  assert.equal(app.node('app-shell').dataset.colorTheme, 'ocean');
+  assert.equal(app.node('app-shell').dataset.dashboardTheme, 'board');
+  app.change('app-language', { value: 'en-US' });
+  assert.match(app.node('content').innerHTML, /Color theme/);
+  assert.match(app.node('content').innerHTML, /A low-luminance dark theme/);
+  assert.doesNotMatch(app.node('content').innerHTML, /自然、柔和|清晰的冷调|低亮度深色/);
+  app.click({ action: 'color-theme', theme: 'midnight' });
+  assert.equal(app.node('app-shell').dataset.colorTheme, 'midnight');
+  assert.equal(app.node('app-shell').dataset.dashboardTheme, 'board');
+  app.click({ action: 'color-theme', theme: 'sage' });
+  assert.equal(app.node('app-shell').dataset.colorTheme, 'sage');
+  assert.equal(app.node('app-shell').dataset.dashboardTheme, 'board');
 });
 
 test('sidebar navigation animates once and does not rebuild the unchanged navigation bar', () => {
@@ -154,7 +951,8 @@ test('interface language setting persists and translates the application chrome 
   assert.match(app.node('content').innerHTML, /Interface language/);
   app.click({ page: 'tasks' });
   assert.equal(app.node('breadcrumb-page').textContent, 'To-Do');
-  assert.match(app.node('content').innerHTML, /Teams assignments/);
+  assert.match(app.node('content').innerHTML, /todo-source-teams/);
+  assert.match(app.node('content').innerHTML, /Open website/);
   assert.match(app.node('content').innerHTML, /Write in English/);
   app.click({ page: 'settings' });
   app.click({ action: 'dashboard-theme', theme: 'board' });
@@ -246,13 +1044,19 @@ test('semester date drafts survive background sync, blur, navigation and clearin
   assert.equal(app.node(end.id).value, '2026-12-31');
 });
 
-test('tasks group by subject and Teams group by sender/channel with local focus controls', () => {
+test('overview preserves source and subject groups while tasks retain deadline cards and focus controls', () => {
   const app = harness(); app.receive({ type: 'snapshot', snapshot: teamsSnapshot([task(), task({ id: 'math-work', title: 'Math work', course: 'Math' })]) }); app.receive({ type: 'snapshot', snapshot: { source: 'managebac', url: 'https://example-school.managebac.cn/tasks', capturedAt: '2026-09-19T00:42:00Z', warnings: [], courses: [], tasks: [{ id: 'biology-work', title: 'Biology work', course: 'Biology', dueAt: null, dueLabel: '', status: 'open', url: 'https://example-school.managebac.cn/tasks' }], feedback: [], officialGPA: null } });
-  assert.match(app.node('content').innerHTML, /Teams 作业/); assert.match(app.node('content').innerHTML, /ManageBac 作业/); assert.match(app.node('content').innerHTML, /task-source-grid/);
+  assert.match(app.node('content').innerHTML, /task-source-grid/); assert.match(app.node('content').innerHTML, /task-source-teams/); assert.match(app.node('content').innerHTML, /task-source-managebac/);
+  assert.match(app.node('content').innerHTML, /task-subject-group/);
   app.click({ page: 'settings' }); app.click({ action: 'dashboard-theme', theme: 'board' }); app.click({ page: 'overview' });
-  assert.match(app.node('content').innerHTML, /Teams 作业/); assert.match(app.node('content').innerHTML, /ManageBac 作业/); assert.match(app.node('content').innerHTML, /task-source-grid/);
+  assert.match(app.node('content').innerHTML, /task-source-grid/); assert.match(app.node('content').innerHTML, /task-source-teams/); assert.match(app.node('content').innerHTML, /task-source-managebac/);
+  assert.match(app.node('content').innerHTML, /task-subject-group/);
+  assert.match(app.node('content').innerHTML, /board-due-card/);
+  assert.match(app.node('content').innerHTML, /data-todo-countdown/);
+  assert.match(app.node('content').innerHTML, /todo-urgency-bar/);
+  assert.doesNotMatch(app.node('content').innerHTML, /todo-deadline-grid/);
   app.click({ page: 'tasks' });
-  assert.match(app.node('content').innerHTML, /Teams 作业/); assert.match(app.node('content').innerHTML, /ManageBac 作业/); assert.match(app.node('content').innerHTML, /task-source-grid/); assert.match(app.node('content').innerHTML, /English/); assert.match(app.node('content').innerHTML, /Math/); assert.match(app.node('content').innerHTML, /Biology/);
+  assert.match(app.node('content').innerHTML, /todo-deadline-grid/); assert.match(app.node('content').innerHTML, /English/); assert.match(app.node('content').innerHTML, /Math/); assert.match(app.node('content').innerHTML, /Biology/);
   app.click({ action: 'toggle-focus-subject', value: 'English' });
   assert.deepEqual(app.last('saveState').state.settings.focusSubjects, ['English']);
   app.click({ action: 'task-subject-filter', filter: 'focus' }); assert.match(app.node('content').innerHTML, /English/); assert.doesNotMatch(app.node('content').innerHTML, /Math work/);
@@ -430,6 +1234,28 @@ test('Teams due overrides use Beijing time, schedule notices and cancel on compl
   app.change('teams-notifications', { checked: false }); assert.equal(app.last('syncReminders').items.length, 0);
 });
 
+test('Teams reminder subjects can be filtered and restored without changing assignment data', () => {
+  const app = harness();
+  app.receive({ type: 'snapshot', snapshot: teamsSnapshot([
+    task({ id: 'english', title: 'English essay', course: 'English' }),
+    task({ id: 'chemistry', title: 'Chemistry lab', course: 'Chemistry' })
+  ]) });
+  app.click({ page: 'settings' });
+  app.change('teams-notifications', { checked: true });
+  assert.equal(app.last('syncReminders').items.length, 2);
+  assert.match(app.node('content').innerHTML, /提醒学科/);
+  app.change('reminder-subject-choice-0', { checked: false });
+  assert.deepEqual(app.last('saveState').state.settings.reminderSubjects, ['English']);
+  assert.deepEqual(app.last('syncReminders').items.map(item => item.title), ['English essay']);
+  app.click({ action: 'reminder-subjects-all' });
+  assert.deepEqual(app.last('saveState').state.settings.reminderSubjects, []);
+  assert.equal(app.last('syncReminders').items.length, 2);
+  assert.equal(app.ctx.CampusCore.getTasks(app.last('saveState').state).filter(item => item.source === 'teams').length, 2);
+  app.change('app-language', { value: 'en-US' });
+  assert.match(app.node('content').innerHTML, /Reminder subjects/);
+  assert.match(app.node('content').innerHTML, /Include all subjects/);
+});
+
 test('reminders exclude past/unknown deadlines and ticker never repeatedly schedules them', () => {
   const app = harness(); app.receive({ type: 'snapshot', snapshot: teamsSnapshot([task({ id: 'past', dueAt: '2026-09-19T00:01:00Z' }), task({ id: 'unknown', dueAt: null }), task()]) });
   app.click({ page: 'settings' }); app.change('teams-notifications', { checked: true });
@@ -445,9 +1271,11 @@ test('to-do deadline icons distinguish upcoming, overdue and unknown dates witho
     task(), task({ id: 'past', dueAt: '2026-09-19T00:01:00Z' }), task({ id: 'unknown', dueAt: null })
   ]) });
   const html = app.node('content').innerHTML;
-  assert.match(html, /class="task-due has-date"><svg class="task-due-icon"/);
-  assert.match(html, /class="task-due is-overdue"><svg class="task-due-icon"[^>]*>.*?<span>已逾期 · /);
-  assert.match(html, /class="task-due date-unknown"><span>未设置截止日期<\/span>/);
+  assert.match(html, /todo-band-urgent todo-source-teams/);
+  assert.match(html, /todo-band-overdue todo-source-teams/);
+  assert.match(html, /todo-band-unknown todo-source-teams/);
+  assert.match(html, /class="todo-due-date"><svg/);
+  assert.match(html, /截止时间未标明/);
   assert.equal(app.sent.filter(item => item.action === 'syncReminders').at(-1)?.items.length ?? 0, 0);
   app.click({ page: 'settings' });
   assert.match(app.node('content').innerHTML, /id="reminder-settings"[\s\S]*?Teams 作业提醒/);
@@ -650,6 +1478,7 @@ test('incremental Graph pages persist before checkpoint acknowledgements and mal
   const saved = app.last('saveState').state;
   const posts = app.ctx.CampusCore.getTeamsPosts(saved);
   assert.equal(posts.length, 2);
+  app.receive({ type: 'graphStatus', configured: true, connected: true, busy: false, coverage: 'complete' });
   assert.match(app.node('content').innerHTML, /EC cancelled on Friday/);
   const savedIndex = app.sent.findLastIndex(item => item.action === 'saveState');
   const ackIndex = app.sent.findLastIndex(item => item.action === 'graphBatchProcessed');
@@ -686,6 +1515,8 @@ test('Teams teacher feedback opens the Teams source and never renders as ManageB
     id: 'assignment-id', displayName: 'Essay', webUrl: 'https://teams.microsoft.com/l/entity/assignments/essay', instructions: { contentType: 'html', content: '<p>Use evidence.</p>' },
     submissions: [{ id: 'submission-id', status: 'returned', recipient: { userId: 'me' }, outcomes: [{ id: 'outcome-id', publishedFeedback: { text: { contentType: 'text', content: 'Explain your evidence more clearly.' }, feedbackBy: { user: { displayName: 'Teacher' } }, feedbackDateTime: '2026-09-19T00:20:00Z' } }] }]
   } } });
+  assert.equal(app.last('graphBatchFailed'), undefined, JSON.stringify(app.sent.filter(item => item.action === 'graphBatchFailed')));
+  app.receive({ type: 'graphStatus', configured: true, connected: true, busy: false });
   assert.match(app.node('content').innerHTML, /Explain your evidence more clearly/);
   assert.match(app.node('content').innerHTML, /Teams · English/);
   assert.match(app.node('content').innerHTML, /data-source="teams" data-url="https:\/\/teams.microsoft.com\/l\/entity\/assignments\/essay"/);

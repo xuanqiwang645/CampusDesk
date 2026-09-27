@@ -4,8 +4,14 @@ import UniformTypeIdentifiers
 import PDFKit
 import Vision
 
+let campusDeskBundleIdentifier = Bundle.main.bundleIdentifier ?? "local.campusdesk.mac"
+let campusDeskSupportFolderName = campusDeskBundleIdentifier == "local.campusdesk.mac"
+    ? "CampusDesk"
+    : "CampusDesk-" + campusDeskBundleIdentifier.replacingOccurrences(of: ".", with: "-")
+let campusDeskSupportDirectory = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+    .appendingPathComponent(campusDeskSupportFolderName, isDirectory: true)
 let userSchoolConfigURL = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first?
-    .appendingPathComponent("CampusDesk", isDirectory: true)
+    .appendingPathComponent(campusDeskSupportFolderName, isDirectory: true)
     .appendingPathComponent("SchoolConfig.json", isDirectory: false)
 var schoolEndpoints = CampusSchoolConfiguration.load(resources: Bundle.main.resourceURL, userConfig: userSchoolConfigURL)
 var sourceHomes: [String: String] { schoolEndpoints.homes.merging(["teams": "https://teams.microsoft.com/"]) { _, teams in teams } }
@@ -16,15 +22,7 @@ let sourceLabels = ["seiue": "希悦", "managebac": "ManageBac", "teams": "Micro
 let processPool = WKProcessPool()
 
 func safeHTTPSURL(_ raw: String) -> URL? {
-    guard raw.count <= 4096, let url = URL(string: raw), url.scheme?.lowercased() == "https", url.host != nil,
-          url.user == nil, url.password == nil, url.port == nil || url.port == 443 else { return nil }
-    // Never persist or open OAuth callback credentials as a page or attachment URL.
-    let secretKeys: Set<String> = ["access_token", "refresh_token", "id_token", "token", "client_secret", "password", "passwd", "assertion", "code", "authorization", "auth_token", "session_token", "authkey", "sig", "signature", "session_state"]
-    let components = URLComponents(url: url, resolvingAgainstBaseURL: false)
-    if components?.queryItems?.contains(where: { secretKeys.contains($0.name.lowercased()) }) == true { return nil }
-    if let fragment = components?.fragment?.removingPercentEncoding,
-       fragment.range(of: "(?:^|[?&#])(?:access_token|refresh_token|id_token|token|client_secret|password|passwd|assertion|code|authorization|auth_token|session_token|authkey|sig|signature|session_state)=", options: [.regularExpression, .caseInsensitive]) != nil { return nil }
-    return url
+    CampusSecurity.safeHTTPSURL(raw)
 }
 func schoolURL(_ raw: String, source: String) -> URL? {
     guard let url = safeHTTPSURL(raw), let host = url.host?.lowercased(), sourceHosts[source]?.contains(host) == true else { return nil }
@@ -74,10 +72,11 @@ enum StateReadError: LocalizedError {
 }
 
 func readSavedState(_ url: URL) throws -> [String: Any] {
-    let size = try url.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
-    guard size <= 26_214_400 else { throw StateReadError.invalid }
+    guard CampusSecurity.isRegularNonSymlinkFile(url, maximumBytes: CampusSecurity.maximumStateBytes) else { throw StateReadError.invalid }
     let data = try Data(contentsOf: url)
-    guard data.count <= 26_214_400, let candidate = try JSONSerialization.jsonObject(with: data) as? [String: Any], candidate["version"] as? Int == 1 else { throw StateReadError.invalid }
+    guard data.count <= CampusSecurity.maximumStateBytes,
+          let candidate = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+          CampusSecurity.validStateEnvelope(candidate) else { throw StateReadError.invalid }
     return candidate
 }
 
@@ -147,7 +146,12 @@ final class SchoolBrowser: NSObject, WKNavigationDelegate, WKUIDelegate, NSWindo
     @objc func reloadPage() { web.reload() }
     @objc func capturePage() { onCapture?(web, source, false) }
     @objc func returnToDashboard() { onReturn?() }
-    func windowWillClose(_ notification: Notification) { stopSignInWatch() }
+    func windowWillClose(_ notification: Notification) {
+        stopSignInWatch()
+        // Closing a school login window returns to the dashboard. If it was
+        // opened from the setup wizard, its modal step remains visible there.
+        onReturn?()
+    }
     func stopSignInWatch() {
         signInTimer?.invalidate(); signInTimer = nil
         signInGeneration = UUID(); checkingSignIn = false
@@ -226,6 +230,7 @@ final class SyncWorker: NSObject, WKNavigationDelegate {
     var pageCount = 0
     var readablePages = 0
     var failedPages = 0
+    var lastFailureMessage: String?
     var pageLimitReached = false
     var queueTruncatedLinks = 0
     var onSnapshot: (([String: Any]) -> Void)?
@@ -245,7 +250,7 @@ final class SyncWorker: NSObject, WKNavigationDelegate {
         guard !busy else { return }
         guard source == "teams" || sourceHomes[source] != nil else { onStatus?(CampusSchoolConfiguration.help, false); return }
         guard !script.isEmpty else { onStatus?("缺少页面读取组件，请重新安装应用", false); return }
-        busy = true; token = UUID(); visited.removeAll(); queue.removeAll(); pageCount = 0; readablePages = 0; failedPages = 0; pageLimitReached = false; queueTruncatedLinks = 0
+        busy = true; token = UUID(); visited.removeAll(); queue.removeAll(); pageCount = 0; readablePages = 0; failedPages = 0; lastFailureMessage = nil; pageLimitReached = false; queueTruncatedLinks = 0
         pageOptions.removeAll(); currentOptions = [:]
         if source == "teams" {
             for page in validatedTeamsPages(pages) {
@@ -272,11 +277,11 @@ final class SyncWorker: NSObject, WKNavigationDelegate {
             activeNavigation = nil
             let message: String
             if readablePages == 0 {
-                message = failedPages > 0 ? "本轮未能读取学校数据，保留缓存；请检查网络或打开原页" : "页面暂无可识别数据，保留缓存；请打开原页检查登录与页面"
+                message = failedPages > 0 ? (lastFailureMessage ?? "读取阶段失败：本轮未能读取学校数据，已保留缓存。请打开学校原页面查看具体状态。") : "页面识别阶段：页面已打开，但没有找到可读取的数据；请进入课表页（希悦）或课程 Tasks / Grades 页（ManageBac）后重试。"
             } else if pageLimitReached {
                 message = "已检查 \(pageLimit) 页；更多内容可打开原页读取"
             } else if failedPages > 0 {
-                message = "已读取 \(readablePages) 页；\(failedPages) 页失败，保留这些页面的缓存"
+                message = "已读取 \(readablePages) 页；另有 \(failedPages) 页失败，保留这些页面的缓存。\(lastFailureMessage ?? "")"
             } else {
                 message = "本轮读取完成（\(pageCount) 页）"
             }
@@ -295,7 +300,8 @@ final class SyncWorker: NSObject, WKNavigationDelegate {
         DispatchQueue.main.asyncAfter(deadline: .now() + 35) { [weak self] in
             guard let self = self, self.busy, self.perPageToken == expected else { return }
             self.perPageToken = UUID(); self.activeNavigation = nil; self.failedPages += 1; self.web.stopLoading()
-            self.onStatus?("页面超时，保留缓存并继续", true)
+            self.lastFailureMessage = "页面加载阶段超时：学校页面 35 秒内未响应；已保留缓存并继续读取其他页面。请确认网络后重试。"
+            self.onStatus?(self.lastFailureMessage ?? "页面加载超时", true)
             self.next()
         }
     }
@@ -306,7 +312,7 @@ final class SyncWorker: NSObject, WKNavigationDelegate {
     }
     func extract(expected: UUID, attempt: Int) {
         guard busy, perPageToken == expected else { return }
-        guard let raw = web.url?.absoluteString, schoolURL(raw, source: source) != nil else { cancel(); onStatus?("请打开 \(sourceLabels[source] ?? source) 网页登录，再点刷新", false); return }
+        guard let raw = web.url?.absoluteString, schoolURL(raw, source: source) != nil else { cancel(); onStatus?("登录跳转阶段：当前页面已离开已配置的学校域名，自动读取已停止。请点击“打开网站”完成登录或验证，再返回同步。", false); return }
         web.evaluateJavaScript(extractionScript(script, source: source, options: currentOptions)) { [weak self] value, error in
             guard let self = self, self.busy, self.perPageToken == expected else { return }
             guard error == nil, let raw = value as? String, let data = raw.data(using: .utf8), let snapshot = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
@@ -314,10 +320,11 @@ final class SyncWorker: NSObject, WKNavigationDelegate {
                     DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in self?.extract(expected: expected, attempt: attempt + 1) }
                     return
                 }
-                self.perPageToken = UUID(); self.failedPages += 1; self.onStatus?("页面读取失败，保留上次数据", true); self.next(); return
+                self.perPageToken = UUID(); self.failedPages += 1; self.lastFailureMessage = "页面内容读取阶段失败：学校页面未能提取为有效数据；请确认页面加载完成后重试。缓存已保留。"; self.onStatus?(self.lastFailureMessage ?? "页面读取失败", true); self.next(); return
             }
             if snapshot["loginRequired"] as? Bool == true {
-                self.onSnapshot?(snapshot); self.busy = false; self.perPageToken = UUID(); self.onStatus?("登录已失效，请打开学校网页重新登录", false); return
+                self.lastFailureMessage = "登录验证阶段：检测到学校登录页或登录表单，当前会话无效/尚未登录。请点击“打开网站”完成登录，再点同步。"
+                self.onSnapshot?(snapshot); self.busy = false; self.perPageToken = UUID(); self.onStatus?(self.lastFailureMessage ?? "需要重新登录", false); return
             }
             if snapshot["categoryAveragesPending"] as? Bool == true && attempt < 3 {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in self?.extract(expected: expected, attempt: attempt + 1) }
@@ -330,8 +337,14 @@ final class SyncWorker: NSObject, WKNavigationDelegate {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in self?.extract(expected: expected, attempt: attempt + 1) }
                 return
             }
-            if parseError { self.failedPages += 1 }
-            else if !empty { self.readablePages += 1 }
+            if parseError {
+                self.failedPages += 1
+                let warning = (snapshot["warnings"] as? [String])?.first
+                self.lastFailureMessage = "页面识别阶段：" + (warning ?? "当前学校页面结构无法识别；登录状态尚不能据此判断。请打开课程 Tasks / Grades 页（ManageBac）或周课表（希悦）后重试。")
+            } else if empty {
+                self.failedPages += 1
+                self.lastFailureMessage = "页面内容阶段：已打开学校页面，但没有找到预期的课程/任务数据；这通常表示还停留在首页、课程未加载完成，或打开了错误页面。请进入对应课程页后重试。"
+            } else { self.readablePages += 1 }
             self.onSnapshot?(snapshot)
             if self.source == "managebac" { self.enqueue(snapshot["links"] as? [[String: Any]] ?? []) }
             self.perPageToken = UUID()
@@ -361,7 +374,24 @@ final class SyncWorker: NSObject, WKNavigationDelegate {
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) { if navigation === activeNavigation { navigationFailed(error) } }
     func navigationFailed(_ error: Error) {
         guard busy, (error as NSError).code != NSURLErrorCancelled else { return }
-        perPageToken = UUID(); activeNavigation = nil; failedPages += 1; onStatus?("网络不可用，保留缓存", true); next()
+        let nsError = error as NSError
+        let detail: String
+        if nsError.domain == NSURLErrorDomain {
+            switch nsError.code {
+            case NSURLErrorNotConnectedToInternet, NSURLErrorNetworkConnectionLost:
+                detail = "网络阶段：设备当前离线或连接中断。"
+            case NSURLErrorTimedOut:
+                detail = "网络阶段：连接学校服务器超时。"
+            case NSURLErrorCannotFindHost, NSURLErrorDNSLookupFailed, NSURLErrorCannotConnectToHost:
+                detail = "网络阶段：无法解析或连接学校服务器，请检查学校网址与网络。"
+            case NSURLErrorServerCertificateUntrusted, NSURLErrorServerCertificateHasBadDate, NSURLErrorSecureConnectionFailed:
+                detail = "安全连接阶段：学校网站的 TLS 证书验证失败，已停止读取；请检查系统日期或联系学校。"
+            default:
+                detail = "页面加载阶段：学校网站请求失败（系统错误 \(nsError.code)）。"
+            }
+        } else { detail = "页面加载阶段：学校网页未能打开（\(nsError.localizedDescription)）。" }
+        lastFailureMessage = detail + " 已保留缓存。"
+        perPageToken = UUID(); activeNavigation = nil; failedPages += 1; onStatus?(lastFailureMessage ?? detail, true); next()
     }
     func webView(_ webView: WKWebView, decidePolicyFor action: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
         if action.targetFrame?.isMainFrame == false {
@@ -370,7 +400,7 @@ final class SyncWorker: NSObject, WKNavigationDelegate {
             return
         }
         guard let url = action.request.url, url.scheme == "https" else { decisionHandler(.cancel); return }
-        if schoolURL(url.absoluteString, source: source) == nil { decisionHandler(.cancel); cancel(); onStatus?("需要登录或打开原页：请打开 \(sourceLabels[source] ?? source)", false); return }
+        if schoolURL(url.absoluteString, source: source) == nil { decisionHandler(.cancel); cancel(); onStatus?("登录跳转阶段：页面跳转到了未配置的域名，可能正在要求验证或使用学校统一登录。为保护会话已停止自动读取；请在学校网站完成登录，再返回 CampusDesk。", false); return }
         decisionHandler(.allow)
     }
 }
@@ -405,6 +435,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
     var graphGeneration = UUID()
     var graphSigningIn = false
     var pendingGraphBatches = Set<String>()
+    var assistantRequestsInFlight = Set<String>()
+    var assistantModelRequestsInFlight = Set<String>()
+    var assistantKeyRecoveryInFlight = false
     var pendingGraphCheckpoint: [String: Any]?
     var state: [String: Any] = [:]
     var graphLocalPartial = false
@@ -413,9 +446,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
     var stateDurable = true
     var canSaveState = true
     var ready = false
+    var freshThemeSetupInProgress = false
     var refreshMinutes = 15
     let resources = Bundle.main.resourceURL!
-    let dataFolder = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("CampusDesk", isDirectory: true)
+    let dataFolder = campusDeskSupportDirectory
     var stateURL: URL { dataFolder.appendingPathComponent("state.json") }
     var graphCheckpointURL: URL { dataFolder.appendingPathComponent("Graph-sync.json") }
     var graphIdentityURL: URL { dataFolder.appendingPathComponent("Graph-account.json") }
@@ -445,16 +479,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
             canSaveState = false
             let alert = NSAlert(); alert.messageText = "无法读取上次数据"; alert.informativeText = "原文件保留在 Application Support/CampusDesk。请先导出备份或检查磁盘权限。\n\(error.localizedDescription)"; alert.runModal()
         }
+        prepareThemeEditionFreshSetup()
         createMenus()
         let config = WKWebViewConfiguration()
         config.websiteDataStore = .nonPersistent()
         config.userContentController.add(self, name: "campus")
-        config.userContentController.addUserScript(WKUserScript(source: "window.CampusSchoolConfig = " + (json(schoolEndpoints.frontend) ?? "{}") + ";", injectionTime: .atDocumentStart, forMainFrameOnly: true))
+        let themeEdition = campusDeskBundleIdentifier == "local.campusdesk.mac.themeedition"
+        let appVersion = ["version": Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "", "name": Bundle.main.object(forInfoDictionaryKey: "CampusDeskReleaseName") as? String ?? ""]
+        let bootstrap = "window.CampusSchoolConfig = " + (json(schoolEndpoints.frontend) ?? "{}") + ";window.CampusDeskThemeEdition = " + (themeEdition ? "true" : "false") + ";window.CampusDeskAppVersion = " + (json(appVersion) ?? "{}") + ";"
+        config.userContentController.addUserScript(WKUserScript(source: bootstrap, injectionTime: .atDocumentStart, forMainFrameOnly: true))
         dashboard = WKWebView(frame: .zero, configuration: config)
         dashboard.navigationDelegate = self
         dashboard.uiDelegate = self
         window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1220, height: 850), styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
-        window.title = "CampusDesk · 学习看板"
+        window.title = campusDeskBundleIdentifier == "local.campusdesk.mac.themeedition" ? "CampusDesk · 主题版" : "CampusDesk · 学习看板"
         window.minSize = NSSize(width: 900, height: 640)
         window.isReleasedWhenClosed = false
         window.contentView = dashboard
@@ -501,6 +539,57 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         tray.addItem(.separator()); tray.addItem(withTitle: "退出", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         statusItem.menu = tray
     }
+    func prepareThemeEditionFreshSetup() {
+        guard campusDeskBundleIdentifier == "local.campusdesk.mac.themeedition" else { return }
+        let migrationKey = "CampusDesk.ThemeEdition.FreshSetup.42"
+        guard !UserDefaults.standard.bool(forKey: migrationKey) else { return }
+        freshThemeSetupInProgress = true
+        teamsAutoBridge.cancel(); teamsBrowserBridge.cancel()
+        let graphCredentialsRemoved = graphAuth.signOut()
+        let assistantKeyRemoved = CampusAssistantAI.deleteDeepSeekKey()
+        clearGraphIdentity()
+        teamsBrowserAccount = nil
+        var teamsSessionFilesRemoved = true
+        for url in [teamsBrowserIdentityURL, teamsAutoCheckpointURL, teamsAutoStatusURL] where FileManager.default.fileExists(atPath: url.path) {
+            do { try FileManager.default.removeItem(at: url) }
+            catch { teamsSessionFilesRemoved = false }
+        }
+        teamsSessionFilesRemoved = teamsSessionFilesRemoved
+            && !FileManager.default.fileExists(atPath: teamsBrowserIdentityURL.path)
+            && !FileManager.default.fileExists(atPath: teamsAutoCheckpointURL.path)
+            && !FileManager.default.fileExists(atPath: teamsAutoStatusURL.path)
+
+        var stateSaved = true
+        if !state.isEmpty {
+            var settings = state["settings"] as? [String: Any] ?? [:]
+            settings["setupWizardCompleted"] = false
+            settings["setupWizardStep"] = 0
+            settings["teamsBrowserAutomation"] = false
+            state["settings"] = settings
+            stateSaved = persistState()
+        }
+
+        // WKWebsiteDataStore is scoped by bundle identifier on disk. Clear only
+        // this side-by-side edition's school cookies, never the original app's.
+        let store = WKWebsiteDataStore.default()
+        store.fetchDataRecords(ofTypes: WKWebsiteDataStore.allWebsiteDataTypes()) { [weak self] records in
+            guard let self else { return }
+            let hosts = Set(sourceHosts.values.flatMap { $0 }.map { $0.lowercased() })
+            let selected = records.filter { record in
+                let domain = record.displayName.lowercased()
+                return hosts.contains(domain) || hosts.contains(where: { domain.hasSuffix("." + $0) })
+            }
+            let finish = {
+                self.freshThemeSetupInProgress = false
+                if graphCredentialsRemoved && assistantKeyRemoved && teamsSessionFilesRemoved && stateSaved {
+                    UserDefaults.standard.set(true, forKey: migrationKey)
+                }
+                if self.ready { self.sync() }
+            }
+            guard !selected.isEmpty else { finish(); return }
+            store.removeData(ofTypes: WKWebsiteDataStore.allWebsiteDataTypes(), for: selected, completionHandler: finish)
+        }
+    }
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool { showDashboard(); return true }
     func applicationWillTerminate(_ notification: Notification) {
@@ -516,6 +605,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
     var teamsMode: String { (state["settings"] as? [String: Any])?["teamsMode"] as? String == "browser" ? "browser" : "graph" }
     var graphIncludeChats: Bool { (state["settings"] as? [String: Any])?["graphIncludeChats"] as? Bool ?? true }
     @objc func sync() {
+        if freshThemeSetupInProgress { return }
         for worker in workers.values { worker.start() }
         syncTeams()
     }
@@ -863,7 +953,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
             self?.emit(["type": "snapshot", "snapshot": snapshot])
             let loginRequired = snapshot["loginRequired"] as? Bool == true
             let warnings = snapshot["warnings"] as? [String] ?? []
-            self?.status(source, loginRequired ? "请在学校页面登录后再读取" : (warnings.first.map { "已读取当前页；" + $0 } ?? "已读取当前页"), false)
+            let parseError = snapshot["parseError"] as? Bool == true || !(snapshot["parseError"] as? String ?? "").isEmpty
+            let count = source == "seiue" ? ((snapshot["schedule"] as? [Any])?.count ?? 0) : ((snapshot["courses"] as? [Any])?.count ?? 0) + ((snapshot["tasks"] as? [Any])?.count ?? 0)
+            let message: String
+            if loginRequired { message = "登录验证阶段：检测到登录页面；请在学校原页面完成登录后再同步。" }
+            else if parseError { message = "页面识别阶段：" + (warnings.first ?? "当前页面结构无法识别；请进入对应的课表页或课程 Tasks / Grades 页面后重试。") }
+            else if count == 0 { message = "页面内容阶段：页面已打开，但没有找到课表或课程任务数据；请进入对应内容页并等待加载完成。" }
+            else { message = warnings.first.map { "读取完成，但有提示：" + $0 } ?? "已读取当前页" }
+            self?.status(source, message, false)
         }
     }
     func emit(_ value: [String: Any]) {
@@ -879,13 +976,149 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         alert.beginSheetModal(for: window) { completionHandler($0 == .alertFirstButtonReturn) }
     }
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
-        guard message.webView === dashboard, message.frameInfo.isMainFrame, let url = message.frameInfo.request.url, url.isFileURL,
-              url.standardizedFileURL.path == resources.appendingPathComponent("index.html").standardizedFileURL.path,
+        guard message.webView === dashboard, message.frameInfo.isMainFrame,
+              let url = message.frameInfo.request.url, CampusSecurity.isDashboardResourceURL(url, resources: resources),
               let body = message.body as? [String: Any], let action = body["action"] as? String else { return }
+        guard action.utf8.count <= 80, let bodyJSON = json(body), bodyJSON.utf8.count <= CampusSecurity.maximumStateBytes else { return }
         switch action {
         case "ready":
-            ready = true; emit(["type": "schoolConfiguration", "config": schoolEndpoints.frontend]); emit(["type": "state", "state": state]); emitGraphStatus(); emitTeamsAutoStatus(); configureTimer()
+            ready = true; emit(["type": "schoolConfiguration", "config": schoolEndpoints.frontend]); emit(["type": "state", "state": state]); emitGraphStatus(); emitTeamsAutoStatus()
+            if assistantKeyRecoveryInFlight { emit(["type": "assistantStatus", "deepSeekKeyConfigured": true, "deepSeekKeyState": "locked"]) }
+            else { emit(CampusAssistantAI.status()) }
+            configureTimer()
             DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in self?.sync() }
+        case "assistantOpenGuide":
+            guard campusDeskBundleIdentifier == "local.campusdesk.mac.themeedition",
+                  let id = body["id"] as? String, let url = CampusAssistantSetupGuide.url(for: id) else { return }
+            if !NSWorkspace.shared.open(url) { emit(["type": "assistantGuideResult", "operation": "open", "success": false]) }
+        case "assistantCopyGuideCommand":
+            guard campusDeskBundleIdentifier == "local.campusdesk.mac.themeedition",
+                  let id = body["id"] as? String, let command = CampusAssistantSetupGuide.commands[id] else { return }
+            NSPasteboard.general.clearContents()
+            let copied = NSPasteboard.general.setString(command, forType: .string)
+            emit(["type": "assistantGuideResult", "operation": "copy", "success": copied])
+        case "assistantRestoreDeepSeekKey":
+            guard campusDeskBundleIdentifier == "local.campusdesk.mac.themeedition", !assistantKeyRecoveryInFlight else { return }
+            assistantKeyRecoveryInFlight = true
+            DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+                var errorCode: String?
+                do { try CampusAssistantAI.restoreDeepSeekKeyAccess() }
+                catch let error as AssistantError { errorCode = error.code }
+                catch { errorCode = "keyStore" }
+                var event = CampusAssistantAI.status()
+                event["notice"] = "keyRecoveryFinished"
+                if let errorCode { event["errorCode"] = errorCode }
+                else { event["notice"] = "keyRestored" }
+                DispatchQueue.main.async {
+                    guard let self else { return }
+                    self.assistantKeyRecoveryInFlight = false
+                    self.emit(event)
+                }
+            }
+        case "assistantSaveDeepSeekKey":
+            guard campusDeskBundleIdentifier == "local.campusdesk.mac.themeedition", !assistantKeyRecoveryInFlight, let key = body["key"] as? String else { return }
+            do {
+                try CampusAssistantAI.saveDeepSeekKey(key)
+                var event = CampusAssistantAI.status(); event["notice"] = "keySaved"
+                emit(event)
+            } catch let error as AssistantError {
+                var event = CampusAssistantAI.status(); event["errorCode"] = error.code
+                emit(event)
+            } catch {
+                var event = CampusAssistantAI.status(); event["errorCode"] = "keyStore"
+                emit(event)
+            }
+        case "assistantDeleteDeepSeekKey":
+            guard campusDeskBundleIdentifier == "local.campusdesk.mac.themeedition", !assistantKeyRecoveryInFlight else { return }
+            let removed = CampusAssistantAI.deleteDeepSeekKey()
+            var event = CampusAssistantAI.status()
+            if removed { event["notice"] = "keyDeleted" } else { event["errorCode"] = "keyStore" }
+            emit(event)
+        case "assistantListModels":
+            guard campusDeskBundleIdentifier == "local.campusdesk.mac.themeedition",
+                  let provider = body["provider"] as? String, ["deepseek", "ollama"].contains(provider),
+                  let requestID = body["requestId"] as? String,
+                  requestID.range(of: "^[A-Za-z0-9-]{1,100}$", options: .regularExpression) != nil else { return }
+            let settings = state["settings"] as? [String: Any] ?? [:]
+            let mode = settings["aiProvider"] as? String ?? "off"
+            guard mode == "hybrid" || mode == provider || (mode == "auto" && provider == "deepseek") else { return }
+            if provider == "deepseek" && assistantKeyRecoveryInFlight {
+                emit(["type": "assistantModels", "provider": provider, "requestId": requestID, "errorCode": "busy"]); return
+            }
+            guard !assistantModelRequestsInFlight.contains(provider) else {
+                emit(["type": "assistantModels", "provider": provider, "requestId": requestID, "errorCode": "busy"]); return
+            }
+            let key: String?
+            do { key = provider == "deepseek" ? try CampusAssistantAI.keyForModelCatalog() : nil }
+            catch let error as AssistantError {
+                emit(CampusAssistantAI.status())
+                emit(["type": "assistantModels", "provider": provider, "requestId": requestID, "errorCode": error.code]); return
+            } catch {
+                emit(["type": "assistantModels", "provider": provider, "requestId": requestID, "errorCode": "keyStore"]); return
+            }
+            assistantModelRequestsInFlight.insert(provider)
+            CampusAssistantModels.list(provider: provider, key: key) { [weak self] result in
+                DispatchQueue.main.async {
+                    guard let self else { return }
+                    self.assistantModelRequestsInFlight.remove(provider)
+                    var event: [String: Any] = ["type": "assistantModels", "provider": provider, "requestId": requestID]
+                    switch result {
+                    case .success(let models): event["models"] = models
+                    case .failure(let error): event["errorCode"] = error.code
+                    }
+                    self.emit(event)
+                }
+            }
+        case "assistantRequest":
+            guard campusDeskBundleIdentifier == "local.campusdesk.mac.themeedition",
+                  let requestID = body["requestId"] as? String,
+                  requestID.range(of: "^[A-Za-z0-9-]{1,100}$", options: .regularExpression) != nil,
+                  let requestedProvider = body["provider"] as? String,
+                  let messages = body["messages"] as? [[String: Any]] else { return }
+            guard !assistantRequestsInFlight.contains(requestID), assistantRequestsInFlight.count < 2 else {
+                emit(["type": "assistantResponse", "requestId": requestID, "errorCode": "invalidRequest"]); return
+            }
+            // The renderer may preview a request, but it cannot override the
+            // provider or model saved in native app settings.
+            let aiSettings = state["settings"] as? [String: Any] ?? [:]
+            let savedProvider = aiSettings["aiProvider"] as? String ?? "off"
+            let provider = savedProvider == "auto" ? "deepseek" : savedProvider
+            guard provider != "off", requestedProvider == savedProvider || (savedProvider == "auto" && requestedProvider == "deepseek") else {
+                emit(["type": "assistantResponse", "requestId": requestID, "errorCode": "invalidRequest"]); return
+            }
+            let savedRemoteModel = aiSettings["aiModel"] as? String
+            let savedLocalModel = aiSettings["aiOllamaModel"] as? String
+            let remoteModel = savedRemoteModel.flatMap { $0.isEmpty ? nil : $0 } ?? "deepseek-flash"
+            let localModel = savedLocalModel.flatMap { $0.isEmpty ? nil : $0 } ?? "qwen3:8b"
+            let model: String
+            let fallbackModel: String?
+            switch provider {
+            case "ollama": model = localModel; fallbackModel = nil
+            case "deepseek": model = remoteModel; fallbackModel = nil
+            case "hybrid":
+                model = remoteModel
+                fallbackModel = localModel
+            default: return
+            }
+            let networkAvailable = body["networkAvailable"] as? Bool ?? true
+            if assistantKeyRecoveryInFlight && (provider == "deepseek" || (provider == "hybrid" && networkAvailable)) {
+                emit(["type": "assistantResponse", "requestId": requestID, "errorCode": "keyAccess"]); return
+            }
+            assistantRequestsInFlight.insert(requestID)
+            CampusAssistantAI.request(provider: provider, model: model, fallbackModel: fallbackModel, networkAvailable: networkAvailable, messages: messages) { [weak self] result in
+                DispatchQueue.main.async {
+                    guard let self else { return }
+                    self.assistantRequestsInFlight.remove(requestID)
+                    switch result {
+                    case .success(let reply):
+                        var event: [String: Any] = ["type": "assistantResponse", "requestId": requestID, "answer": reply.answer, "providerUsed": reply.providerUsed]
+                        if let reason = reply.fallbackReason { event["fallbackReason"] = reason }
+                        self.emit(event)
+                    case .failure(let error):
+                        self.emit(["type": "assistantResponse", "requestId": requestID, "errorCode": error.code])
+                    }
+                }
+            }
         case "saveSchoolConfiguration":
             guard let config = body["config"] as? [String: Any], let target = userSchoolConfigURL else { return }
             do {
@@ -903,8 +1136,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
                 emit(["type": "schoolConfigurationError"])
             }
         case "saveState":
-            if let candidate = body["state"] as? [String: Any], candidate["version"] as? Int == 1,
-               JSONSerialization.isValidJSONObject(candidate) {
+            if let candidate = body["state"] as? [String: Any], CampusSecurity.validStateEnvelope(candidate) {
                 // Keep current edits exportable even if this session cannot write its state file.
                 let acceptedImport = body["imported"] as? Bool == true
                 if acceptedImport {
@@ -1405,7 +1637,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         }
     }
     func webView(_ webView: WKWebView, decidePolicyFor action: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
-        guard let url = action.request.url, url.isFileURL, url.standardizedFileURL.path.hasPrefix(resources.standardizedFileURL.path + "/") else { decisionHandler(.cancel); return }
+        guard let url = action.request.url, CampusSecurity.isDashboardResourceURL(url, resources: resources),
+              action.targetFrame?.isMainFrame == true else { decisionHandler(.cancel); return }
         decisionHandler(.allow)
     }
 }

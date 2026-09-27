@@ -1,10 +1,10 @@
 /* CampusDesk data model. No network calls, credentials, or platform dependencies. */
 (function (root, factory) {
   'use strict';
-  const api = factory(root.CampusSchoolConfig);
+  const api = factory(root.CampusSchoolConfig, root.CampusDeskThemeEdition === true);
   if (typeof module === 'object' && module.exports) module.exports = api;
   root.CampusCore = api;
-})(typeof globalThis !== 'undefined' ? globalThis : this, function (initialSchoolConfig) {
+})(typeof globalThis !== 'undefined' ? globalThis : this, function (initialSchoolConfig, themeEdition) {
   'use strict';
   const VERSION = 1;
   const MAX_BYTES = 25 * 1024 * 1024;
@@ -12,7 +12,9 @@
   const BAD_KEYS = new Set(['__proto__', 'prototype', 'constructor']);
   const SOURCES = ['seiue', 'managebac', 'teams'];
   const TEAMS_HOSTS = new Set(['teams.microsoft.com', 'teams.cloud.microsoft']);
+  const schoolCalendarEventsCache = new WeakMap();
   let configuredSchools = { seiue: '', managebac: '' };
+  const snapshotEntriesCache = new WeakMap();
   function configureSchools(config) {
     const next = { seiue: '', managebac: '' };
     for (const source of ['seiue', 'managebac']) {
@@ -386,12 +388,14 @@
     return tz;
   }
   function emptyState() {
-    return { version: VERSION, settings: { timezone: 'Asia/Shanghai', refreshMinutes: 15, selfStudy: true,
+    const state = { version: VERSION, settings: { timezone: 'Asia/Shanghai', refreshMinutes: 15, selfStudy: true,
       seiueURL: configuredSchools.seiue, managebacURL: configuredSchools.managebac, teamsPages: [], teamsNotifications: false,
       teamsBrowser: 'chrome', teamsBrowserAutomation: false, teamsMode: 'browser', teamsAutoDiscover: true, graphIncludeChats: true,
-      reminderMinutes: 30, teamsDueOverrides: {}, dashboardTheme: 'classic', gpaCandleColors: 'red-up', language: 'zh-CN', focusSubjects: [], focusTeamsChannels: [], customLessons: [],
+      reminderMinutes: 30, reminderSubjects: [], teamsDueOverrides: {}, dashboardTheme: 'classic', colorTheme: 'sage', gpaCandleColors: 'red-up', language: 'zh-CN', focusSubjects: [], focusTeamsChannels: [], customLessons: [],
       scheduleHolidays: [], scheduleWeekAnchor: '', scheduleOverrides: [], focusMode: false, planOrder: [], taskMinutes: {}, taskPriority: {}, gradeGoals: {}, gradePlans: {}, gpaTermDates: {}, ecIdentityNames: [] }, snapshots: { seiue: {}, managebac: {}, teams: {} },
       manualTasks: [], taskChecks: {}, feedbackRead: {}, gradeHistory: [], changeLog: [], schoolCalendar: { fileName: '', importedAt: '', events: [] } };
+    if (themeEdition) Object.assign(state.settings, { aiProvider: 'off', aiModel: '', aiOllamaModel: 'qwen3:8b', aiContextCategories: ['tasks', 'schedule'], setupWizardCompleted: false, setupWizardStep: 0, setupWizardIntroVersion: '' });
+    return state;
   }
   function scheduleRow(row) {
     record(row, '课程');
@@ -488,6 +492,7 @@
     const result = { id: id(row.id, (manual ? 'manual-' : 'task-') + hash(title + course + (dueAt || ''))),
       title, course, dueAt, dueLabel: str(row.dueLabel, 300), status: str(row.status, 100, 'open'),
       url: checkedURL(row.url, 'managebac', true) };
+    if (row.dueTerm !== undefined) result.dueTerm = str(row.dueTerm, 200);
     if (manual) result.createdAt = dateISO(row.createdAt, true);
     return result;
   }
@@ -736,14 +741,33 @@
     s.settings.graphIncludeChats = bool(settings.graphIncludeChats, true);
     s.settings.reminderMinutes = settings.reminderMinutes === undefined ? 30 : finite(settings.reminderMinutes, 0, 10080, false);
     if (!Number.isInteger(s.settings.reminderMinutes)) fail('提醒分钟数必须为整数');
+    s.settings.reminderSubjects = settings.reminderSubjects === undefined ? [] : [...new Set(array(settings.reminderSubjects, '提醒学科', 100).map(value => str(value, 120)).filter(Boolean))];
     s.settings.dashboardTheme = settings.dashboardTheme === undefined ? 'classic' : settings.dashboardTheme;
     if (!['classic', 'board'].includes(s.settings.dashboardTheme)) fail('面板样式无效');
+    s.settings.colorTheme = settings.colorTheme === undefined ? 'sage' : settings.colorTheme;
+    if (!['sage', 'ocean', 'ember', 'midnight'].includes(s.settings.colorTheme)) fail('主题配色无效');
     s.settings.gpaCandleColors = settings.gpaCandleColors === undefined ? 'red-up' : settings.gpaCandleColors;
     if (!['red-up', 'green-up'].includes(s.settings.gpaCandleColors)) fail('GPA K 线颜色设置无效');
     s.settings.language = settings.language === undefined ? 'zh-CN' : settings.language;
     if (!['zh-CN', 'en-US'].includes(s.settings.language)) fail('界面语言无效');
     s.settings.focusMode = bool(settings.focusMode, false);
     s.settings.ecIdentityNames = settings.ecIdentityNames === undefined ? [] : array(settings.ecIdentityNames, 'EC 姓名匹配', 10).map(value => str(value, 100));
+    if (themeEdition) {
+      s.settings.setupWizardCompleted = bool(settings.setupWizardCompleted, false);
+      s.settings.setupWizardStep = settings.setupWizardStep === undefined ? 0 : finite(settings.setupWizardStep, 0, 8, false);
+      if (!Number.isInteger(s.settings.setupWizardStep)) fail('首次设置步骤无效');
+      // Older backups only had setupWizardCompleted. Keep the functional
+      // completion flag and migrate the versioned welcome marker independently.
+      s.settings.setupWizardIntroVersion = settings.setupWizardIntroVersion === undefined ? '' : str(settings.setupWizardIntroVersion, 40);
+      s.settings.aiProvider = settings.aiProvider === 'auto' ? 'deepseek' : settings.aiProvider === undefined ? 'off' : settings.aiProvider;
+      if (!['off', 'ollama', 'deepseek', 'hybrid'].includes(s.settings.aiProvider)) fail('学习助手接入方式无效');
+      s.settings.aiModel = settings.aiModel === undefined ? '' : str(settings.aiModel, 100);
+      const legacyOllamaModel = settings.aiOllamaModel === undefined && settings.aiProvider === 'ollama' && settings.aiModel && !String(settings.aiModel).startsWith('deepseek') ? settings.aiModel : 'qwen3:8b';
+      s.settings.aiOllamaModel = settings.aiOllamaModel === undefined ? str(legacyOllamaModel, 100) : str(settings.aiOllamaModel, 100);
+      const allowedAIContexts = new Set(['tasks', 'grades', 'schedule', 'feedback', 'teams', 'calendar', 'attachments']);
+      s.settings.aiContextCategories = settings.aiContextCategories === undefined ? ['tasks', 'schedule'] : [...new Set(array(settings.aiContextCategories, '学习助手资料范围', 7).map(value => str(value, 30)))];
+      if (s.settings.aiContextCategories.some(value => !allowedAIContexts.has(value))) fail('学习助手资料范围无效');
+    }
     s.settings.planOrder = settings.planOrder === undefined ? [] : array(settings.planOrder, '今日计划顺序', 3000).map(value => str(value, 512));
     for (const key of ['taskMinutes', 'taskPriority', 'gradeGoals']) {
       if (settings[key] === undefined) { s.settings[key] = {}; continue; }
@@ -853,7 +877,15 @@
   function today(date, tz) { const p = parts(date, tz); return p.year + '-' + p.month + '-' + p.day; }
   function clock(date, tz) { const p = parts(date, tz); return p.hour + ':' + p.minute; }
   function entries(state, source) {
-    return Object.values(state.snapshots[source] || {}).sort((a, b) => Date.parse(b.capturedAt) - Date.parse(a.capturedAt));
+    const snapshots = state.snapshots[source] || {};
+    if (!snapshots || typeof snapshots !== 'object') return [];
+    let sorted = snapshotEntriesCache.get(snapshots);
+    if (!sorted) {
+      sorted = Object.values(snapshots).map((snapshot, index) => ({ snapshot, index, capturedAt: Date.parse(snapshot.capturedAt) || 0 }))
+        .sort((a, b) => b.capturedAt - a.capturedAt || a.index - b.index).map(row => row.snapshot);
+      snapshotEntriesCache.set(snapshots, sorted);
+    }
+    return sorted;
   }
   function getSchedulePeriods(state) {
     for (const snapshot of entries(state, 'seiue')) {
@@ -874,7 +906,16 @@
     const days = { '日':0, '天':0, '一':1, '二':2, '三':3, '四':4, '五':5, '六':6 };
     for (const event of events) {
       if (event.durationDays > 1) continue;
-      const match = /(?:补|按|上)(?:周|星期)([一二三四五六日天])(?:的)?(?:课|课表)/.exec(event.title);
+      const title = event.title.replace(/[\s　]+/g, '');
+      // School calendars express make-up workdays in several explicit forms.
+      // Require a weekday and a class/workday directive to avoid interpreting
+      // unrelated mentions of a weekday as a schedule override.
+      const patterns = [
+        /(?:补(?:上)?|按(?:照)?|上|执行)(?:周|星期)([一二三四五六日天])(?:的)?(?:课|课程|课表|上课)/,
+        /(?:调休|补班|上班)[，,：:；;]{0,8}按(?:照)?(?:周|星期)([一二三四五六日天])(?:的)?(?:课|课程|课表|上课|执行)/,
+        /(?:周|星期)([一二三四五六日天])(?:的)?(?:课程|课表)(?:照常|上课|执行|补课)/
+      ];
+      const match = patterns.map(pattern => pattern.exec(title)).find(Boolean);
       if (match) return { kind: 'makeup', weekday: days[match[1]], title: event.title };
     }
     const holiday = events.find(event => /(?:假期|放假|调休休息|休息日)/.test(event.title));
@@ -987,8 +1028,13 @@
   }
   function getSchoolCalendarEvents(state, date) {
     const target = dayKey(date || today(undefined, state.settings.timezone));
+    const calendarRows = state.schoolCalendar.events;
+    let dayCache = schoolCalendarEventsCache.get(calendarRows);
+    if (!dayCache) { dayCache = new Map(); schoolCalendarEventsCache.set(calendarRows, dayCache); }
+    const cached = dayCache.get(target);
+    if (cached) return cached.map(event => Object.assign({}, event));
     const output = [];
-    for (const event of state.schoolCalendar.events) {
+    for (const event of calendarRows) {
       const length = event.durationDays || 0, maxOffset = event.allDay ? Math.max(0, length - 1) : length;
       for (let offset = 0; offset <= maxOffset; offset++) {
         const occurrenceDate = addDays(target, -offset);
@@ -1001,8 +1047,10 @@
         }
       }
     }
-    return output.sort((a, b) => Number(a.allDay) !== Number(b.allDay) ? Number(b.allDay) - Number(a.allDay) :
+    const sorted = output.sort((a, b) => Number(a.allDay) !== Number(b.allDay) ? Number(b.allDay) - Number(a.allDay) :
       (a.displayStartTime || '').localeCompare(b.displayStartTime || '') || a.title.localeCompare(b.title));
+    dayCache.set(target, sorted);
+    return sorted.map(event => Object.assign({}, event));
   }
   function getSchedule(state, date, includeSelfStudy) {
     const key = typeof date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(date) ? dayKey(date) : today(date, state.settings.timezone);
@@ -1156,17 +1204,89 @@
     return null;
   }
   function done(status) { return /^(completed|complete|done|submitted|graded|已完成|已提交|已评分)$/i.test(status || ''); }
+  // Parse only a deadline field, never arbitrary dates in assignment instructions.
+  // Missing years require an explicit matching term; missing times stay unresolved.
+  function resolveTaskDeadline(task, context = {}) {
+    if (task.dueAt) return { dueAt: task.dueAt, dueResolution: 'source' };
+    let label = String(task.dueLabel || '').trim();
+    if (!label || /^(?:homework\s+)?(?:deadline|due(?:\s+date)?|截止(?:时间|日期)?)\s*[:：]?$/i.test(label)) {
+      const lines = String(task.requirements || '').split(/\r?\n/), blocks = [];
+      for (let i = 0; i < lines.length; i++) {
+        if (!/^\s*(?:(?:homework|assignment)\s+)?(?:deadline|due(?:\s+date)?|截止(?:时间|日期)?|提交截止)\s*(?:[:：]|\b(?:on|by)\b)/i.test(lines[i])) continue;
+        let block = lines[i].trim();
+        if (/[:：]\s*$/.test(block)) block += ' ' + (lines[i + 1] || '').trim();
+        blocks.push(block);
+      }
+      if (blocks.length !== 1) return { dueAt: null, dueResolution: 'unknown' };
+      label = blocks[0];
+    }
+    const raw = label.replace(/\s+/g, ' ').replace(/上午/g, ' AM ').replace(/下午/g, ' PM ');
+    const months = ['jan','feb','mar','apr','may','jun','jul','aug','sep','oct','nov','dec'];
+    let year, month, day;
+    const dates = [...raw.matchAll(/\b(20\d{2})[-/.年](\d{1,2})[-/.月](\d{1,2})(?!\d)日?/g)];
+    const named = [...raw.matchAll(/\b(Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:t(?:ember)?)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\.?\s+(\d{1,2})(?!\d)(?:st|nd|rd|th)?(?:,?\s+(20\d{2}))?/gi)];
+    const dayFirst = [...raw.matchAll(/\b(\d{1,2})(?:st|nd|rd|th)?\s+(Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:t(?:ember)?)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\.?\s+(20\d{2})\b/gi)];
+    const numeric = [...raw.matchAll(/\b(\d{1,2})\/(\d{1,2})\/(20\d{2})\b/g)];
+    const chinese = [...raw.matchAll(/(\d{1,2})月\s*(\d{1,2})日/g)];
+    if (dates.length === 1) [year, month, day] = dates[0].slice(1).map(Number);
+    else if (named.length === 1) { year = named[0][3] ? +named[0][3] : null; month = months.indexOf(named[0][1].slice(0,3).toLowerCase()) + 1; day = +named[0][2]; }
+    else if (dayFirst.length === 1) { year = +dayFirst[0][3]; month = months.indexOf(dayFirst[0][2].slice(0,3).toLowerCase()) + 1; day = +dayFirst[0][1]; }
+    else if (numeric.length === 1 && (+numeric[0][1] > 12 || +numeric[0][2] > 12)) {
+      year = +numeric[0][3]; month = Math.min(+numeric[0][1], +numeric[0][2]); day = Math.max(+numeric[0][1], +numeric[0][2]);
+    }
+    else if (!dates.length && chinese.length === 1) { month = +chinese[0][1]; day = +chinese[0][2]; }
+    else return { dueAt: null, dueResolution: 'unknown' };
+    // Multiple date references (often different classes) must not select the first.
+    if (dates.length + named.length + dayFirst.length + numeric.length > 1 || chinese.length > 1) return { dueAt: null, dueResolution: 'ambiguous' };
+    const times = [...raw.matchAll(/(?:^|[^\d])([01]?\d|2[0-3])[:：]([0-5]\d)(?::([0-5]\d))?(?![:\d])\s*(AM|PM)?/gi)].filter(match => !/[+-]\s*$/.test(raw.slice(0, match.index + 1)));
+    if (times.length !== 1) return { dueAt: null, dueResolution: 'unknown' };
+    let hour = +times[0][1], minute = +times[0][2], second = +(times[0][3] || 0);
+    const meridiem = (times[0][4] || (raw.slice(0, times[0].index + 1).match(/\b(AM|PM)\s*$/i) || [])[1] || '').toUpperCase();
+    if (meridiem) { if (hour < 1 || hour > 12) return { dueAt: null, dueResolution: 'unknown' }; hour = hour % 12 + (meridiem === 'PM' ? 12 : 0); }
+    const term = String(context.term || ''), range = context.range;
+    const inferredYear = !year;
+    let years = year ? [year] : [];
+    if (!year && range && /^\d{4}-\d{2}-\d{2}$/.test(range.start || '') && /^\d{4}-\d{2}-\d{2}$/.test(range.end || '')) {
+      const start = +range.start.slice(0,4), end = +range.end.slice(0,4);
+      if (end - start >= 0 && end - start <= 1) years = start === end ? [start] : [start, end];
+    } else if (!year) {
+      years = [...new Set((term.match(/\b20\d{2}\b/g) || []).map(Number))];
+      const shortRange = term.match(/\b(20\d{2})\s*[-–/]\s*(\d{2})\b/);
+      if (shortRange) years = [+shortRange[1], Math.floor(+shortRange[1] / 100) * 100 + +shortRange[2]];
+    }
+    const weekday = raw.match(/\b(Sun(?:day)?|Mon(?:day)?|Tue(?:sday)?|Wed(?:nesday)?|Thu(?:rsday)?|Fri(?:day)?|Sat(?:urday)?)\b/i);
+    const expectedDay = weekday ? ['sun','mon','tue','wed','thu','fri','sat'].indexOf(weekday[1].slice(0,3).toLowerCase()) : null;
+    const candidates = years.filter(y => {
+      const date = new Date(Date.UTC(y, month - 1, day));
+      const key = date.toISOString().slice(0,10);
+      return date.getUTCFullYear() === y && date.getUTCMonth() === month - 1 && date.getUTCDate() === day &&
+        (expectedDay === null || date.getUTCDay() === expectedDay) &&
+        (!inferredYear || !range || (key >= range.start && key <= range.end));
+    });
+    if (candidates.length !== 1) return { dueAt: null, dueResolution: 'ambiguous' };
+    // School dates without an offset follow the app's Beijing school clock;
+    // expose that interpretation in the UI instead of using the Mac's timezone.
+    const zone = raw.match(/(?:UTC|GMT)\s*([+-])(\d{1,2})(?::?(\d{2}))?/i) || raw.match(/([+-])(\d{2}):?(\d{2})\s*$/);
+    let offset = /(?:\bUTC\b|\bGMT\b|Z\s*$)/i.test(raw) ? 0 : 480;
+    if (zone) { if (+zone[2] > 14 || +(zone[3] || 0) > 59 || (+zone[2] === 14 && +(zone[3] || 0))) return { dueAt: null, dueResolution: 'unknown' }; offset = (zone[1] === '-' ? -1 : 1) * (+zone[2] * 60 + +(zone[3] || 0)); }
+    if (/\b(?:PST|PDT|EST|EDT|CET|CEST|IST)\b/i.test(raw)) return { dueAt: null, dueResolution: 'unknown' };
+    return { dueAt: new Date(Date.UTC(candidates[0], month - 1, day, hour, minute, second) - offset * 60000).toISOString(),
+      dueResolution: inferredYear ? 'term' : zone || /(?:\bUTC\b|\bGMT\b|Z\s*$)/i.test(raw) ? 'text' : 'school-time', dueLabel: label };
+  }
   function getTasks(state) {
     const rows = [], seenIds = new Set(), seenKeys = new Set();
+    const mbCourses = entries(state, 'managebac').flatMap(s => s.courses || []);
     for (const s of entries(state, 'managebac')) for (const task of s.tasks || []) {
       const key = [task.title.toLowerCase(), task.course.toLowerCase(), task.dueAt || task.dueLabel || ''].join('|');
       if (seenIds.has(task.id) || seenKeys.has(key)) continue;
       seenIds.add(task.id); seenKeys.add(key);
       rows.push(Object.assign({}, task, { manual: false, source: 'managebac', sourceURL: s.url, capturedAt: s.capturedAt,
+        dueTerm: task.dueTerm || ((s.courses || []).find(course => course.name === task.course) || {}).term || '',
         completed: Object.prototype.hasOwnProperty.call(state.taskChecks, task.id) ? state.taskChecks[task.id] : done(task.status) }));
     }
     const teamRows = entries(state, 'teams').flatMap(s => (s.tasks || []).map(task => Object.assign({}, task, { sourceURL: s.url, capturedAt: task.capturedAt || s.capturedAt })))
-      .sort((a, b) => Date.parse(b.capturedAt) - Date.parse(a.capturedAt));
+      .map((task, index) => ({ task, index, capturedAt: Date.parse(task.capturedAt) || 0 }))
+      .sort((a, b) => b.capturedAt - a.capturedAt || a.index - b.index).map(row => row.task);
     const seenTeams = new Set();
     for (const task of teamRows) {
       const taskID = teamsID(task.id);
@@ -1179,23 +1299,45 @@
     }
     for (const task of state.manualTasks) rows.push(Object.assign({}, task, { manual: true, source: 'manual',
       completed: Object.prototype.hasOwnProperty.call(state.taskChecks, task.id) ? state.taskChecks[task.id] : done(task.status) }));
-    return rows.sort((a, b) => Number(a.completed) - Number(b.completed) || (Date.parse(a.dueAt) || Infinity) - (Date.parse(b.dueAt) || Infinity) || a.title.localeCompare(b.title));
+    return rows.map(task => {
+      if (task.manual || task.dueAt) return task;
+      const course = task.source === 'managebac' ? mbCourses.find(c => c.name === task.course) : null;
+      const term = task.dueTerm || (course && course.term) || '';
+      const range = (state.settings.gpaTermDates || {})[termKey(term)];
+      return Object.assign({}, task, resolveTaskDeadline(task, { term, range }));
+    }).map((task, index) => ({ task, index, dueAt: Date.parse(task.dueAt) || Infinity }))
+      .sort((a, b) => Number(a.task.completed) - Number(b.task.completed) || a.dueAt - b.dueAt || a.task.title.localeCompare(b.task.title) || a.index - b.index)
+      .map(row => row.task);
   }
   function getTeamsPosts(state, kind) {
     const rows = entries(state, 'teams').flatMap(s => (s.posts || []).map(post => Object.assign({}, post,
       { source: 'teams', sourceURL: s.url, capturedAt: post.capturedAt || s.capturedAt })))
-      .sort((a, b) => Date.parse(b.capturedAt) - Date.parse(a.capturedAt));
+      .map((post, index) => ({ post, index, capturedAt: Date.parse(post.capturedAt) || 0 }))
+      .sort((a, b) => b.capturedAt - a.capturedAt || a.index - b.index).map(row => row.post);
+    const publishedDateCache = new Map();
+    const publishedDate = value => {
+      if (!value) return null;
+      const key = String(value);
+      if (!publishedDateCache.has(key)) publishedDateCache.set(key, knownPublishedDate(key));
+      return publishedDateCache.get(key);
+    };
     const byID = new Map();
     for (const post of rows) {
       const latest = byID.get(post.id);
       if (!latest) byID.set(post.id, post);
-      else if (!knownPublishedDate(latest.date) && knownPublishedDate(post.date)) latest.date = post.date;
+      else if (!publishedDate(latest.date) && publishedDate(post.date)) latest.date = post.date;
     }
     return [...byID.values()].filter(post => !kind || post.kind === kind)
-      .map(post => Object.assign({}, post, { publishedAt: knownPublishedDate(post.date) }))
+      .map((post, index) => {
+        const publishedAt = publishedDate(post.date);
+        return { post: Object.assign({}, post, { publishedAt }), index,
+          publishedAtMs: publishedAt ? Date.parse(publishedAt) : -Infinity,
+          capturedAt: Date.parse(post.capturedAt) || 0 };
+      })
       // Capturing an old page again must not make an old roster the latest publication.
       // Unknown local dates remain unknown and are shown after confirmed timestamps.
-      .sort((a, b) => (b.publishedAt ? Date.parse(b.publishedAt) : -Infinity) - (a.publishedAt ? Date.parse(a.publishedAt) : -Infinity) || Date.parse(b.capturedAt) - Date.parse(a.capturedAt));
+      .sort((a, b) => b.publishedAtMs - a.publishedAtMs || b.capturedAt - a.capturedAt || a.index - b.index)
+      .map(row => row.post);
   }
   function knownPublishedDate(value) {
     if (!value) return null;
@@ -1466,6 +1608,6 @@
       changes: state.changeLog.slice().sort((a, b) => Date.parse(b.capturedAt) - Date.parse(a.capturedAt)) };
   }
   return Object.freeze({ VERSION, configureSchools, schoolHomes, normalizeSchoolHome, emptyState, defaultState: emptyState, validateState, normalizeState: validateState,
-    mergeSnapshot, resetTeamsData, clearTeamsData: resetTeamsData, today, clock, getSchedule, getCourses, getTasks, getFeedback, getOfficialGPA, estimateGPA, estimateLinearGPA, semesterGPAForecast,
+    mergeSnapshot, resetTeamsData, clearTeamsData: resetTeamsData, today, clock, getSchedule, getCourses, getTasks, resolveTaskDeadline, getFeedback, getOfficialGPA, estimateGPA, estimateLinearGPA, semesterGPAForecast,
     getNextClass, getClassClock, getSchedulePeriods, getTeamsPosts, getTeamsEC, getTeamsGrades, getSourceStatus, buildView, getSchoolCalendarEvents, schoolCalendarScheduleRule, schoolCalendarScheduleConflict, parseSchoolCalendarICS, parseSchoolCalendarPDFText, safeURL, safeAttachmentURL, gradePoints: points, linearGradePoints: linearPoints });
 });
