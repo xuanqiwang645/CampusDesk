@@ -1,4 +1,4 @@
-# CampusDesk Theme Edition · Orion
+# CampusDesk Theme Edition · Super Orion
 
 面向使用M系列 mac 的国际部学生打造的集中查看希悦课表、ManageBac课程总评和GPA估算、待办与可识别的教师反馈。同时，对北京101国际部特色活动English Corner（EC）有特别优化
 
@@ -13,7 +13,7 @@
 
 如发现任何值得改进的地方，欢迎联系我！邮箱：xuanqiwang645@gmail.com
 
-## Orion 主题版有什么
+## Super Orion 主题版有什么
 
 - **学习助手**：支持关闭、仅本机 Ollama、仅联网 DeepSeek、联网 DeepSeek／离线 Ollama 四种模式。对话页可直接点击“本机 Ollama”“联网 DeepSeek”“自动切换”；联网时也能选择本机模型，切换保留输入草稿，回复期间暂时锁定切换。
 - **首次设置与配置教程**：引导连接学校平台、设置主题和学习助手；内置 DeepSeek API 注册与接入、Ollama 安装和模型下载教程，提供官网入口与下载命令复制。模型从可用列表选择。
