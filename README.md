@@ -1,18 +1,38 @@
-# CampusDesk
+# CampusDesk Theme Edition · Orion
 
 面向使用M系列 mac 的国际部学生打造的集中查看希悦课表、ManageBac课程总评和GPA估算、待办与可识别的教师反馈。同时，对北京101国际部特色活动English Corner（EC）有特别优化
 
 
-最新版 macOS 安装包：[CampusDesk 0.5.13（Apple Silicon）](https://github.com/xuanqiwang645/CampusDesk/releases/tag/v0.5.13)。
+**最新版本：v1.0.0 Orion · 主题版 · 构建 54。** 适用于 Apple Silicon（M 系列芯片）Mac，最低 macOS 12。
+
+[下载 DMG 安装包](https://github.com/xuanqiwang645/CampusDesk/releases/download/v1.0.0/CampusDesk-Theme-v1.0.0-Orion-build54-macOS-arm64.dmg) · [下载 ZIP 压缩包](https://github.com/xuanqiwang645/CampusDesk/releases/download/v1.0.0/CampusDesk-Theme-v1.0.0-Orion-build54-macOS-arm64.zip) · [发布说明与 SHA-256 校验](https://github.com/xuanqiwang645/CampusDesk/releases/tag/v1.0.0)
+
+打开 DMG 后，将 **CampusDesk Theme Edition.app** 拖入 Applications。更新时请替换原来的主题版安装位置；如果原应用位于个人 `~/Applications`，请仍放回该目录。应用使用本机持久签名，尚未经过 Apple Developer ID 公证。
 
 -如果需要windows操作系统版本，移步到https://github.com/zhyunran/ManageBac-packer
 
 如发现任何值得改进的地方，欢迎联系我！邮箱：xuanqiwang645@gmail.com
 
-**当前版本：0.5.13 · MIT · 实验性软件。** 支持中文默认界面与 English 切换、经典面板与卡片看板，以及 Three.js/WebGL Liquid Glass 效果。学习中心汇总全局搜索、今日学习计划、同步可信度、变化记录、成绩目标模拟、EC 定位、附件中心和专注模式；Teams 与 ManageBac 待办分区并按学科整理。课表支持单双周、节假日、一次性课程、临时调课和校历导入。成绩页并列展示原分档 GPA 与每科百分比线性折算的 4.0 GPA，各有独立的本机历史 K 线；旧历史缺少线性数据时不会伪造回填。K 线支持 1 小时至 30 天时间分度、柱状图和收盘折线，悬停显示 GPA 数值但不显示日期。两种估算都不是学校官方 GPA。自动读取不等于完整读取；遇到权限、布局、限流或数量限制时保留已有结果，并显示未完成范围。不要把看板作为成绩、截止时间或 EC 安排的唯一依据，请以学校原平台为准。
+## Orion 主题版有什么
+
+- **学习助手**：支持关闭、仅本机 Ollama、仅联网 DeepSeek、联网 DeepSeek／离线 Ollama 四种模式。对话页可直接点击“本机 Ollama”“联网 DeepSeek”“自动切换”；联网时也能选择本机模型，切换保留输入草稿，回复期间暂时锁定切换。
+- **首次设置与配置教程**：引导连接学校平台、设置主题和学习助手；内置 DeepSeek API 注册与接入、Ollama 安装和模型下载教程，提供官网入口与下载命令复制。模型从可用列表选择。
+- **课程与待办**：Teams、ManageBac 按来源和学科分组；任务小卡片显示明确截止日期的倒计时、紧迫度和可视化条。日期缺失或不确定时标注待核对；进度条表示截止紧迫度，不代表作业完成比例。
+- **双 GPA 与双 K 线**：保留原分档算法，同时显示每科百分比线性折算的 4.0 GPA；两套算法各有本机历史图表。成绩目标模拟与学期预测使用课程自己的类别权重。
+- **课表与校历**：支持单双周、节假日、一次性课程、临时调课、校历导入及当日事件；可识别受支持校历中的调休安排，导入后可核对预览。
+- **主题与学习工具**：中英文界面、经典面板与卡片看板、多种主题配色、Liquid Glass 效果，以及全局搜索、今日学习计划、同步可信度、变化记录、EC、附件中心和专注模式。
+
+两种 GPA 都是参考估算，不是学校官方 GPA。旧历史缺少线性数据时不会伪造回填。同步受账号权限、页面布局、限流及读取范围影响；界面会保留缓存并提示未完成范围，成绩、截止时间与 EC 安排以学校原平台为准。
+
+### 学习助手与数据使用
+
+仅本机 Ollama 模式将问题、当前对话及勾选资料交给本机模型；仅联网 DeepSeek 模式将这些内容发送给 DeepSeek，断网停用。自动切换模式联网时使用 DeepSeek，离线或网络请求失败时改用 Ollama；网络失败前请求可能已经到达 DeepSeek。发送前可调整资料范围，也可查看发送内容。
+
+DeepSeek API 密钥通过原生组件保存在 macOS 钥匙串中。安装包不包含个人 API 密钥、学校配置、登录会话或学习数据。Ollama 模型需先下载完成；其系统和硬件要求以官方说明为准。
 
 ## 版本记录
 
+- [v1.0.0 Orion · 主题版 · 构建 54](https://github.com/xuanqiwang645/CampusDesk/releases/tag/v1.0.0) — 学习助手、对话页接入方式切换、配置向导与教程、密钥保存修复，以及任务卡片倒计时和紧迫度显示。
 - [v0.5.13](releases/v0.5.13.md) — 双 GPA 算法与双 K 线；整合校历导入、连接体验及同步修正。
 - [v0.5.8](releases/v0.5.8.md) — 每门课程读取自己的 ManageBac 成绩类别权重；成绩目标模拟、学期预测与 K 线悬停改进。
 - [v0.5.7](releases/v0.5.7.md) — 修复英文界面残留中文；按 ManageBac Task Information 中的类别权重与成绩预测 GPA。
@@ -38,7 +58,11 @@ EC 自动附件读取支持 PDF、PNG/JPEG/GIF、TXT/CSV、DOCX、XLSX 的部分
 
 Teams 默认模式在 Teams 页面内使用当前账号会话访问内部服务，参考了 [teams-web-chat-exporter](https://github.com/gediz/teams-web-chat-exporter)。这不是稳定的公开 Microsoft API，也不绕过账号权限或学校策略。接口或页面升级可能让同步失效；请仅在获得相应使用许可时启用。
 
-## 从源码安装
+## 仓库源码与安装包版本
+
+当前 v1.0.0 Orion 为主题版二进制安装包发布；仓库现有应用源码及 GitHub 自动生成的 Source code 附件尚未同步为构建 54 的完整源码。使用最新版主题版请下载上方 DMG 或 ZIP。下方源码安装说明适用于仓库中的原版源码。
+
+## 从源码安装（仓库原版）
 
 需要 macOS 12 或更新版本、可用的 Apple Command Line Tools，以及 Chrome 或 Edge（使用默认 Teams 模式时）。构建不需要 Node.js、Python、npm 或付费开发者账号。当前按本机架构构建；已在 Apple Silicon 上验证编译，未完成 Intel 实机验收。
 
@@ -89,9 +113,9 @@ CAMPUSDESK_BUILD_DIR="$(mktemp -d /private/tmp/CampusDesk-build.XXXXXX)" bash bu
 
 ## 数据与隐私
 
-- 学习缓存、同步状态和提取的附件文字保存在本机 `~/Library/Application Support/CampusDesk/`。这些内容可能包含学生、教师或同学的个人信息，不应公开分享。
+- 学习缓存、同步状态和提取的附件文字保存在本机应用数据目录；仓库原版使用 `~/Library/Application Support/CampusDesk/`，主题版使用独立数据目录。这些内容可能包含学生、教师或同学的个人信息，不应公开分享。
 - 浏览器模式不把浏览器访问令牌导出给原生进程；可选 Graph 模式由原生客户端管理授权，令牌保存在 macOS 钥匙串，不在项目配置文件中。
-- 本项目没有配套的开发者收集服务器。读取会访问 Microsoft 或你配置的学校平台；不要把“本地缓存”理解成完全离线。
+- 本项目没有配套的开发者收集服务器。读取会访问 Microsoft 或你配置的学校平台；主题版启用联网学习助手后，发送内容也会交给 DeepSeek。本地缓存不代表所有功能完全离线。
 - 没有发送 Teams 消息、提交作业或修改学校成绩的功能。
 - 导出的备份也含学习数据。上传 Issue 前，删除姓名、学校、账号 ID、消息正文、文件名、链接、会话标识和凭据。
 - 本次源码发布排除了本机缓存、构建产物、私人诊断脚本及真实成绩夹具。既有 Git 提交历史保持不变。
