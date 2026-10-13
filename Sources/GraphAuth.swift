@@ -213,7 +213,7 @@ final class GraphAuth: NSObject, ASWebAuthenticationPresentationContextProviding
     }
     func accessToken(forceRefresh: Bool, completion: @escaping (Result<String, Error>) -> Void) {
         if !forceRefresh, let bearer = bearer, expiresAt.timeIntervalSinceNow > 90 { completion(.success(bearer)); return }
-        guard let stored = credential else { completion(.failure(GraphAuthError(message: "请先登录 Teams"))); return }
+        guard let stored = credential else { completion(.failure(GraphAuthError(message: "请先登录 Teams", requiresLogin: true))); return }
         refreshWaiters.append(completion)
         guard !refreshing else { return }
         refreshing = true; let expected = revision

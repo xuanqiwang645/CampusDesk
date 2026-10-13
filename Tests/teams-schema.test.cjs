@@ -35,18 +35,60 @@ test('shared Teams root URL keeps channels separate by explicit identity across 
   assert.equal(Core.getTeamsPosts(state).find(row => row.id === 'teams:channel-1:m1').text, 'Edited');
 });
 
-test('browser source identity separates accounts and URL-keyed browser exports migrate without losing data', () => {
+test('URL-keyed browser exports migrate and a new account replaces the previous Teams cache', () => {
   const initial = snapshot({ posts: [post('m1')] });
   const state = Core.emptyState(); state.snapshots.teams[URL] = initial;
   const migrated = Core.validateState(state);
   assert.equal(Object.keys(migrated.snapshots.teams).length, 1);
   assert.equal(only(migrated).url, URL);
   const next = Core.mergeSnapshot(migrated, snapshot({ accountId: 'other@example.test', posts: [post('m2')] }));
-  assert.equal(Object.keys(next.snapshots.teams).length, 2);
+  assert.equal(Object.keys(next.snapshots.teams).length, 1);
+  assert.equal(only(next).accountId, 'other@example.test');
+  assert.deepEqual(Core.getTeamsPosts(next).map(row=>row.title), ['m2']);
   const broken = JSON.parse(JSON.stringify(next));
   const key = Object.keys(broken.snapshots.teams)[0];
   broken.snapshots.teams['browser:forged'] = broken.snapshots.teams[key]; delete broken.snapshots.teams[key];
   assert.throws(() => Core.validateState(broken), /标识不匹配/);
+});
+
+test('account switches and reset remove Teams changes and flags without touching personal records', () => {
+  let state=Core.mergeSnapshot(Core.emptyState(),snapshot({posts:[post('m1')]}));
+  state=Core.mergeSnapshot(state,snapshot({capturedAt:LATER,posts:[post('m1',{text:'Updated private A'})]}));
+  assert.equal(state.changeLog.length,1);
+  state.manualTasks.push({id:'manual-safe',title:'Personal note',course:'Personal',dueAt:null,dueLabel:'',status:'open',createdAt:NOW});
+  state.taskChecks={'teams:m1':true,'manual-safe':true};
+  state.feedbackRead={'teams:private':true,'school-feedback':true};
+  state.settings.teamsDueOverrides={'teams:m1':'2026-10-01T00:00:00Z'};
+  const reset=Core.resetTeamsData(state);
+  assert.equal(reset.changeLog.length,0); assert.deepEqual(reset.snapshots.teams,{});
+  const switched=Core.mergeSnapshot(state,snapshot({capturedAt:'2026-09-20T04:30:00Z',accountId:'account-B',posts:[post('m1',{title:'Only B'})]}));
+  for(const result of [reset,switched]) {
+    assert.equal(result.manualTasks[0].title,'Personal note');
+    assert.deepEqual(result.taskChecks,{'manual-safe':true});
+    assert.deepEqual(result.feedbackRead,{'school-feedback':true});
+    assert.deepEqual(result.settings.teamsDueOverrides,{});
+    assert.equal(result.changeLog.filter(row=>row.source==='teams').length,0);
+  }
+  assert.deepEqual(Core.getTeamsPosts(switched).map(row=>row.title),['Only B']);
+  const late=Core.mergeSnapshot(switched,snapshot({capturedAt:LATER,posts:[post('old-A')]}));
+  assert.deepEqual(Core.getTeamsPosts(late).map(row=>row.title),['Only B']);
+  assert.throws(()=>Core.mergeSnapshot(switched,snapshot({capturedAt:'2026-09-20T05:00:00Z',accountId:'',posts:[post('unknown')]})),/缺少账号身份/);
+});
+
+test('legacy mixed-account caches migrate visibly to the latest confirmed identity', () => {
+  const a=Core.mergeSnapshot(Core.emptyState(),snapshot({posts:[post('private-A')]}));
+  const b=Core.mergeSnapshot(Core.emptyState(),snapshot({capturedAt:LATER,accountId:'account-B',posts:[post('private-B')]}));
+  const legacy=Core.emptyState();
+  legacy.snapshots.teams={...a.snapshots.teams,...b.snapshots.teams};
+  const original=JSON.stringify(legacy);
+  const migrated=Core.validateState(legacy);
+  assert.deepEqual(Core.getTeamsPosts(migrated).map(row=>row.title),['private-B']);
+  assert.match(only(migrated).warnings.join(' '),/多个 Teams 账号/);
+  assert.equal(JSON.stringify(legacy),original,'the source backup remains unchanged');
+  const unknown=Core.mergeSnapshot(Core.emptyState(),snapshot({accountId:'',posts:[post('legacy-unknown')]}));
+  assert.equal(Core.getTeamsPosts(Core.validateState(unknown)).length,1,'old identity-free exports remain readable');
+  const identified=Core.mergeSnapshot(unknown,snapshot({capturedAt:LATER,posts:[post('confirmed')]}));
+  assert.deepEqual(Core.getTeamsPosts(identified).map(row=>row.title),['confirmed']);
 });
 
 test('Teams grades and feedback scores survive normalization without entering ManageBac GPA', () => {

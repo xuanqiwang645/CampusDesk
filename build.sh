@@ -1,5 +1,6 @@
 #!/bin/bash
 set -euo pipefail
+umask 022
 campus_root="$(cd "$(dirname "$0")" && pwd)"
 campus_info_plist="${CAMPUSDESK_INFO_PLIST:-$campus_root/Info.plist}"
 if [[ ! -f "$campus_info_plist" ]]; then
@@ -27,7 +28,8 @@ if ! /usr/bin/xcrun --find swiftc >/dev/null 2>&1; then
 fi
 campus_arch="$(uname -m)"
 case "$campus_arch" in arm64|x86_64) ;; *) echo "暂不支持此芯片架构：$campus_arch"; exit 1;; esac
-campus_build="${CAMPUSDESK_BUILD_DIR:-$campus_root/build}/CampusDesk.app"
+source "$campus_root/scripts/app-identity.sh"
+campus_build="${CAMPUSDESK_BUILD_DIR:-$campus_root/build}/$campus_app_file"
 campus_signing_identity="${CAMPUSDESK_SIGN_IDENTITY:-$(bash "$campus_root/scripts/local-signing-identity.sh")}"
 if [[ "$campus_signing_identity" == '-' ]]; then
   echo '临时签名会在更新后失去钥匙串访问权限。请使用持久签名身份。'
@@ -37,10 +39,13 @@ mkdir -p "$campus_build/Contents/MacOS" "$campus_build/Contents/Resources"
 # Keep compiler parallelism bounded so a local release build remains reliable
 # on Macs where Xcode and Teams are already using substantial memory.
 /usr/bin/xcrun swiftc -swift-version 5 -Osize -j 1 -target "$campus_arch-apple-macosx12.0" \
-  -framework Cocoa -framework WebKit -framework UserNotifications -framework AuthenticationServices -framework Security -framework CryptoKit -framework PDFKit -framework Vision \
+  -framework Cocoa -framework WebKit -framework JavaScriptCore -framework UserNotifications -framework AuthenticationServices -framework Security -framework CryptoKit -framework PDFKit -framework Vision -framework WidgetKit \
   "$campus_root"/Sources/*.swift -o "$campus_build/Contents/MacOS/CampusDesk"
 /usr/bin/ditto --noextattr --norsrc "$campus_root/Resources" "$campus_build/Contents/Resources"
 /bin/cp "$campus_info_plist" "$campus_build/Contents/Info.plist"
+if [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$campus_info_plist")" == 'local.campusdesk.mac.themeedition' ]]; then
+  CAMPUSDESK_SIGN_IDENTITY="$campus_signing_identity" bash "$campus_root/scripts/build-widgets.sh" "$campus_build"
+fi
 CAMPUSDESK_SIGN_IDENTITY="$campus_signing_identity" bash "$campus_root/scripts/build-credential-helper.sh" "$campus_build/Contents/Helpers/CampusDeskCredentials"
 /usr/bin/xattr -cr "$campus_build"
 # The helper is already signed and must stay byte-identical across releases.

@@ -1,0 +1,7 @@
+{
+  "name": "campusdesk-windows",
+  "private": true,
+  "version": "0.5.13",
+  "main": "main.cjs",
+  "description": "CampusDesk Windows host (development port; not a distributable release)"
+}

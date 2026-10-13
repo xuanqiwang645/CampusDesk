@@ -131,9 +131,10 @@ final class TeamsGraph: NSObject, URLSessionTaskDelegate {
             DispatchQueue.main.async {
                 guard let self = self, self.isRunning, self.generation == expected else { return }
                 switch result {
-                case .failure:
+                case .failure(let error):
                     self.isRunning = false; self.checkpointNow()
-                    self.publish("authRequired", "Microsoft 登录已失效或未完成授权，请重新连接；已读取的数据保留")
+                    let failure = Self.tokenFailure(error)
+                    self.publish(failure.status, failure.message)
                 case .success(let token):
                     guard !token.isEmpty, !token.contains("\r"), !token.contains("\n") else {
                         self.isRunning = false; self.checkpointNow(); self.publish("authRequired", "Microsoft 未返回有效的登录凭据"); return
@@ -183,6 +184,13 @@ final class TeamsGraph: NSObject, URLSessionTaskDelegate {
                 }
             }
         }
+    }
+
+    static func tokenFailure(_ error: Error) -> (status: String, message: String) {
+        let authorization = error as? GraphAuthError
+        let needsLogin = authorization?.requiresLogin == true || authorization?.requiresAdminConsent == true
+        return (needsLogin ? "authRequired" : "paused",
+                error.localizedDescription + (needsLogin ? "；已读取的数据保留" : "；同步已暂停，网络或钥匙串恢复后可重试，已保存分页位置"))
     }
 
     static func retryDelay(_ response: HTTPURLResponse?, attempt: Int, now: Date = Date()) -> TimeInterval {

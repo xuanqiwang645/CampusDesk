@@ -12,8 +12,11 @@
   const appVersionLabel = 'CampusDesk v' + String(appVersionInfo.version || '').slice(0, 40) + (appVersionInfo.name ? ' ' + String(appVersionInfo.name).slice(0, 60) : '');
   const storageKey = 'campusdesk.browser.v1';
   let state = Core.emptyState();
-  let page = (['overview', 'learning', 'schedule', 'grades', 'tasks', 'feedback', 'teams', 'ec', 'settings'].includes(location.hash.slice(1)) || (themeEdition && location.hash.slice(1) === 'assistant')) ? location.hash.slice(1) : 'overview';
+  let page = (['overview', 'learning', 'schedule', 'calendar', 'grades', 'tasks', 'feedback', 'teams', 'ec', 'settings'].includes(location.hash.slice(1)) || (themeEdition && location.hash.slice(1) === 'assistant')) ? location.hash.slice(1) : 'overview';
   let selectedDate = Core.today();
+  let calendarDay = Core.today(), calendarMonth = calendarDay.slice(0, 7);
+  const calendarKinds = new Set(['course', 'task', 'school', 'personal']);
+  let widgetsStatus = { supported: false, updatedAt: null, busy: false, error: null };
   let taskFilter = 'open';
   let taskSubjectFilter = 'all';
   let taskOverdueOpen = true;
@@ -39,8 +42,12 @@
   let ecSearchIndex = null;
   let ecSearchBuildToken = 0;
   let ecSearchBuildProgress = 0;
+  let ecSearchBuilding = false;
   let derivedCacheState = state;
   const derivedCache = new Map();
+  const timedDerivedCache = new Map();
+  const dateFormatters = new Map();
+  let backgroundRenderPending = false, backgroundRenderTimer = 0, lastBackgroundRender = -Infinity;
   let graphBatchRenderPending = false;
   let ecVisibleLimit = 40;
   let teamsVisibleLimit = 40;
@@ -73,6 +80,12 @@
   let assistantBusy = false;
   let assistantActiveRequestID = '';
   let assistantSentQuestion = '';
+  let assistantActiveContextKey = '', assistantPartialAnswer = '';
+  let assistantStreamRenderQueued = false;
+  let pendingImportRequestID = '';
+  let nativeStateGeneration = null;
+  let pendingImportEvents = [];
+  const stateScopedNativeEvents = new Set(['state', 'snapshot', 'graphBatch', 'graphReset', 'teamsAttachment', 'teamsAttachmentUnchanged', 'pinTeamsPage', 'schoolConfiguration', 'schoolConfigurationError', 'schoolCalendarFile', 'schoolCalendarPDF', 'schoolCalendarFileError', 'import', 'graphStatus', 'teamsAutoStatus', 'status']);
   let quickConnectionSource = null, pendingQuickConnection = null;
   let pendingSchoolCalendarPDF = null;
   let teamsAuto = { running: false, phase: 'idle', message: '登录 Teams 后自动发现频道和聊天。', counts: {}, warnings: [], coverageItems: [] };
@@ -97,10 +110,11 @@
   let lastMenuTitle = '';
   let lastMenuCountdown = '';
   let markupEscapes = null;
-  const pageNames = { overview: '总览', learning: '学习中心', schedule: '课程表', grades: '成绩与 GPA', tasks: '待办事项', feedback: '老师反馈', teams: 'Teams 消息', ec: 'English Corner', settings: '连接与设置' };
+  const pageNames = { overview: '总览', learning: '学习中心', schedule: '课程表', calendar: '行事历', grades: '成绩与 GPA', tasks: '待办事项', feedback: '老师反馈', teams: 'Teams 消息', ec: 'English Corner', settings: '连接与设置' };
   if (themeEdition) pageNames.assistant = '学习助手';
   // Only CampusDesk's own fixed labels are translated. School data stays exactly as received.
   const english = Object.freeze({
+    '行事历': 'Calendar',
     '取消': 'Cancel', '正在同步…': 'Syncing…', '学习助手': 'Learning assistant', '选择资料范围后即可发送问题。': 'Choose a data scope, then send your question.',
     '快捷连接': 'Quick connect', '登录后自动同步': 'Sync automatically after sign-in', '连接选项': 'Connection options', '登录并同步': 'Sign in & sync', '重新登录': 'Sign in again', '立即同步': 'Sync now', '设置并登录': 'Set up & sign in', '打开网站': 'Open website', '保存并登录': 'Save & sign in', '连接设置与退出': 'Connection settings & sign out',
     '登录会话保存在这台 Mac；学校要求验证时需重新登录。': 'Your session stays on this Mac. Sign in again when your school requires verification.',
@@ -194,6 +208,13 @@
     '学校网址已保存在本机，可以登录了。': 'School addresses saved on this Mac. You can now sign in.',
     '学校网址未能保存，请检查网址及本机磁盘写入权限后重试。': 'Could not save school addresses. Check the addresses and local disk write access, then retry.'
   });
+  // These dictionaries are fixed for the lifetime of the page. Reuse their
+  // merge and longest-label-first order across renders and escaped fragments.
+  const escapedEnglishLabels = Object.assign({}, english, scheduleEnglish);
+  const markupEnglishLabels = Object.assign({}, escapedEnglishLabels, visualEnglish);
+  const runtimeEnglishLabels = Object.assign({}, markupEnglishLabels, schoolEnglish);
+  const markupEnglishSources = Object.keys(markupEnglishLabels).sort((a, b) => b.length - a.length);
+  const runtimeEnglishSources = Object.keys(runtimeEnglishLabels).sort((a, b) => b.length - a.length);
   function isEnglish() { return state.settings.language === 'en-US'; }
   function t(value) {
     if (!isEnglish() || typeof value !== 'string') return value;
@@ -231,8 +252,7 @@
     if (match) return 'Reading ' + match[1] + ' through the Teams API…';
     match = text.match(/^正在读取\s*(.+?)\s*的接口数据…$/);
     if (match) return 'Reading API data for ' + match[1] + '…';
-    const labels = Object.assign({}, english, scheduleEnglish, visualEnglish, schoolEnglish);
-    return Object.keys(labels).sort((a, b) => b.length - a.length).reduce((result, source) => result.split(source).join(labels[source]), text);
+    return runtimeEnglishSources.reduce((result, source) => result.split(source).join(runtimeEnglishLabels[source]), text);
   }
   function pageName(key) { return t(pageNames[key] || key); }
   function localizeMarkup(markup) {
@@ -241,8 +261,7 @@
       markup = markup.replace(/macOS/g, 'Windows').replace(/\bMac\b/g, 'PC');
     }
     if (!isEnglish()) return markup;
-    const labels = Object.assign({}, english, scheduleEnglish, visualEnglish);
-    const translated = Object.keys(labels).sort((a, b) => b.length - a.length).reduce((result, source) => result.split(source).join(labels[source]), markup);
+    const translated = markupEnglishSources.reduce((result, source) => result.split(source).join(markupEnglishLabels[source]), markup);
     return window.campusDesktop && window.campusDesktop.platform === 'win32' ? translated.replace(/macOS/g,'Windows').replace(/\bMac\b/g,'PC') : translated;
   }
   function localizedHTML(renderMarkup) {
@@ -251,7 +270,7 @@
       const output = localizeMarkup(renderMarkup());
       return output.replace(/\uE000(\d+)\uE001/g, (_, index) => {
         const value = markupEscapes[Number(index)] || '';
-        return isEnglish() && Object.prototype.hasOwnProperty.call(Object.assign({}, english, scheduleEnglish), value) ? (english[value] || scheduleEnglish[value]) : value;
+        return isEnglish() && Object.prototype.hasOwnProperty.call(escapedEnglishLabels, value) ? (english[value] || scheduleEnglish[value]) : value;
       });
     } finally { markupEscapes = null; }
   }
@@ -292,7 +311,14 @@
     if (!value) return '时间未标明';
     const d = new Date(value);
     if (!Number.isFinite(d.getTime())) return String(value);
-    return new Intl.DateTimeFormat(isEnglish() ? 'en-US' : 'zh-CN', Object.assign({ timeZone: 'Asia/Shanghai', month: 'numeric', day: 'numeric' }, opts || {})).format(d);
+    const locale = isEnglish() ? 'en-US' : 'zh-CN';
+    const options = Object.assign({ timeZone: 'Asia/Shanghai', month: 'numeric', day: 'numeric' }, opts || {});
+    const key = locale + ':' + JSON.stringify(options);
+    if (!dateFormatters.has(key)) {
+      if (dateFormatters.size >= 24) dateFormatters.delete(dateFormatters.keys().next().value);
+      dateFormatters.set(key, new Intl.DateTimeFormat(locale, options));
+    }
+    return dateFormatters.get(key).format(d);
   }
   function lastUpdated(value) { return value ? fmtDate(value, { hour: '2-digit', minute: '2-digit', hour12: false }) : t('尚未同步'); }
   function dayLabel(value) { return fmtDate(value + 'T12:00:00+08:00', { weekday: 'long' }); }
@@ -305,26 +331,37 @@
     toastTimer = setTimeout(() => { el.hidden = true; }, 5200);
   }
   function send(action, details) {
-    if (native) { window.webkit.messageHandlers.campus.postMessage(Object.assign({ action: action }, details || {})); return true; }
+    if (native) {
+      const message = Object.assign({ action: action }, details || {});
+      if (nativeStateGeneration !== null) message.stateGeneration = nativeStateGeneration;
+      window.webkit.messageHandlers.campus.postMessage(message);
+      return true;
+    }
     return false;
   }
   function persist(options) {
     invalidateDerivedCaches();
+    // An import replaces the entire state. Never send the previous dashboard
+    // state back while native validation/commit/acknowledgement is in flight.
+    if (native && pendingImportRequestID) return false;
     const details = { state: state };
     if (options && options.imported === true) details.imported = true;
     if (!send('saveState', details)) {
       try { localStorage.setItem(storageKey, JSON.stringify(state)); }
-      catch (_) { toast('浏览器无法保存数据。请导出备份，或使用 Mac 应用。'); }
+      catch (_) { toast('浏览器无法保存数据。请导出备份，或使用 Mac 应用。'); return false; }
     }
     syncReminders();
+    return true;
   }
   function invalidateDerivedCaches() {
     derivedCacheState = state;
     derivedCache.clear();
+    timedDerivedCache.clear();
     teamsPostsCache.clear();
     cachedSearchIndex = null;
     ecSearchIndex = null;
     ecSearchBuildProgress = 0;
+    ecSearchBuilding = false;
     ecSearchBuildToken++;
   }
   function memoized(key, build) {
@@ -334,6 +371,38 @@
     }
     if (!derivedCache.has(key)) derivedCache.set(key, build());
     return derivedCache.get(key);
+  }
+  function timedMemoized(key, build) {
+    const second = Math.floor(Date.now() / 1000), cached = timedDerivedCache.get(key);
+    if (cached && cached.state === state && cached.second === second) return cached.value;
+    const value = build();
+    timedDerivedCache.set(key, { state, second, value });
+    return value;
+  }
+  function classClockForState() { return timedMemoized('class-clock', () => Core.getClassClock(state)); }
+  function dashboardHidden() { return document.hidden || document.documentElement.dataset.windowVisible === 'false'; }
+  function backgroundRenderBlocked() {
+    if (dashboardHidden()) return true;
+    if (['task-dialog', 'detail-dialog', 'agenda-event-dialog', 'teams-page-dialog', 'calendar-preview-dialog', 'setup-wizard-dialog', 'quick-connect-dialog', 'assistant-confirm-dialog'].some(id => document.getElementById(id)?.open)) return true;
+    const active = document.activeElement;
+    return Boolean(active && (['INPUT', 'TEXTAREA', 'SELECT'].includes(active.tagName) || active.isContentEditable) && document.getElementById('content')?.contains(active));
+  }
+  function flushBackgroundRender() {
+    if (!backgroundRenderPending || backgroundRenderBlocked()) return;
+    backgroundRenderPending = false;
+    if (backgroundRenderTimer) clearTimeout(backgroundRenderTimer);
+    backgroundRenderTimer = 0;
+    lastBackgroundRender = Date.now();
+    render();
+  }
+  function requestBackgroundRender() {
+    // Persistence/Graph acknowledgements remain immediate and ordered. Only
+    // painting is coalesced; the newest state is shown after editing or reveal.
+    backgroundRenderPending = true;
+    if (backgroundRenderBlocked()) return;
+    const delay = Math.max(0, 400 - (Date.now() - lastBackgroundRender));
+    if (!delay) flushBackgroundRender();
+    else if (!backgroundRenderTimer) backgroundRenderTimer = setTimeout(() => { backgroundRenderTimer = 0; flushBackgroundRender(); }, delay);
   }
   function taskRowsForState() { return memoized('tasks', () => Core.getTasks(state)); }
   function openTasksForState(source) {
@@ -353,7 +422,7 @@
   function flushGraphBatchRender() {
     if (!graphBatchRenderPending) return;
     graphBatchRenderPending = false;
-    render();
+    requestBackgroundRender();
   }
   function scheduleGraphBatchRender() {
     // Progress is updated through lightweight status events. Rebuild message
@@ -486,7 +555,7 @@
       toast('网页预览可以打开学校网站；把登录后的数据同步到这里需要使用 CampusDesk Mac 应用。');
     }
   }
-  function sourceStatus(source) { return Core.getSourceStatus(state, source); }
+  function sourceStatus(source) { return timedMemoized('source:' + source, () => Core.getSourceStatus(state, source)); }
   function sourceFooter(source) {
     const s = sourceStatus(source);
     return '<div class="section-foot"><span>' + esc(sourceName(source)) + ' · ' + esc(lastUpdated(s.lastCapturedAt)) + '</span><span>' + (s.loginRequired ? '请重新登录' : (s.stale && s.lastCapturedAt ? '缓存可能已过期' : '')) + '</span></div>';
@@ -572,7 +641,30 @@
     const periods = customPeriods();
     const holidayRows = holidays.map(date => '<span class="schedule-rule-chip">' + esc(date) + '<button type="button" data-action="remove-holiday" data-date="' + esc(date) + '" aria-label="' + esc(t('移除')) + '">×</button></span>').join('');
     const overrideRows = overrides.map(item => '<div class="custom-lesson-row"><div><strong>' + esc(item.date + ' · ' + (item.action === 'cancel' ? t('取消当天课程') : item.title)) + '</strong><small>' + esc((item.targetPeriod || item.targetStart || '') + (item.period ? ' → ' + item.period : '') + (item.start ? ' · ' + item.start + (item.end ? '–' + item.end : '') : '') + (item.room ? ' · ' + item.room : '')) + '</small></div><button class="icon-button" type="button" data-action="remove-schedule-override" data-id="' + esc(item.id) + '" aria-label="' + esc(t('移除')) + '" title="' + esc(t('移除')) + '">' + icon('trash') + '</button></div>').join('');
-    return '<section class="card custom-schedule-card schedule-rules-card"><div class="card-header"><h2 class="card-title"><span class="icon">' + icon('settings') + '</span>' + t('节假日与临时调课') + '</h2></div><div class="custom-schedule-grid"><label><span>' + t('单周/双周基准周（周一）') + '</span><input id="schedule-week-anchor" type="date" value="' + esc(state.settings.scheduleWeekAnchor || '') + '"></label><label><span>' + t('添加节假日') + '</span><div class="inline-form"><input id="holiday-date" type="date"><button type="button" class="button button-light" data-action="add-holiday">' + t('添加节假日') + '</button></div></label></div>' + (holidayRows ? '<div class="schedule-rule-chips">' + holidayRows + '</div>' : '<p class="custom-schedule-note">' + t('尚未设置节假日；设置后当天常规课表和每周自编课程会隐藏。') + '</p>') + '<form id="schedule-override-form" class="custom-schedule-form"><div class="custom-schedule-grid"><label><span>' + t('临时调课日期') + '</span><input id="override-date" type="date" required></label><label><span>' + t('操作') + '</span><select id="override-action"><option value="replace">' + t('替换当天课程') + '</option><option value="cancel">' + t('取消当天课程') + '</option></select></label><label><span>' + t('原课程节次') + '</span><select id="override-target-period"><option value="">—</option>' + periods.map(item => '<option value="' + esc(item.period) + '">' + esc(item.period) + '</option>').join('') + '</select></label><label><span>' + t('新课程节次') + '</span><select id="override-period"><option value="">—</option>' + periods.map(item => '<option value="' + esc(item.period) + '">' + esc(item.period) + '</option>').join('') + '</select></label><label><span>' + t('课程名称') + '</span><input id="override-title" maxlength="300" placeholder="' + t('如：调课后的课程') + '"></label><label><span>' + t('教室（可选）') + '</span><input id="override-room" maxlength="200"></label><label><span>' + t('开始时间') + '</span><input id="override-start" type="time"></label><label><span>' + t('结束时间') + '</span><input id="override-end" type="time"></label></div><button class="button button-light" type="submit">' + t('保存临时调课') + '</button></form>' + (overrideRows ? '<div class="custom-lesson-list"><div class="custom-schedule-label">' + t('临时调课') + ' ' + overrides.length + '</div>' + overrideRows + '</div>' : '') + '</section>';
+    const periodOptions = '<option value="">—</option>' + periods.map(item => '<option value="' + esc(item.period) + '">' + esc(item.period) + '</option>').join('');
+    return `<section class="card custom-schedule-card schedule-rules-card">
+      <div class="card-header"><h2 class="card-title"><span class="icon">${icon('settings')}</span>${t('节假日与临时调课')}</h2></div>
+      <div class="custom-schedule-grid">
+        <label><span>${t('单周/双周基准周（周一）')}</span><input id="schedule-week-anchor" type="date" value="${esc(state.settings.scheduleWeekAnchor || '')}"></label>
+        <div class="schedule-rules-field"><label for="holiday-date">${t('添加节假日')}</label><div class="inline-form"><input id="holiday-date" type="date"><button type="button" class="button button-light" data-action="add-holiday">${t('添加节假日')}</button></div></div>
+      </div>
+      ${holidayRows ? '<div class="schedule-rule-chips">' + holidayRows + '</div>' : '<p class="custom-schedule-note">' + t('尚未设置节假日；设置后当天常规课表和每周自编课程会隐藏。') + '</p>'}
+      <form id="schedule-override-form" class="custom-schedule-form" aria-labelledby="schedule-override-heading">
+        <div class="schedule-rules-heading"><h3 id="schedule-override-heading">${t('临时调课')}</h3><p>${isEnglish() ? 'Applies only to the selected date; weekly rules stay unchanged.' : '仅对指定日期生效，不改变每周课程规则。'}</p></div>
+        <div class="custom-schedule-grid">
+          <label><span>${t('临时调课日期')}</span><input id="override-date" type="date" required></label>
+          <label><span>${t('操作')}</span><select id="override-action"><option value="replace">${t('替换当天课程')}</option><option value="cancel">${t('取消当天课程')}</option></select></label>
+          <label><span>${t('原课程节次')}</span><select id="override-target-period">${periodOptions}</select></label>
+          <label><span>${t('新课程节次')}</span><select id="override-period">${periodOptions}</select></label>
+          <label><span>${t('课程名称')}</span><input id="override-title" maxlength="300" placeholder="${t('如：调课后的课程')}"></label>
+          <label><span>${t('教室（可选）')}</span><input id="override-room" maxlength="200"></label>
+          <label><span>${t('开始时间')}</span><input id="override-start" type="time"></label>
+          <label><span>${t('结束时间')}</span><input id="override-end" type="time"></label>
+        </div>
+        <div class="schedule-rules-actions"><span>${isEnglish() ? 'Saved on this Mac; does not change the school platform.' : '保存在这台 Mac，不会修改学校平台。'}</span><button class="button button-primary" type="submit">${t('保存临时调课')}</button></div>
+      </form>
+      ${overrideRows ? '<div class="custom-lesson-list"><div class="custom-schedule-label">' + t('临时调课') + ' ' + overrides.length + '</div>' + overrideRows + '</div>' : ''}
+    </section>`;
   }
   function renderCustomSchedule() {
     const periods = customPeriods(), days = [1, 2, 3, 4, 5, 6, 0], labels = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'];
@@ -672,17 +764,18 @@
     };
   }
   function renderClassClock() {
-    const clock = Core.getClassClock(state), copy = clockCopy(clock), status = sourceStatus('seiue');
+    const clock = classClockForState(), copy = clockCopy(clock), status = sourceStatus('seiue');
     return '<section id="class-clock" class="class-clock phase-' + esc(clock.phase) + '" aria-label="' + esc(t('今日课程倒计时')) + '"><div class="clock-mark">' + icon('clock') + '</div><div class="clock-primary"><span id="class-clock-label" class="clock-label">' + esc(copy.label) + '</span><span id="class-clock-time" class="clock-value" role="timer" aria-live="off">' + esc(copy.time) + '</span></div><div class="clock-secondary"><p id="class-clock-detail">' + esc(copy.detail) + '</p><small id="class-clock-cache">' + esc(t(clock.stale ? '课表缓存待更新 · ' : '基于已读取课表 · ') + lastUpdated(status.lastCapturedAt)) + '</small></div></section>';
   }
   function updateClock() {
-    const clock = Core.getClassClock(state), copy = clockCopy(clock), root = document.getElementById('class-clock');
+    const clock = classClockForState(), copy = clockCopy(clock), root = document.getElementById('class-clock');
     if (root) {
-      root.className = 'class-clock phase-' + clock.phase;
-      document.getElementById('class-clock-label').textContent = copy.label;
-      document.getElementById('class-clock-time').textContent = copy.time;
-      document.getElementById('class-clock-detail').textContent = copy.detail;
-      document.getElementById('class-clock-cache').textContent = t(clock.stale ? '课表缓存待更新 · ' : '基于已读取课表 · ') + lastUpdated(sourceStatus('seiue').lastCapturedAt);
+      const className = 'class-clock phase-' + clock.phase;
+      if (root.className !== className) root.className = className;
+      setText('class-clock-label', copy.label);
+      setText('class-clock-time', copy.time);
+      setText('class-clock-detail', copy.detail);
+      setText('class-clock-cache', t(clock.stale ? '课表缓存待更新 · ' : '基于已读取课表 · ') + lastUpdated(sourceStatus('seiue').lastCapturedAt));
     }
     return clock;
   }
@@ -765,7 +858,9 @@
     else window.setTimeout(() => callback({ timeRemaining: () => 8 }), 0);
   }
   function ensureEcSearchIndex(posts) {
-    if (ecSearchIndex) return;
+    // The index is independent of the query. Keep one build running while the
+    // user types; only a data change invalidates its token and starts it over.
+    if (ecSearchIndex || ecSearchBuilding) return;
     const makeRow = post => {
       const fields = [post.title, post.text, post.channel, post.author, ...(post.attachments || []).flatMap(file => [file.title, file.text])].map(searchText).filter(Boolean);
       return { post, date: ecDate(post), fields };
@@ -777,6 +872,7 @@
       return;
     }
     const token = ++ecSearchBuildToken;
+    ecSearchBuilding = true;
     ecSearchBuildProgress = 0;
     const indexed = [];
     const step = deadline => {
@@ -789,6 +885,7 @@
       }
       if (ecSearchBuildProgress >= posts.length) {
         ecSearchIndex = indexed;
+        ecSearchBuilding = false;
         updateECResults();
       } else {
         const count = document.getElementById('ec-result-count');
@@ -830,6 +927,82 @@
       const dates = event.occurrenceDate !== date || event.durationDays > 1 ? '<small>' + esc(event.occurrenceDate) + (event.durationDays > 1 ? ' · ' + t('跨日') : '') + '</small>' : '';
       return '<article class="school-calendar-event"><span class="school-calendar-event-time">' + esc(time) + '</span><div><strong>' + esc(event.title) + '</strong>' + (event.location ? '<small>' + icon('pin') + esc(event.location) + '</small>' : '') + (event.description ? '<p>' + esc(event.description) + '</p>' : '') + dates + '</div></article>';
     }).join('') + '</div>';
+  }
+  function calendarCopy(zh, en) { return isEnglish() ? en : zh; }
+  function calendarFormat(value, options) {
+    const locale = isEnglish() ? 'en-US' : 'zh-CN', key = 'agenda:' + locale + ':' + JSON.stringify(options);
+    if (!dateFormatters.has(key)) dateFormatters.set(key, new Intl.DateTimeFormat(locale, Object.assign({ timeZone: 'Asia/Shanghai' }, options)));
+    return dateFormatters.get(key).format(new Date(value));
+  }
+  function calendarFormError(error) {
+    const message = error && error.message || calendarCopy('请检查日程日期和时间。', 'Check the event dates and times.');
+    if (!isEnglish()) return message;
+    if (/日程结束日期/.test(message)) return 'The end date must follow the start date, within one year.';
+    if (/跨日的定时日程/.test(message)) return 'An overnight event needs an end time.';
+    if (/日程结束时间/.test(message)) return 'The end time must be later than the start time.';
+    if (/时间/.test(message)) return 'Use a valid 24-hour time from 00:00 to 23:59.';
+    if (/日期/.test(message)) return 'Enter a valid date in YYYY-MM-DD format.';
+    return /[\u4e00-\u9fff]/.test(message) ? 'Could not save the event. Check the title, dates and times.' : message;
+  }
+  function validCalendarDay(value) {
+    return typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value) && value >= '1900-01-01' && value <= '2199-12-31' && Number.isFinite(Date.parse(value + 'T00:00:00Z')) && new Date(value + 'T00:00:00Z').toISOString().slice(0, 10) === value;
+  }
+  function calendarKindLabel(kind) {
+    const names = { course: ['课程', 'Classes'], task: ['截止事项', 'Deadlines'], school: ['校历', 'School'], personal: ['个人日程', 'Personal'] };
+    return calendarCopy(...names[kind]);
+  }
+  function calendarItems(start, end) { return memoized('agenda:' + start + ':' + end, () => window.CampusAgenda.buildRange(state, { start, end })); }
+  function calendarTime(item) {
+    if (item.allDay) return calendarCopy('全天', 'All day');
+    const clock = value => calendarFormat(value, { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
+    const start = item.startAt ? clock(item.startAt) : '—';
+    if (item.kind === 'task') return start + ' ' + calendarCopy('截止', 'due');
+    return start + (item.endAt && item.endAt !== item.startAt ? '–' + (window.CampusAgenda.today(item.endAt) !== item.date ? '24:00' : clock(item.endAt)) : '');
+  }
+  function renderAgendaItem(item) {
+    const action = item.kind === 'personal' ? 'agenda-edit' : item.kind === 'task' ? 'task-detail' : 'agenda-detail';
+    const id = item.kind === 'personal' ? item.eventId : item.kind === 'task' ? item.taskId : item.id;
+    const source = item.kind === 'task' ? ({ teams: 'Teams', managebac: 'ManageBac', manual: calendarCopy('个人待办', 'Personal to-do') }[item.source] || calendarKindLabel(item.kind)) : calendarKindLabel(item.kind);
+    return '<button type="button" class="agenda-entry' + (item.completed ? ' completed' : '') + '" data-kind="' + item.kind + '" data-action="' + action + '" data-id="' + esc(id) + '" data-date="' + esc(item.date) + '"><span class="agenda-entry-time">' + esc(calendarTime(item)) + '</span><span class="agenda-entry-copy"><strong>' + esc(item.title) + '</strong><small>' + esc(source + (item.location ? ' · ' + item.location : '') + (item.completed ? ' · ' + calendarCopy('已完成', 'Completed') : '')) + '</small></span>' + icon('arrow') + '</button>';
+  }
+  function renderWidgetsCard() {
+    const available = native && widgetsStatus.supported;
+    return '<section class="card agenda-widget-card"><div class="agenda-section-heading"><h2>' + calendarCopy('Mac 桌面小组件', 'Mac desktop widgets') + '</h2>' + (available ? button(widgetsStatus.busy ? calendarCopy('刷新中…', 'Refreshing…') : '刷新', 'agenda-refresh-widgets', widgetsStatus.busy ? 'disabled' : '') : '') + '</div><p>' + calendarCopy('今日行事历、截止提醒支持小／中／大号；下一节课支持小／中号，显示教室及开课或下课倒计时。', 'Today’s agenda and deadlines support small, medium and large sizes. Next class supports small and medium sizes, with the room and a start/end countdown.') + '</p><p>' + (available ? calendarCopy('在桌面右键 → 编辑小组件 → 搜索 CampusDesk 并添加。点击小组件即可打开对应日期。', 'Right-click the desktop → Edit Widgets → search for CampusDesk and add a widget. Click it to open the corresponding date.') : native ? calendarCopy('桌面小组件需要 macOS 14 或更高版本，并安装包含小组件的 CampusDesk。', 'Desktop widgets require macOS 14 or later and a CampusDesk installation with the widget extension.') : calendarCopy('请在已安装的 Mac 应用中使用桌面小组件。', 'Desktop widgets are available in the installed Mac app.')) + '</p>' + (widgetsStatus.updatedAt ? '<small>' + calendarCopy('最近更新：', 'Last updated: ') + esc(lastUpdated(widgetsStatus.updatedAt)) + '</small>' : '') + (widgetsStatus.error ? '<p class="agenda-widget-error" role="status">' + esc(widgetsStatus.error) + '</p>' : '') + '<small>' + calendarCopy('小组件摘要只包含日程标题、时间和地点，保存在本机；不包含账户或 API 密钥。', 'The local widget summary contains event titles, times and locations; it excludes accounts and API keys.') + '</small></section>';
+  }
+  function renderAgenda() {
+    if (!window.CampusAgenda) return '<div class="empty">' + calendarCopy('行事历文件未能加载，请重新安装完整应用。', 'The calendar module could not load. Reinstall the complete app.') + '</div>';
+    const Agenda = window.CampusAgenda, range = Agenda.monthRange(calendarMonth), allItems = calendarItems(range.start, range.end);
+    const items = allItems.filter(item => calendarKinds.has(item.kind));
+    const byDate = new Map();
+    for (const item of items) { if (!byDate.has(item.date)) byDate.set(item.date, []); byDate.get(item.date).push(item); }
+    const today = Agenda.today(), selected = byDate.get(calendarDay) || [];
+    const weekdays = isEnglish() ? ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'] : ['一', '二', '三', '四', '五', '六', '日'];
+    const monthLabel = calendarFormat(calendarMonth + '-15T12:00:00+08:00', { year: 'numeric', month: 'long' });
+    const cells = Array.from({ length: 42 }, (_, index) => {
+      const day = Agenda.addDays(range.start, index), entries = byDate.get(day) || [], outside = day.slice(0, 7) !== calendarMonth;
+      const label = day + ' · ' + entries.length + calendarCopy(' 项安排', ' events');
+      const dots = [...new Set(entries.map(item => item.kind))].map(kind => '<i data-kind="' + kind + '"></i>').join('');
+      return '<button type="button" class="agenda-day' + (outside ? ' outside' : '') + (day === today ? ' today' : '') + (day === calendarDay ? ' selected' : '') + '" data-action="agenda-day" data-date="' + day + '" aria-label="' + esc(label) + '" aria-pressed="' + (day === calendarDay) + '"' + (day === today ? ' aria-current="date"' : '') + '><span class="agenda-day-number">' + Number(day.slice(-2)) + '</span><span class="agenda-day-previews" aria-hidden="true">' + entries.slice(0, 2).map(item => '<span data-kind="' + item.kind + '">' + esc(item.title) + '</span>').join('') + (entries.length > 2 ? '<small>+' + (entries.length - 2) + '</small>' : '') + '</span><span class="agenda-day-dots" aria-hidden="true">' + dots + '</span></button>';
+    }).join('');
+    const upcoming = calendarItems(today, Agenda.addDays(today, 13)).filter(item => item.kind === 'task' && !item.completed && Date.parse(item.startAt) >= Date.now()).slice(0, 5);
+    return '<div class="agenda-page"><div class="agenda-page-heading"><div><p class="agenda-eyebrow">CAMPUSDESK · ' + calendarCopy('每一天，有安排', 'MAKE ROOM FOR YOUR DAY') + '</p><h1>' + calendarCopy('行事历', 'Calendar') + '</h1><p class="subtle">' + calendarCopy('课程、作业截止和校历，放进同一张日历。时间均为北京时间。', 'Classes, deadlines and school events in one calendar. All times use Beijing time.') + '</p></div><div class="agenda-heading-actions">' + button('导入校历', 'import-school-calendar') + button(calendarCopy('添加日程', 'Add event'), 'agenda-add', '', 'button-primary') + '</div></div><div class="agenda-layout"><section class="card agenda-month-card" aria-label="' + calendarCopy('月历', 'Month calendar') + '"><div class="agenda-month-toolbar"><h2 id="agenda-month-title">' + esc(monthLabel) + '</h2><div>' + button('今天', 'agenda-today') + '<button type="button" class="icon-button" data-action="agenda-month" data-step="-1" aria-label="' + calendarCopy('上个月', 'Previous month') + '">' + icon('back') + '</button><button type="button" class="icon-button" data-action="agenda-month" data-step="1" aria-label="' + calendarCopy('下个月', 'Next month') + '">' + icon('arrow') + '</button></div></div><div class="agenda-filters" aria-label="' + calendarCopy('显示来源', 'Show sources') + '">' + ['course', 'task', 'school', 'personal'].map(kind => '<button type="button" data-action="agenda-filter" data-kind="' + kind + '" aria-pressed="' + calendarKinds.has(kind) + '"><i data-kind="' + kind + '"></i>' + esc(calendarKindLabel(kind)) + '</button>').join('') + '</div><div class="agenda-weekdays" aria-hidden="true">' + weekdays.map(day => '<span>' + day + '</span>').join('') + '</div><div class="agenda-month-grid" aria-labelledby="agenda-month-title">' + cells + '</div><p class="agenda-calendar-note">' + calendarCopy('只显示已同步且日期明确的安排。点击日期查看详情。', 'Only synced entries with a known date are shown. Select a day for details.') + '</p></section><aside class="agenda-side"><section class="card agenda-selected-card"><div class="agenda-section-heading"><div><p class="agenda-eyebrow">' + esc(dayLabel(calendarDay)) + '</p><h2>' + esc(fmtDate(calendarDay + 'T12:00:00+08:00', { month: 'long', day: 'numeric' })) + '</h2></div><span class="agenda-count">' + selected.length + calendarCopy(' 项', ' events') + '</span></div><div class="agenda-day-list">' + (selected.length ? selected.map(renderAgendaItem).join('') : '<div class="agenda-empty">' + icon('schedule') + '<h3>' + (calendarKinds.size ? calendarCopy('这天暂无安排', 'Nothing scheduled') : calendarCopy('请选择显示来源', 'Choose a source to show')) + '</h3><p>' + calendarCopy('给学习和生活留一点空间。', 'A little room for study and life.') + '</p>' + button(calendarCopy('添加日程', 'Add event'), 'agenda-add') + '</div>') + '</div></section><section class="card agenda-upcoming-card"><div class="agenda-section-heading"><h2>' + calendarCopy('未来 14 天截止', 'Due in the next 14 days') + '</h2></div>' + (upcoming.length ? upcoming.map(item => '<div class="agenda-upcoming-row"><span>' + esc(item.date.slice(5).replace('-', '/')) + '</span>' + renderAgendaItem(item) + '</div>').join('') : '<p class="subtle">' + calendarCopy('暂无日期明确的未完成事项。', 'No open to-dos with a confirmed deadline.') + '</p>') + '</section></aside></div>' + renderWidgetsCard() + '</div>';
+  }
+  function openAgendaEvent(id) {
+    const item = id ? (state.personalEvents || []).find(event => event.id === id) : null;
+    if (id && !item) { toast(calendarCopy('这条日程已不存在。', 'This event no longer exists.')); return; }
+    const value = item || { title: '', startDate: calendarDay, endDate: calendarDay, allDay: true, startTime: '09:00', endTime: '10:00', location: '', notes: '' };
+    const field = (name, label, contents, extra = '') => '<label for="agenda-' + name + '">' + label + '<input id="agenda-' + name + '" name="' + name + '" value="' + esc(contents) + '" ' + extra + '></label>';
+    document.getElementById('agenda-event-content').innerHTML = '<form id="agenda-event-form" data-event-id="' + esc(id || '') + '" novalidate><div class="dialog-heading"><h2 id="agenda-event-title">' + (item ? calendarCopy('编辑日程', 'Edit event') : calendarCopy('添加日程', 'Add event')) + '</h2><button class="icon-button" type="button" data-action="agenda-close" aria-label="' + calendarCopy('关闭', 'Close') + '">×</button></div><p class="subtle">' + calendarCopy('个人日程保存在本机，并显示在行事历与桌面小组件。', 'Personal events stay on this Mac and appear in the calendar and desktop widgets.') + '</p>' + field('title', calendarCopy('日程名称', 'Event title'), value.title, 'required maxlength="180" autocomplete="off"') + '<label class="agenda-all-day"><input type="checkbox" id="agenda-all-day"' + (value.allDay ? ' checked' : '') + '> ' + calendarCopy('全天', 'All day') + '</label><div class="agenda-form-grid">' + field('start-date', calendarCopy('开始日期', 'Start date'), value.startDate, 'placeholder="YYYY-MM-DD" maxlength="10" inputmode="text"') + field('end-date', calendarCopy('结束日期（含当天）', 'End date (inclusive)'), value.endDate, 'placeholder="YYYY-MM-DD" maxlength="10" inputmode="text"') + '</div><div class="agenda-form-grid" id="agenda-time-fields"' + (value.allDay ? ' hidden' : '') + '>' + field('start-time', calendarCopy('开始时间', 'Start time'), value.startTime || '09:00', 'placeholder="HH:MM" maxlength="5" inputmode="numeric"') + field('end-time', calendarCopy('结束时间（选填）', 'End time (optional)'), value.endTime || '', 'placeholder="HH:MM" maxlength="5" inputmode="numeric"') + '</div><p class="field-hint">' + calendarCopy('日期格式 YYYY-MM-DD，时间为 24 小时制，北京时间。跨夜安排请将结束日期设为次日。', 'Use YYYY-MM-DD dates and 24-hour Beijing time. For overnight events, set the end date to the following day.') + '</p>' + field('location', calendarCopy('地点（选填）', 'Location (optional)'), value.location, 'maxlength="300"') + '<label for="agenda-notes">' + calendarCopy('备注（选填）', 'Notes (optional)') + '<textarea id="agenda-notes" rows="3" maxlength="2000">' + esc(value.notes) + '</textarea></label><p id="agenda-form-error" class="agenda-form-error" role="alert" hidden></p><div class="dialog-actions">' + (item ? '<button type="button" class="text-button agenda-delete" data-action="agenda-delete" data-id="' + esc(id) + '">' + calendarCopy('删除日程', 'Delete event') + '</button>' : '') + button('取消', 'agenda-close') + '<button type="submit" class="button button-primary">' + calendarCopy('保存日程', 'Save event') + '</button></div></form>';
+    showDialog('agenda-event-dialog'); document.getElementById('agenda-title').focus();
+  }
+  function openAgendaDetail(id, day) {
+    if (!validCalendarDay(day)) return;
+    const item = calendarItems(day, day).find(event => event.id === id);
+    if (!item) return;
+    if (item.kind === 'course') { selectedDate = day; navigate('schedule'); return; }
+    detailTaskId = null;
+    document.getElementById('detail-content').innerHTML = '<div class="dialog-heading"><h2 id="detail-title">' + esc(item.title) + '</h2><button type="button" class="icon-button" data-action="close-detail" aria-label="' + calendarCopy('关闭', 'Close') + '">×</button></div><p class="subtle">' + esc(day + ' · ' + calendarTime(item)) + '</p>' + (item.location ? '<p>' + esc(item.location) + '</p>' : '') + '<p class="agenda-event-description">' + esc(item.description || calendarCopy('来自已导入的校历。', 'From your imported school calendar.')) + '</p>';
+    showDialog('detail-dialog');
   }
   function renderSchoolCalendar(date, full) {
     const calendar = state.schoolCalendar || { fileName: '', importedAt: '', events: [] };
@@ -895,17 +1068,18 @@
       const hasDueLabel = String(task.dueLabel || '').trim().replace(/^(?:homework\s+)?(?:deadline|due(?:\s+date)?|截止(?:时间|日期)?)\s*[:：]?\s*$/i, '');
       const dueLabel = urgency.dueAt
         ? fmtDate(urgency.dueAt, { year: 'numeric', month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false })
-        : (hasDueLabel || (isEnglish() ? 'Due date not provided' : '截止时间未标明'));
-      const countdown = urgency.leftText || (isEnglish() ? 'Date unconfirmed' : (hasDueLabel ? '完整日期待核对' : '日期待核对'));
+        : (hasDueLabel || (source === 'manual' ? (isEnglish() ? 'No deadline set' : '未设置截止时间') : (isEnglish() ? 'Due date not provided' : '截止时间未标明')));
+      const countdown = urgency.leftText || (source === 'manual' ? (isEnglish() ? 'Optional deadline' : '截止时间可选') : (isEnglish() ? 'Date unconfirmed' : (hasDueLabel ? '完整日期待核对' : '日期待核对')));
       const sourceClass = source === 'teams' ? 'teal' : source === 'managebac' ? 'amber' : 'violet';
       const knownDue = urgency.dueAt > 0;
+      if (source === 'manual' && !knownDue) labels.unknown = isEnglish() ? 'No deadline' : '无截止时间';
       const ariaLabel = (isEnglish() ? 'Deadline urgency: ' : '截止紧迫度：') + labels[urgency.band] + (knownDue ? ' · ' + countdown : '');
-      return '<article class="board-task-card board-due-card board-accent-' + (urgency.band === 'overdue' || urgency.band === 'urgent' ? 'rose' : sourceClass) + ' todo-band-' + urgency.band + '" data-due-ms="' + urgency.dueAt + '">' +
+      return '<article data-dom-key="task-' + esc(task.id) + '" class="board-task-card board-due-card board-accent-' + (urgency.band === 'overdue' || urgency.band === 'urgent' ? 'rose' : sourceClass) + ' todo-band-' + urgency.band + '" data-source="' + source + '" data-due-ms="' + urgency.dueAt + '">' +
         '<div class="board-task-top"><span class="board-course" title="' + esc(course) + '">' + esc(course) + '</span><span class="board-source">' + esc(sourceLabel) + '</span><span class="todo-urgency" aria-label="' + esc(ariaLabel) + '">' + esc(labels[urgency.band]) + '</span></div>' +
-        '<h3>' + (source === 'manual' ? esc(task.title) : '<button type="button" data-action="task-detail" data-id="' + esc(task.id) + '">' + esc(task.title) + '</button>') + '</h3>' +
+        '<h3><button type="button" data-action="task-detail" data-id="' + esc(task.id) + '">' + esc(task.title) + '</button></h3>' +
         '<div class="todo-urgency-bar" role="progressbar" aria-label="' + esc(isEnglish() ? 'Deadline urgency' : '截止紧迫度') + '" aria-valuemin="0" aria-valuemax="100" aria-valuenow="' + Math.round(urgency.progress * 100) + '"><span data-todo-progress style="width:' + (urgency.progress * 100).toFixed(1) + '%"></span></div>' +
         '<div class="board-task-foot board-due-foot"><span class="board-due' + (urgency.band === 'overdue' ? ' overdue' : '') + '" title="' + esc(dueLabel) + '">' + icon('clock') + '<span>' + esc(dueLabel) + '</span></span><button class="board-check" type="button" data-action="toggle-task" data-id="' + esc(task.id) + '" aria-label="' + esc((isEnglish() ? (task.completed ? 'Mark incomplete: ' : 'Mark complete: ') : (task.completed ? '标为未完成：' : '标为已完成：')) + task.title) + '" aria-pressed="' + Boolean(task.completed) + '">' + icon('check') + '</button><span class="todo-time-left' + (knownDue ? '' : ' unknown') + '" data-todo-countdown data-band="' + urgency.band + '">' + esc(countdown) + '</span></div>' +
-        '</article>';
+        (source === 'manual' && !knownDue ? '<button class="board-set-deadline" type="button" data-action="task-detail" data-id="' + esc(task.id) + '">' + (isEnglish() ? 'Set a deadline' : '设置截止时间') + '</button>' : '') + '</article>';
     }).join('');
     return '<div class="board-task-grid">' + cards + '</div>' + (tasks.length > visible.length ? '<p class="board-more">' + (isEnglish() ? 'Showing ' + visible.length + ' of ' + tasks.length + ' tasks. Open To-Do to see all.' : '已显示 ' + visible.length + ' / ' + tasks.length + ' 项，前往待办事项查看全部。') + '</p>' : '');
   }
@@ -926,7 +1100,7 @@
     const classPreview = classes.slice(0, 3).map(item => '<div class="board-class-row"><span>' + esc(item.start || '—') + '</span><strong>' + esc(item.title || '自习课') + '</strong><small>' + esc(item.room || '地点待确认') + '</small></div>').join('');
     const boardClock = '<div class="board-header-clock">' + renderClassClock() + '</div>';
     const metrics = '<div class="board-kpi-grid"><article class="board-kpi board-kpi-open"><span>未完成</span><strong>' + openTasks.length + '</strong><small>等待处理的任务</small></article><article class="board-kpi board-kpi-overdue"><span>已逾期</span><strong>' + overdue + '</strong><small>优先回到原页面核对</small></article><article class="board-kpi board-kpi-week"><span>7 天内</span><strong>' + nextWeek + '</strong><small>有明确截止时间</small></article><article class="board-kpi board-kpi-done"><span>已完成</span><strong>' + completed + '</strong><small>仅本机勾选记录</small></article><article class="board-kpi board-kpi-gpa"><span>' + (gpa.official ? '学校 GPA' : '参考 GPA') + '</span><strong>' + (displayGpa && displayGpa.value != null ? esc(Number(displayGpa.value).toFixed(2)) : '—') + '</strong><small>' + (displayGpa && displayGpa.scale ? '/ ' + esc(displayGpa.scale) : '等待成绩同步') + '</small></article><article class="board-kpi board-kpi-gpa-linear"><span>' + t('线性折算 GPA') + '</span><strong>' + (gpa.linear.value == null ? '—' : gpa.linear.value.toFixed(2)) + '</strong><small>/ 4.00 · ' + (isEnglish() ? 'Unofficial' : '非官方') + '</small></article></div>';
-    const boardTasks = taskSourceSections(openTasks, rows => boardTaskCards(rows, 6));
+    const boardTasks = boardTaskSourceColumns(openTasks, rows => boardTaskCards(rows, 6));
     const taskSection = '<section class="board-task-section"><div class="board-section-heading"><div><p>全部待办 · ' + openTasks.length + '</p><h2>集中处理最重要的事</h2></div><div>' + button(icon('plus') + '添加待办', 'add-task', '', 'button-primary') + button('查看全部', 'go-tasks', '', 'button-light') + '</div></div><div class="board-source-groups">' + (openTasks.length ? boardTasks : boardTaskCards(openTasks)) + '</div>' + (openTasks.length > 15 ? '<p class="board-more">' + (isEnglish() ? 'Some tasks are omitted here. Open To-Do to see all.' : '总览仅显示各分组中的部分任务，前往“待办事项”查看全部。') + '</p>' : '') + '</section>';
     const side = '<aside class="board-side-column"><section class="board-mini-card"><p>今日课程</p><h2>' + (classes.length ? classes.length + ' 节已读取课程' : '等待课表同步') + '</h2>' + (classPreview || '<p class="board-muted">登录希悦并打开课表后，这里会显示当天课程。</p>') + '</section>' + renderSchoolCalendar(today, false) + '<section class="board-mini-card board-tip"><p>今日提示</p><h2>信息以原平台为准</h2><span>卡片只整理已经读取到的课程、成绩和作业；点击学校任务可查看原文要求。</span></section></aside>';
     return '<section class="board-panel"><div class="board-hero"><div><p class="board-eyebrow">CAMPUSDESK · 学习看板</p><h1>今天，稳稳推进。</h1><p>' + esc(topText) + '</p></div><div class="board-hero-actions"><span>' + esc(fmtDate(new Date(), { month: 'long', day: 'numeric', weekday: 'long' })) + '</span>' + button(icon('settings') + '面板样式', 'appearance-settings', '', 'button-light') + '</div></div>' + boardClock + metrics + '<div class="board-layout">' + taskSection + side + '</div></section>';
@@ -1135,7 +1309,7 @@
     return '<section class="card gpa-forecast-card gp-card"><div class="gp-heading"><h2>' + t('学期 GPA 预测') + '</h2><span>' + (isEnglish() ? 'Uses saved course scenarios' : '使用已保存的学科情景') + '</span></div><p class="gp-intro">' + (isEnglish() ? 'Save category assumptions above to update this projection. Each course below shows whether its data is sufficient.' : '在上方保存类别假设后更新预测；逐门显示纳入结果及缺失原因。') + '</p>' + getGradePlanner().summary(currentCourses) + form + calendar + '</section>';
   }
   function renderFocusMode() {
-    const clock = Core.getClassClock(state), plan = taskPlan().slice(0, 3), rows = scheduleRowsForState(Core.today());
+    const clock = classClockForState(), plan = taskPlan().slice(0, 3), rows = scheduleRowsForState(Core.today());
     const current = clock.current, next = clock.next;
     const clockText = current ? (isEnglish() ? 'In class · ' : '正在上课 · ') + current.start + '–' + current.end : next ? (isEnglish() ? 'Next class · ' : '下一节课程 · ') + next.start + '–' + next.end : (isEnglish() ? 'No captured class right now' : '当前没有已读取的课程');
     return '<section class="focus-view"><div class="focus-view-top"><span class="hub-kicker">' + (isEnglish() ? 'FOCUS SESSION' : '专注模式') + '</span><button class="button button-light" type="button" data-action="toggle-focus-mode">' + (isEnglish() ? 'Exit focus' : '退出专注') + '</button></div><p class="focus-date">' + esc(fmtDate(new Date(), { month: 'long', day: 'numeric', weekday: 'long' })) + '</p><h1>' + esc(current ? current.title : next ? next.title : (isEnglish() ? 'A quiet moment to study' : '给自己一段安静的学习时间')) + '</h1><p class="focus-subtitle">' + esc(clockText) + '</p><section class="focus-next-task"><small>' + (isEnglish() ? 'NEXT TASK' : '下一项任务') + '</small>' + (plan.length ? '<strong>' + esc(plan[0].task.title) + '</strong><p>' + esc((plan[0].task.course || sourceName(plan[0].task.source)) + ' · ' + (plan[0].slot ? fmtDate(plan[0].slot.start, { hour: '2-digit', minute: '2-digit', hour12: false }) : (isEnglish() ? 'Not scheduled today' : '今日暂未排入'))) + '</p>' : '<strong>' + (isEnglish() ? 'No open tasks' : '没有未完成任务') + '</strong>') + '</section><section class="focus-deadlines"><h2>' + (isEnglish() ? 'Coming deadlines' : '最近截止日期') + '</h2>' + (plan.length ? plan.map(item => '<div><span>' + esc(item.task.course || sourceName(item.task.source)) + '</span><strong>' + esc(item.task.title) + '</strong><small>' + esc(taskDue(item.task).label) + '</small></div>').join('') : '<p>—</p>') + '</section><small class="focus-course-count">' + rows.length + (isEnglish() ? ' captured classes today' : ' 节已读取课程') + '</small></section>';
@@ -1179,6 +1353,24 @@
       .map(h => Object.assign({}, h, { value: Number(h[field]) }))
       .sort((a, b) => gpaHistoryTimestamp(a) - gpaHistoryTimestamp(b));
   }
+  // Keep chart strokes and the external legend in the same order and palette.
+  const GPA_KLINE_AVERAGES = [
+    { period: 1, color: '#607f6e', size: 2 },
+    { period: 5, color: '#f0a23b', size: 1.4 },
+    { period: 10, color: '#9d72b8', size: 1.4 },
+    { period: 30, color: '#4f93d1', size: 1.4 },
+    { period: 60, color: '#d95c91', size: 1.4 }
+  ];
+  function renderGpaAverageLegend(data) {
+    const english = isEnglish();
+    return '<div class="gpa-kline-legend gpa-kline-averages" aria-label="' + (english ? 'GPA moving averages · latest values' : 'GPA 移动平均线 · 最新数值') + '">' + GPA_KLINE_AVERAGES.slice(1).map(line => {
+      const ready = data.length >= line.period;
+      const value = ready ? (data.slice(-line.period).reduce((sum, bar) => sum + bar.close, 0) / line.period).toFixed(2) : null;
+      const label = 'MA' + line.period + (english ? ' · ' + line.period + '-period average' : ' · ' + line.period + ' 周期均值');
+      const status = ready ? value : (english ? 'needs ' + line.period + ' recorded periods' : '需满 ' + line.period + ' 个有记录周期');
+      return '<span data-gpa-ma="' + line.period + '" data-ma-ready="' + ready + '"><i class="line" style="background:' + line.color + '" aria-hidden="true"></i>' + label + '<strong>' + status + '</strong></span>';
+    }).join('') + '</div><p class="gpa-note gpa-ma-explanation">' + (english ? 'Each MA averages the final GPA of the latest N recorded periods at the selected interval. Missing periods are not filled; lines appear only with enough records. These are historical averages, not your current GPA, target or forecast.' : 'MA 取当前时间分度下，最近 N 个有记录周期的末次 GPA 平均值。空白周期不补值，不足 N 个周期不绘线；均线是历史均值，不是当前 GPA、目标或预测。') + '</p>';
+  }
   function renderKlineChartHistory(mode) {
     const history = gpaChartHistory(mode);
     if (!history.length && mode === 'banded') return '';
@@ -1188,7 +1380,8 @@
     const linear = mode === 'linear', chartId = linear ? 'gpa-kline-linear-chart' : 'gpa-kline-chart';
     const title = linear ? (isEnglish() ? 'Linear GPA candlestick chart' : '线性折算 GPA K 线') : (isEnglish() ? 'Banded GPA candlestick chart' : '分档 GPA K 线');
     const emptyHistory = isEnglish() ? 'Older records contain only banded GPA. The linear chart begins with the next ManageBac grade sync; past linear values are not invented.' : '旧历史仅保存分档 GPA。下次同步 ManageBac 成绩后开始记录线性 K 线；不会用分档值伪造旧数据。';
-    return '<section class="card gpa-kline-card" style="margin-top:21px"><div class="card-header"><h2 class="card-title"><span class="icon">' + icon('clock') + '</span>' + title + '</h2><span class="card-kicker">' + intervalLabel + ' · ' + data.length + (isEnglish() ? ' periods' : ' 个周期') + '</span></div>' + (linear ? '' : '<div class="gpa-kline-time-control"><div class="gpa-kline-time-heading"><span>' + (isEnglish() ? 'Time interval · both charts' : '时间分度值 · 两张图同步') + '</span><output id="gpa-kline-interval-output" for="gpa-kline-interval">' + intervalLabel + '</output></div><input id="gpa-kline-interval" type="range" min="0" max="' + (GPA_KLINE_INTERVALS.length - 1) + '" step="1" value="' + gpaKlineIntervalIndex + '" list="gpa-kline-interval-ticks" data-action="gpa-kline-interval" aria-label="' + (isEnglish() ? 'Choose GPA chart interval' : '选择 GPA K 线时间分度值') + '"><datalist id="gpa-kline-interval-ticks">' + tickLabels + '</datalist><div class="gpa-kline-time-scale"><span>' + shortLabel + '</span><span>' + dayLabel + '</span><span>' + longLabel + '</span></div></div>') + (data.length ? '<div class="gpa-kline-plot"><div id="' + chartId + '" aria-label="' + title + '" style="width:100%;height:500px;min-height:420px"></div></div><div class="gpa-kline-legend"><span><i style="background:' + palette.up + '"></i>' + (isEnglish() ? 'Rising candles' : '上涨柱') + '</span><span><i style="background:' + palette.down + '"></i>' + (isEnglish() ? 'Falling candles' : '下降柱') + '</span><span><i class="line"></i>' + (isEnglish() ? 'Close line' : '收盘折线') + '</span><span>' + (isEnglish() ? 'Hover to snap to the close line; show GPA only' : '悬停只吸附收盘折线并显示 GPA 数值，不吸附日期') + '</span></div>' : '<div class="info-note">' + emptyHistory + '</div>') + '<p class="gpa-note">' + (isEnglish() ? 'Each candle uses local grade-history records for this method. The close line and labels show GPA; the shared interval controls both charts.' : '每根柱仅使用对应算法的本机成绩记录；折线和柱头显示 GPA，时间分度值同时控制两张图。') + '</p></section>';
+    const candleLegend = '<div class="gpa-kline-legend"><span><i style="background:' + palette.up + '"></i>' + (isEnglish() ? 'Rising candles' : '上涨柱') + '</span><span><i style="background:' + palette.down + '"></i>' + (isEnglish() ? 'Falling candles' : '下降柱') + '</span><span><i class="line" style="background:' + GPA_KLINE_AVERAGES[0].color + '"></i>' + (isEnglish() ? 'Close GPA line' : '收盘 GPA 折线') + '</span><span>' + (isEnglish() ? 'Hover to snap to the close line; show GPA only' : '悬停只吸附收盘折线并显示 GPA 数值，不吸附日期') + '</span></div>';
+    return '<section class="card gpa-kline-card" style="margin-top:21px"><div class="card-header"><h2 class="card-title"><span class="icon">' + icon('clock') + '</span>' + title + '</h2><span class="card-kicker">' + intervalLabel + ' · ' + data.length + (isEnglish() ? ' periods' : ' 个周期') + '</span></div>' + (linear ? '' : '<div class="gpa-kline-time-control"><div class="gpa-kline-time-heading"><span>' + (isEnglish() ? 'Time interval · both charts' : '时间分度值 · 两张图同步') + '</span><output id="gpa-kline-interval-output" for="gpa-kline-interval">' + intervalLabel + '</output></div><input id="gpa-kline-interval" type="range" min="0" max="' + (GPA_KLINE_INTERVALS.length - 1) + '" step="1" value="' + gpaKlineIntervalIndex + '" list="gpa-kline-interval-ticks" data-action="gpa-kline-interval" aria-label="' + (isEnglish() ? 'Choose GPA chart interval' : '选择 GPA K 线时间分度值') + '"><datalist id="gpa-kline-interval-ticks">' + tickLabels + '</datalist><div class="gpa-kline-time-scale"><span>' + shortLabel + '</span><span>' + dayLabel + '</span><span>' + longLabel + '</span></div></div>') + (data.length ? '<div class="gpa-kline-plot"><div id="' + chartId + '" aria-label="' + title + '" style="width:100%;height:500px;min-height:420px"></div></div>' + candleLegend + renderGpaAverageLegend(data) : '<div class="info-note">' + emptyHistory + '</div>') + '<p class="gpa-note">' + (isEnglish() ? 'Each candle uses local grade-history records for this method. The shared interval controls both charts. Below the GPA pane: course counts summed across records in each period (not GPA), then the MACD trend indicator.' : '每根柱仅使用对应算法的本机成绩记录，时间分度值同时控制两张图。GPA 主图下方依次为：各周期记录中课程计数之和（非 GPA）、MACD 趋势辅助指标。') + '</p></section>';
   }
   function gpaIntervalLabel(interval) { return isEnglish() ? interval.short : interval.label; }
   function ensureGpaValueOverlay(lib) {
@@ -1225,16 +1418,24 @@
     layer.innerHTML = '<i class="gpa-hover-horizontal"></i><i class="gpa-hover-vertical"></i><i class="gpa-hover-dot"></i><span class="gpa-kline-snap-value"' + (container.id === 'gpa-kline-chart' ? ' id="gpa-kline-snap-value"' : '') + '></span>';
     container.appendChild(layer);
     const badge = layer.querySelector('span');
-    const hide = () => { layer.hidden = true; badge.hidden = true; };
+    let hoverFrame = 0, pendingPointer = null, disposed = false;
+    const hide = () => {
+      if (hoverFrame) window.cancelAnimationFrame(hoverFrame);
+      hoverFrame = 0; pendingPointer = null;
+      layer.hidden = true; badge.hidden = true;
+    };
     hide();
-    const move = event => {
-      if (event.buttons) { hide(); return; }
+    const paint = () => {
+      hoverFrame = 0;
+      const pointer = pendingPointer;
+      pendingPointer = null;
+      if (!pointer || disposed || dashboardHidden() || !container.isConnected) { hide(); return; }
       const rect = container.getBoundingClientRect();
       const pane = chart.getSize('candle_pane', 'main');
       const root = chart.getSize('candle_pane');
       if (!pane || !root) { hide(); return; }
-      const x = (event.clientX - rect.left) * container.clientWidth / rect.width - pane.left;
-      const y = (event.clientY - rect.top) * container.clientHeight / rect.height - root.top;
+      const x = (pointer.clientX - rect.left) * container.clientWidth / rect.width - pane.left;
+      const y = (pointer.clientY - rect.top) * container.clientHeight / rect.height - root.top;
       if (x < 0 || x > pane.width || y < 0 || y > pane.height - 3) { hide(); return; }
       const bars = chart.getDataList();
       const index = chart.convertFromPixel({ x }, { paneId: 'candle_pane' }).dataIndex;
@@ -1266,26 +1467,39 @@
       badge.style.left = Math.max(4, Math.min(pane.width - width - 4, snappedX + 14 + width > pane.width ? snappedX - width - 14 : snappedX + 14)) + 'px';
       badge.style.top = Math.max(4, Math.min(pane.height - height - 4, snappedY - height - 12)) + 'px';
     };
+    const move = event => {
+      if (event.buttons || disposed || dashboardHidden()) { hide(); return; }
+      // High-rate mouse/trackpad input only replaces these coordinates. Read
+      // chart geometry and update the hover layer at most once per frame.
+      pendingPointer = { clientX: event.clientX, clientY: event.clientY };
+      if (!hoverFrame) hoverFrame = window.requestAnimationFrame(paint);
+    };
     container.addEventListener('mousemove', move);
     container.addEventListener('mouseleave', hide);
     container.addEventListener('mousedown', hide);
     container.addEventListener('wheel', hide, true);
     window.addEventListener('blur', hide);
+    document.addEventListener('visibilitychange', hide);
     chart.subscribeAction('onVisibleRangeChange', hide);
     const observer = new ResizeObserver(hide);
     observer.observe(container);
     container._gpaSnapCleanup = () => {
+      disposed = true;
+      hide();
       observer.disconnect();
       container.removeEventListener('mousemove', move);
       container.removeEventListener('mouseleave', hide);
       container.removeEventListener('mousedown', hide);
       container.removeEventListener('wheel', hide, true);
       window.removeEventListener('blur', hide);
+      document.removeEventListener('visibilitychange', hide);
       chart.unsubscribeAction('onVisibleRangeChange', hide);
       layer.remove();
       delete container._gpaSnapCleanup;
+      delete chart._campusHoverHide;
     };
     chart._campusHoverCleanup = container._gpaSnapCleanup;
+    chart._campusHoverHide = hide;
   }
   function mountGpaKlineChart(mode) {
     mode = mode === 'linear' ? 'linear' : 'banded';
@@ -1340,7 +1554,7 @@
     chart.setOffsetRightDistance(Math.max(48, (plotWidth - data.length * barSpace) / 2));
     chart.setDataLoader({ getBars: params => params.callback(params.type === 'init' ? data : [], { backward: false, forward: false }) });
     try { ensureGpaValueOverlay(lib); data.forEach(bar => chart.createOverlay({ name: 'campus-gpa-value-label', paneId: 'candle_pane', lock: true, points: [{ timestamp: bar.timestamp, value: bar.high }], extendData: { label: Number(bar.close).toFixed(2) } })); } catch (_) { /* Labels are optional; the native crosshair remains available. */ }
-    try { chart.createIndicator({ name: 'MA', calcParams: [1, 5, 10, 30, 60], precision: 2, paneId: 'candle_pane', styles: { lines: [{ color: '#607f6e', size: 2 }, { color: '#f0a23b', size: 1.4 }, { color: '#9d72b8', size: 1.4 }, { color: '#4f93d1', size: 1.4 }, { color: '#d95c91', size: 1.4 }] } }, false); } catch (_) { /* The candle chart remains usable if an older bundled build omits MA. */ }
+    try { chart.createIndicator({ name: 'MA', calcParams: GPA_KLINE_AVERAGES.map(line => line.period), precision: 2, paneId: 'candle_pane', styles: { lines: GPA_KLINE_AVERAGES.map(line => ({ color: line.color, size: line.size })) } }, false); } catch (_) { /* The candle chart remains usable if an older bundled build omits MA. */ }
     try { chart.createIndicator({ name: 'VOL', calcParams: [5, 10, 20], precision: 0, paneId: 'volume_pane' }, false); } catch (_) { /* Volume is an enhancement; the price chart remains usable. */ }
     try { chart.createIndicator({ name: 'MACD', calcParams: [12, 26, 9], precision: 2, paneId: 'macd_pane' }, false); } catch (_) { /* MACD is an enhancement; the price chart remains usable. */ }
     attachGpaLineSnap(chart, container);
@@ -1404,16 +1618,24 @@
   function taskSubjectGroups(tasks, renderRows) {
     const focused = new Set(state.settings.focusSubjects || []), groups = new Map();
     for (const task of tasks) { const subject = task.course || '未分类'; if (!groups.has(subject)) groups.set(subject, []); groups.get(subject).push(task); }
-    return [...groups.entries()].sort((a, b) => Number(focused.has(b[0])) - Number(focused.has(a[0])) || a[0].localeCompare(b[0], 'zh-CN')).map(([subject, rows]) => '<section class="task-subject-group"><div class="group-heading"><div><p>' + t('学科') + '</p><h2>' + esc(subject) + '<span>' + rows.length + (isEnglish() ? ' item(s)' : ' 项') + '</span></h2></div>' + focusButton('toggle-focus-subject', subject, focused.has(subject), '学科：' + subject) + '</div>' + (renderRows ? renderRows(rows) : taskRows(rows)) + '</section>').join('');
+    return [...groups.entries()].sort((a, b) => Number(focused.has(b[0])) - Number(focused.has(a[0])) || a[0].localeCompare(b[0], 'zh-CN')).map(([subject, rows]) => '<section data-dom-key="subject-' + esc(subject) + '" class="task-subject-group"><div class="group-heading"><div><p>' + t('学科') + '</p><h2>' + esc(subject) + '<span>' + rows.length + (isEnglish() ? ' item(s)' : ' 项') + '</span></h2></div>' + focusButton('toggle-focus-subject', subject, focused.has(subject), '学科：' + subject) + '</div>' + (renderRows ? renderRows(rows) : taskRows(rows)) + '</section>').join('');
+  }
+  function taskSourceSection(source, title, rows, renderRows) {
+    return rows.length ? '<section data-dom-key="source-' + source + '" class="task-source-section task-source-' + source + '"><div class="task-source-heading"><div><p>' + t('作业来源') + '</p><h2>' + esc(t(title)) + '</h2></div><span>' + rows.length + (isEnglish() ? ' item(s)' : ' 项') + '</span></div><div class="task-source-subjects">' + taskSubjectGroups(rows, renderRows) + '</div></section>' : '';
   }
   function taskSourceSections(tasks, renderRows) {
     const sources = [['teams', 'Teams 作业'], ['managebac', 'ManageBac 作业'], ['manual', '个人待办']];
     const bySource = new Map(sources.map(([source]) => [source, []]));
     for (const task of tasks) { const bucket = bySource.get(task.source); if (bucket) bucket.push(task); }
-    return '<div class="task-source-grid">' + sources.map(([source, title]) => {
-      const rows = bySource.get(source);
-      return rows.length ? '<section class="task-source-section task-source-' + source + '"><div class="task-source-heading"><div><p>' + t('作业来源') + '</p><h2>' + esc(t(title)) + '</h2></div><span>' + rows.length + (isEnglish() ? ' item(s)' : ' 项') + '</span></div><div class="task-source-subjects">' + taskSubjectGroups(rows, renderRows) + '</div></section>' : '';
-    }).join('') + '</div>';
+    return '<div class="task-source-grid">' + sources.map(([source, title]) => taskSourceSection(source, title, bySource.get(source), renderRows)).join('') + '</div>';
+  }
+  function boardTaskSourceColumns(tasks, renderRows) {
+    const bySource = new Map([['manual', []], ['teams', []], ['managebac', []]]);
+    for (const task of tasks) { const bucket = bySource.get(task.source); if (bucket) bucket.push(task); }
+    const manual = taskSourceSection('manual', '个人待办', bySource.get('manual'), renderRows);
+    const teams = taskSourceSection('teams', 'Teams 作业', bySource.get('teams'), renderRows);
+    const managebac = taskSourceSection('managebac', 'ManageBac 作业', bySource.get('managebac'), renderRows);
+    return '<div class="board-task-columns"><div class="board-task-column board-task-column-left">' + manual + teams + '</div><div class="board-task-column board-task-column-right">' + managebac + '</div></div>';
   }
   // Adapt the task-card layout and urgency-bar behavior seen in ManageBac Buddy
   // to CampusDesk's existing task model and actions.
@@ -1445,7 +1667,7 @@
     const dueNote = task.dueResolution === 'term' ? (isEnglish() ? 'Year from term · Beijing time' : '按学期补全年份 · 北京时间') : task.dueResolution === 'school-time' ? (isEnglish() ? 'Parsed in Beijing time' : '按北京时间识别') : !urgency.dueAt && partialLabel ? (isEnglish() ? 'Full date needs verification' : '完整日期待核对') : '';
     const openSource = source === 'teams' ? 'teams' : 'managebac';
     const cardTitle = (isEnglish() ? 'Open task details: ' : '查看待办详情：') + task.title;
-    return '<article class="todo-deadline-card card todo-band-' + urgency.band + ' todo-source-' + source + '" data-due-ms="' + urgency.dueAt + '">' +
+    return '<article data-dom-key="task-' + esc(task.id) + '" class="todo-deadline-card card todo-band-' + urgency.band + ' todo-source-' + source + '" data-due-ms="' + urgency.dueAt + '">' +
       '<button class="todo-card-hit" type="button" data-action="task-detail" data-id="' + esc(task.id) + '" aria-label="' + esc(cardTitle) + '"></button>' +
       '<div class="todo-card-body"><div class="todo-card-top"><span class="todo-course"><i class="todo-course-dot" aria-hidden="true"></i><span>' + esc(course) + '</span></span><span class="todo-kind">' + esc(tag) + '</span><button class="todo-focus-button ' + (focused ? 'active' : '') + '" type="button" data-action="toggle-focus-subject" data-value="' + esc(course) + '" aria-label="' + esc((isEnglish() ? (focused ? 'Unfocus: ' : 'Focus: ') : (focused ? '取消特别关注：' : '特别关注：')) + course) + '" aria-pressed="' + focused + '">' + icon('focus') + '</button><span class="todo-urgency">' + esc(bandLabel) + '</span></div>' +
       '<h3>' + esc(task.title) + '</h3><div class="todo-urgency-bar" role="progressbar" aria-label="' + esc(isEnglish() ? 'Deadline urgency' : '截止紧迫度') + '" aria-valuemin="0" aria-valuemax="100" aria-valuenow="' + Math.round(urgency.progress * 100) + '"><span data-todo-progress style="width:' + (urgency.progress * 100).toFixed(1) + '%"></span></div>' + (dueNote ? '<p class="todo-date-note">' + esc(dueNote) + '</p>' : '') +
@@ -1571,6 +1793,9 @@
       ['midnight', '深夜', '低亮度深色主题']
     ];
     return '<section id="appearance-settings" class="card settings-section appearance-settings">' + cardHeader('overview', '面板样式') + '<p class="settings-intro">经典面板保留原有的信息布局；卡片看板用更紧凑的统计卡和任务卡集中展示今天的重点。两种样式使用同一份本机数据，随时可切换。</p><div class="appearance-options"><button type="button" class="appearance-option ' + (theme === 'classic' ? 'selected' : '') + '" data-action="dashboard-theme" data-theme="classic" aria-pressed="' + (theme === 'classic') + '"><span class="appearance-preview preview-classic"><i></i><i></i><i></i></span><strong>经典面板</strong><small>熟悉的课程、成绩与待办布局</small></button><button type="button" class="appearance-option ' + (theme === 'board' ? 'selected' : '') + '" data-action="dashboard-theme" data-theme="board" aria-pressed="' + (theme === 'board') + '"><span class="appearance-preview preview-board"><i></i><i></i><i></i><i></i></span><strong>卡片看板</strong><small>统计概览与密集任务卡片</small></button></div><div class="color-theme-section"><h3>' + t('主题配色') + '</h3><p class="settings-intro">' + t('只改变 CampusDesk 的界面配色；不影响经典/卡片布局、成绩涨跌色或学校数据。') + '</p><div class="color-theme-options">' + colorThemes.map(item => '<button type="button" class="color-theme-option color-theme-' + item[0] + (colorTheme === item[0] ? ' selected' : '') + '" data-action="color-theme" data-theme="' + item[0] + '" aria-pressed="' + (colorTheme === item[0]) + '"><span class="color-theme-preview" aria-hidden="true"><i></i><i></i></span><strong>' + t(item[1]) + '</strong><small>' + t(item[2]) + '</small></button>').join('') + '</div></div><div class="settings-fields appearance-candle-setting"><div class="settings-field"><div><label for="gpa-candle-colors">GPA K 线涨跌颜色</label><p>选择成绩上升和下降时 K 线的颜色，设置会保存在本机。</p></div><select id="gpa-candle-colors" aria-label="GPA K 线涨跌颜色"><option value="red-up"' + (candleColors === 'red-up' ? ' selected' : '') + '>红涨绿跌</option><option value="green-up"' + (candleColors === 'green-up' ? ' selected' : '') + '>绿涨红跌</option></select></div></div></section>';
+  }
+  function renderGraphicsSettings() {
+    return '<section class="card settings-section"><div class="settings-field"><div><label for="graphics-mode">' + assistantCopy('动效与耗电', 'Effects and energy') + '</label><p>' + assistantCopy('自动：操作时流畅，闲置时降频；低功耗：仅在界面变化时绘制静态玻璃。窗口不可见时暂停。', 'Automatic: smooth while interacting and slower when idle. Low power: redraw static glass only when needed. Rendering pauses while hidden.') + '</p></div><select id="graphics-mode"><option value="auto"' + (state.settings.graphicsMode !== 'low-power' ? ' selected' : '') + '>' + assistantCopy('自动', 'Automatic') + '</option><option value="low-power"' + (state.settings.graphicsMode === 'low-power' ? ' selected' : '') + '>' + assistantCopy('低功耗', 'Low power') + '</option></select></div></section>';
   }
   function renderLanguageSettings() {
     const language = state.settings.language || 'zh-CN';
@@ -1764,8 +1989,8 @@
     if (selected.has('grades')) {
       context.grades = courseRowsForState().slice(0, 30).map(course => {
         assistantPushReference(refs, 'managebac', course.sourceURL, course.name);
-        return { course: value(course.name, 180), term: value(course.term, 100), percentage: Number.isFinite(Number(course.percentage)) ? Number(course.percentage) : null,
-          components: (course.gradeComponents || []).slice(0, 20).map(item => ({ category: value(item.category || item.name, 120), weight: value(item.weight, 40), score: value(item.score || item.percentage, 60) })) };
+        return { course: value(course.name, 180), term: value(course.term, 100), percentage: typeof course.percentage === 'number' && Number.isFinite(course.percentage) ? course.percentage : null,
+          components: (course.gradeComponents || []).slice(0, 20).map(item => ({ category: value(item.category || item.name, 120), weight: value(item.weight, 40), score: item.score == null && item.percentage == null ? null : value(item.score ?? item.percentage, 60) })) };
       });
     }
     if (selected.has('schedule')) {
@@ -1808,6 +2033,8 @@
       missingKey: ['请先保存 DeepSeek API 密钥。', 'Save a DeepSeek API key first.'],
       localUnavailable: ['无法连接本机 Ollama。请确认 Ollama 已启动且模型已安装。', 'Could not reach local Ollama. Make sure it is running and the model is installed.'],
       localModelMissing: ['Ollama 找不到此模型；请先在 Ollama 中下载，再重试。', 'Ollama cannot find this model. Download it in Ollama and try again.'],
+      localModelNotLocal: ['此模型无法确认在本机运行，已阻止发送。请刷新并选择已下载到本机的 Ollama 模型。', 'This model could not be verified as local. Nothing was sent. Refresh and select a downloaded local Ollama model.'],
+      cancelled: ['已停止生成。', 'Generation stopped.'],
       network: ['无法连接 DeepSeek，请检查网络后重试。', 'Could not reach DeepSeek. Check your connection and try again.'],
       unauthorized: ['DeepSeek API 密钥无效或已失效。', 'The DeepSeek API key is invalid or expired.'],
       serviceRejected: ['AI 服务拒绝了请求；请检查模型设置或稍后重试。', 'The AI service rejected the request. Check the model setting or try again later.'],
@@ -1818,7 +2045,7 @@
   }
   function renderAssistantConversation() {
     if (!assistantTranscript.length && !assistantBusy) return '<div class="assistant-empty"><span>' + icon('search') + '</span><strong>' + assistantCopy('问一个关于今天学习的问题', 'Ask a question about your learning') + '</strong><p>' + assistantCopy('例如：今天最先该完成哪项作业？我还缺少哪些评分组成？', 'For example: Which assignment should I start first? Which grading components are still missing?') + '</p></div>';
-    return assistantTranscript.map(item => '<article class="assistant-message ' + item.role + '"><strong>' + (item.role === 'assistant' ? 'CampusDesk AI' : assistantCopy('你', 'You')) + '</strong><pre>' + esc(item.display || item.content) + '</pre></article>').join('') + (assistantBusy ? '<div class="assistant-typing" role="status">' + assistantCopy('正在等待模型回答…', 'Waiting for the model…') + '</div>' : '');
+    return assistantTranscript.map(item => '<article class="assistant-message ' + item.role + '"><strong>' + (item.role === 'assistant' ? 'CampusDesk AI' : assistantCopy('你', 'You')) + '</strong><pre>' + esc(item.display || item.content) + '</pre></article>').join('') + (assistantBusy ? '<article class="assistant-message assistant"><strong>CampusDesk AI</strong><pre>' + esc(assistantPartialAnswer) + '</pre><span class="assistant-typing" role="status">' + assistantCopy(assistantPartialAnswer ? '正在生成…' : '正在等待模型回答…', assistantPartialAnswer ? 'Generating…' : 'Waiting for the model…') + '</span></article>' : '');
   }
   function renderAssistantReferences() {
     if (!assistantReferences.length) return '';
@@ -1861,6 +2088,10 @@
     const labels = assistantContextOptions.filter(item => selected.has(item[0])).map(item => assistantCopy(item[1], item[2]));
     return labels.length ? assistantCopy('附带资料：', 'Included data: ') + labels.join(isEnglish() ? ', ' : '、') : assistantCopy('不附带学习资料，仅发送问题和当前对话', 'No study data included; question and conversation only');
   }
+  function assistantContextKey() {
+    const provider = assistantProvider();
+    return JSON.stringify([provider, provider === 'hybrid' && assistantNetworkAvailable(), [...assistantSelectedContext()].sort()]);
+  }
   function updateAssistantWorkspace() {
     if (page !== 'assistant') return;
     const view = assistantPresentation();
@@ -1887,8 +2118,9 @@
   function updateAssistantSendControls(view = assistantPresentation()) {
     const sendButton = document.getElementById('assistant-send');
     if (sendButton) {
-      sendButton.disabled = view.sendDisabled || !assistantQuestionDraft.trim();
-      sendButton.textContent = assistantBusy ? assistantCopy('回复中…', 'Replying…') : assistantCopy('发送', 'Send');
+      sendButton.disabled = !assistantBusy && (view.sendDisabled || !assistantQuestionDraft.trim());
+      sendButton.dataset.action = assistantBusy ? 'assistant-stop' : 'assistant-send';
+      sendButton.textContent = assistantBusy ? assistantCopy('停止生成', 'Stop generating') : assistantCopy('发送', 'Send');
     }
     const reviewButton = document.getElementById('assistant-review-button');
     if (reviewButton) reviewButton.disabled = view.sendDisabled || !assistantQuestionDraft.trim();
@@ -1911,11 +2143,20 @@
     if ((provider === 'deepseek' || (provider === 'hybrid' && assistantNetworkAvailable())) && !assistantKeyReady()) { navigate('settings'); toast(assistantCopy('联网使用 DeepSeek 前，请先在设置中安全保存 API 密钥。', 'Save a DeepSeek API key securely in Settings before using DeepSeek online.')); return null; }
     const built = assistantBuildContext(assistantSelectedContext());
     const userContent = assistantCopy('问题：', 'Question: ') + question + '\n\n' + assistantCopy('本机学习资料（JSON）：\n', 'Selected study data (JSON):\n') + JSON.stringify(built.context, null, 2);
-    const history = assistantTranscript.slice(-8).map(item => ({ role: item.role, content: item.content }));
-    const messages = [{ role: 'system', content: assistantSystemMessage() }].concat(history, [{ role: 'user', content: userContent }]);
-    const serialized = JSON.stringify(messages);
-    if (serialized.length > 40_000) { toast(assistantCopy('本次资料过多，请在设置中减少资料类别后重试。', 'This request is too large. Reduce selected data categories in Settings and try again.')); return null; }
-    return { provider, model, fallbackModel: provider === 'hybrid' ? assistantOllamaModel() : '', networkAvailable: assistantNetworkAvailable(), messages, question, userContent, refs: built.refs };
+    // A scope/recipient boundary starts a fresh model context, including old
+    // answers that may contain data from a previously allowed category.
+    const contextKey = assistantContextKey();
+    const history = [];
+    for (let i = assistantTranscript.length - 2; i >= 0 && history.length < 8; i -= 2) {
+      const user = assistantTranscript[i], answer = assistantTranscript[i + 1];
+      if (user.role !== 'user' || answer.role !== 'assistant' || user.contextKey !== contextKey || answer.contextKey !== contextKey || answer.failed) break;
+      history.unshift({ role: 'user', content: user.content }, { role: 'assistant', content: answer.content });
+    }
+    const first = { role: 'system', content: assistantSystemMessage() }, last = { role: 'user', content: userContent };
+    if (JSON.stringify([first, last]).length > 40_000) { toast(assistantCopy('本次所选资料本身过多，请在设置中减少资料类别后重试。', 'The selected data alone is too large. Reduce selected data categories in Settings.')); return null; }
+    while (history.length && JSON.stringify([first, ...history, last]).length > 40_000) history.splice(0, 2);
+    const messages = [first, ...history, last];
+    return { provider, model, fallbackModel: provider === 'hybrid' ? assistantOllamaModel() : '', networkAvailable: assistantNetworkAvailable(), messages, question, userContent, contextKey, refs: built.refs };
   }
   function openAssistantReview() {
     if (assistantBusy || assistantQuestionComposing) return;
@@ -1943,8 +2184,22 @@
     if (request) dispatchAssistantRequest(request);
   }
   function confirmAssistantSend() { dispatchAssistantRequest(assistantPendingRequest); }
+  function stopAssistantGeneration(clear = false) {
+    if (assistantActiveRequestID) send('assistantCancelRequest', { requestId: assistantActiveRequestID });
+    if (assistantBusy && !clear) assistantTranscript.push({ role: 'assistant', content: assistantPartialAnswer, display: (assistantPartialAnswer ? assistantPartialAnswer + '\n\n' : '') + assistantErrorText('cancelled'), contextKey: assistantActiveContextKey, failed: true });
+    assistantBusy = false; assistantActiveRequestID = ''; assistantSentQuestion = ''; assistantPartialAnswer = '';
+  }
   function dispatchAssistantRequest(request) {
     if (!request || assistantBusy) return;
+    if (request.contextKey !== assistantContextKey()) {
+      assistantPendingRequest = null; closeDialog('assistant-confirm-dialog');
+      assistantQuestionDraft = request.question;
+      const editor = document.getElementById('assistant-question');
+      if (editor) editor.value = request.question;
+      render();
+      toast(assistantCopy('网络、接收方或资料范围已变化，尚未发送。请重新点击发送，使用当前选择。', 'The network, recipient, or data scope changed. Nothing was sent. Click Send again to use your current selection.'));
+      return;
+    }
     if (request.provider === 'deepseek' && !assistantNetworkAvailable()) {
       assistantPendingRequest = null; closeDialog('assistant-confirm-dialog');
       toast(assistantCopy('网络已断开；仅联网 DeepSeek 模式已停用，没有发送内容，也不会回退到 Ollama。', 'The connection was lost. DeepSeek-only mode is disabled; nothing was sent and there is no Ollama fallback.'));
@@ -1956,10 +2211,11 @@
     const editor = document.getElementById('assistant-question');
     if (editor) { editor.value = ''; resizeAssistantQuestionField(editor); }
     assistantReferences = request.refs;
-    assistantTranscript.push({ role: 'user', content: request.userContent, display: request.question });
+    assistantTranscript.push({ role: 'user', content: request.question, display: request.question, contextKey: request.contextKey });
     if (assistantTranscript.length > 12) assistantTranscript = assistantTranscript.slice(-12);
     const requestID = window.crypto && window.crypto.randomUUID ? window.crypto.randomUUID() : 'ai-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10);
-    assistantBusy = true; assistantActiveRequestID = requestID; assistantSentQuestion = request.question; render();
+    assistantBusy = true; assistantActiveRequestID = requestID; assistantSentQuestion = request.question;
+    assistantActiveContextKey = request.contextKey; assistantPartialAnswer = ''; render(); updateAssistantSendControls();
     if (!send('assistantRequest', { requestId: requestID, provider: request.provider, model: request.model, fallbackModel: request.fallbackModel, networkAvailable: assistantNetworkAvailable(), messages: request.messages })) {
       assistantBusy = false; assistantActiveRequestID = ''; assistantTranscript.pop();
       assistantQuestionDraft = request.question;
@@ -2016,7 +2272,7 @@
     const index = setupWizardIndex(), current = setupWizardSteps[index];
     const labels = ['Welcome', 'About you', 'Connect ManageBac', 'Connect Microsoft Teams', 'Import Seiue schedule', 'Learning assistant', 'Choose a theme', 'Reminder preferences', 'Done'];
     const visibleSteps = setupWizardMode === 'version-intro' ? [setupWizardSteps[0]] : setupWizardSteps;
-    const rail = visibleSteps.map((item, i) => '<div class="setup-rail-item active"><span>' + icon(item.icon) + '</span><strong>' + (setupWizardMode === 'version-intro' ? setupCopy('新版提示', 'Version welcome') : setupCopy(item.title, labels[i])) + '</strong></div>').join('');
+    const rail = visibleSteps.map((item, i) => '<div class="setup-rail-item' + (i === index ? ' active' : i < index ? ' complete' : '') + '"' + (i === index ? ' aria-current="step"' : '') + '><span>' + icon(i < index ? 'check' : item.icon) + '</span><strong>' + (setupWizardMode === 'version-intro' ? setupCopy('新版提示', 'Version welcome') : setupCopy(item.title, labels[i])) + '</strong></div>').join('');
     const progress = setupWizardMode === 'version-intro' ? 100 : Math.round((index + 1) / setupWizardSteps.length * 100);
     const skipLabel = setupWizardMode === 'version-intro' ? setupCopy('稍后', 'Later') : index === setupWizardSteps.length - 1 ? setupCopy('稍后再说', 'Later') : setupCopy('跳过这一步', 'Skip this step');
     const nextLabel = setupWizardMode === 'version-intro' ? setupCopy('进入看板', 'Open dashboard') : index === setupWizardSteps.length - 1 ? setupCopy('完成', 'Finish') : setupCopy('继续', 'Continue');
@@ -2029,7 +2285,7 @@
     setupWizardDismissedThisSession = false;
     setupWizardMode = request.mode === 'version-intro' ? 'version-intro' : 'setup';
     setupWizardNameDraft = (state.settings.ecIdentityNames || []).join(', ');
-    if (setupWizardMode === 'setup' && request.mode !== 'resume') { state.settings.setupWizardStep = 0; persist(); }
+    if (setupWizardMode === 'setup' && request.mode !== 'resume') { state.settings.setupWizardStep = 0; state.settings.setupWizardCompleted = false; persist(); }
     renderSetupWizard();
     showDialog('setup-wizard-dialog');
   }
@@ -2064,7 +2320,7 @@
     const input = document.getElementById('setup-identity-names');
     if (index === 1 && input) {
       setupWizardNameDraft = input.value.slice(0, 500);
-      state.settings.ecIdentityNames = [...new Set(setupWizardNameDraft.split(/[，,;\n]/).map(value => value.trim()).filter(Boolean))].slice(0, 10);
+      state.settings.ecIdentityNames = [...new Set(setupWizardNameDraft.split(/[，,;\n]/).map(value => value.trim().slice(0, 100)).filter(Boolean))].slice(0, 10);
     }
     if (index === 5) {
       const provider = document.getElementById('setup-ai-provider')?.value;
@@ -2092,9 +2348,9 @@
     const nav = document.getElementById('nav');
     const signature = (isEnglish() ? 'en-US' : 'zh-CN') + ':' + openCount + ':' + themeEdition;
     if (nav.dataset.renderSignature !== signature) {
-      const pages = ['overview', 'learning', 'schedule', 'grades', 'tasks', 'feedback', 'teams', 'ec'];
+      const pages = ['overview', 'learning', 'schedule', 'calendar', 'grades', 'tasks', 'feedback', 'teams', 'ec'];
       if (themeEdition) pages.push('assistant');
-      nav.innerHTML = pages.map(key => '<button type="button" class="nav-item ' + (page === key ? 'active' : '') + '" data-page="' + key + '" ' + (page === key ? 'aria-current="page"' : '') + '><span class="icon">' + icon(key === 'learning' || key === 'assistant' ? 'search' : key) + '</span>' + pageName(key) + (key === 'tasks' && openCount ? '<span class="nav-count">' + openCount + '</span>' : '') + '</button>').join('');
+      nav.innerHTML = pages.map(key => '<button type="button" class="nav-item ' + (page === key ? 'active' : '') + '" data-page="' + key + '" ' + (page === key ? 'aria-current="page"' : '') + '><span class="icon">' + icon(key === 'learning' || key === 'assistant' ? 'search' : key === 'calendar' ? 'schedule' : key) + '</span>' + pageName(key) + (key === 'tasks' && openCount ? '<span class="nav-count">' + openCount + '</span>' : '') + '</button>').join('');
       nav.dataset.renderSignature = signature;
     }
     for (const item of nav.children || []) {
@@ -2143,7 +2399,7 @@
     if (status && status.textContent !== label) status.textContent = label;
   }
   function updateMenu(clock) {
-    clock = clock || Core.getClassClock(state);
+    clock = clock || classClockForState();
     const count = openTaskCountForState();
     const title = clock.phase === 'break' || clock.phase === 'lunch' ? (clock.phase === 'break' ? '课间 ' : '午间 ') + clock.remainingLabel : clock.current ? clock.current.title + ' · ' + clock.remainingLabel : clock.next ? (clock.next.start || '') + ' ' + clock.next.title : count ? count + ' 项待办' : 'CampusDesk';
     if (title !== lastMenuTitle) { send('setMenuTitle', { title: title }); lastMenuTitle = title; }
@@ -2202,6 +2458,7 @@
     window.scrollTo(saved.x,Math.max(0,y));
   }
   function render() {
+    if (dashboardHidden()) { backgroundRenderPending = true; return; }
     // Replacing the page DOM while WebKit's textarea is focused interrupts
     // marked-text composition (notably Chinese Pinyin). Keep the live editor
     // mounted until blur, and render the newest state immediately afterwards.
@@ -2215,6 +2472,7 @@
       return;
     }
     assistantRenderDeferred = false;
+    backgroundRenderPending = false;
     const pageChanged = renderedPage !== null && renderedPage !== page;
     const saved = renderedPage === page ? readingState(document.getElementById('content')) : null;
     const dateForm = renderedPage === page && page === 'grades' ? document.getElementById('gpa-term-dates-form') : null;
@@ -2237,20 +2495,23 @@
       }
     }
     if (shell) { shell.dataset.dashboardTheme = state.settings.dashboardTheme || 'classic'; shell.dataset.colorTheme = state.settings.colorTheme || 'sage'; shell.dataset.focusMode = String(Boolean(state.settings.focusMode)); }
-    if (document.documentElement) document.documentElement.dataset.colorTheme = state.settings.colorTheme || 'sage';
+    if (document.documentElement) { document.documentElement.dataset.colorTheme = state.settings.colorTheme || 'sage'; document.documentElement.dataset.graphicsMode = state.settings.graphicsMode || 'auto'; }
     renderNav();
     updateStaticChrome();
     setText('breadcrumb-page', pageName(page));
     setText('sidebar-clock', Core.clock());
     const syncIcon = document.getElementById('sync-icon');
     if (syncIcon && !syncIcon.firstElementChild) syncIcon.innerHTML = icon('refresh');
-    const pageRenderers = { overview: renderOverview, learning: renderLearning, schedule: renderSchedule, grades: renderGrades, tasks: renderTasks, feedback: renderFeedback, teams: renderTeams, ec: renderEC, settings: renderSettings };
+    const pageRenderers = { overview: renderOverview, learning: renderLearning, schedule: renderSchedule, calendar: renderAgenda, grades: renderGrades, tasks: renderTasks, feedback: renderFeedback, teams: renderTeams, ec: renderEC, settings: renderSettings };
     if (themeEdition) pageRenderers.assistant = renderAssistant;
     const content = document.getElementById('content');
-    content.innerHTML = localizedHTML(state.settings.focusMode ? renderFocusMode : pageRenderers[page]);
+    const contentHTML = localizedHTML(state.settings.focusMode ? renderFocusMode : pageRenderers[page]) + (page === 'settings' && !state.settings.focusMode ? renderGraphicsSettings() : '');
+    if (window.CampusDOM && !pageChanged) window.CampusDOM.patch(content, contentHTML);
+    else content.innerHTML = contentHTML;
     if (retainedAssistantKey) document.getElementById('assistant-deepseek-key')?.replaceWith(retainedAssistantKey);
     ensureAssistantModels();
     resizeAssistantQuestionField(document.getElementById('assistant-question'));
+    if (page === 'assistant') updateAssistantSendControls();
     if (gradePlanner) gradePlanner.restore(retainedPlanForm);
     // Sync may refresh the page while either date is only partially typed.
     // Keep both editing controls, not just the one that currently has focus.
@@ -2287,10 +2548,17 @@
     d.setUTCDate(d.getUTCDate() + direction);
     selectedDate = d.toISOString().slice(0, 10); render();
   }
+  let taskTimePicker = null;
   function openTaskDialog() {
     const dialog = document.getElementById('task-dialog');
+    document.getElementById('task-title').value = '';
+    document.getElementById('task-due-date').value = '';
+    document.getElementById('task-due-time').value = '';
     if (typeof dialog.showModal === 'function') dialog.showModal();
     else { dialog.setAttribute('open', ''); dialog.classList.add('dialog-fallback'); }
+    if (!taskTimePicker && window.CampusTimeWheel) taskTimePicker = window.CampusTimeWheel.create(document.getElementById('task-time-picker'), document.getElementById('task-due-time'), () => updateTaskDraft(false));
+    if (taskTimePicker) taskTimePicker.reset(isEnglish());
+    updateTaskDraft(false);
   }
   function closeTaskDialog() {
     const dialog = document.getElementById('task-dialog');
@@ -2312,12 +2580,42 @@
     const time = new Date(value).getTime();
     return value && Number.isFinite(time) ? new Date(time + 8 * 60 * 60 * 1000).toISOString().slice(0, 16) : '';
   }
+  function makeBeijingDeadline(day, time) {
+    const parsed = Core.parseManualDeadline(day, time);
+    const errors = isEnglish() ? {
+      'missing-date': 'Enter a date as well, or clear both fields for no deadline.',
+      'invalid-date': 'Enter a real date in YYYY-MM-DD format, for example 2026-09-29.',
+      'invalid-time': 'Use 24-hour time from 00:00 to 23:59, for example 18:30.'
+    } : {
+      'missing-date': '已填写时间，请同时选择截止日期（可点“今天”）；不设截止请清空两项。',
+      'invalid-date': '请输入真实日期，格式为年-月-日，例如 2026-09-29。',
+      'invalid-time': '请输入 24 小时制时间，范围 00:00–23:59，例如 18:30。'
+    };
+    return Object.assign({}, parsed, { date: parsed.dueAt ? new Date(parsed.dueAt) : null, error: errors[parsed.error] || '' });
+  }
+  function updateTaskDraft(showErrors) {
+    const title = document.getElementById('task-title').value.trim();
+    const due = makeBeijingDeadline(document.getElementById('task-due-date').value, document.getElementById('task-due-time').value);
+    const preview = document.getElementById('task-deadline-preview');
+    preview.textContent = due.error ? (isEnglish() ? 'Finish the date and time to preview the deadline.' : '填好日期和时间后，这里显示实际截止时间。')
+      : due.date ? (isEnglish() ? 'Deadline: ' : '实际截止：') + due.day + ' ' + due.time + (isEnglish() ? ' · Beijing time' : ' · 北京时间')
+      : (isEnglish() ? 'No deadline' : '不设置截止时间');
+    const error = showErrors ? (!title ? (isEnglish() ? 'Enter a task title.' : '请填写要做的事情。') : due.error) : '';
+    const field = !title ? 'title' : due.field === 'date' ? 'due-date' : 'due-time';
+    const message = document.getElementById('task-form-error');
+    message.textContent = error; message.hidden = !error;
+    for (const id of ['title', 'due-date', 'due-time']) document.getElementById('task-' + id).setAttribute('aria-invalid', String(Boolean(error) && id === field));
+    if (error) document.getElementById(field === 'due-time' ? 'task-time-custom' : 'task-' + field).focus();
+    return { title, due, error };
+  }
   function openTaskDetail(id) {
     const task = taskRowsForState().find(item => item.id === id);
     if (!task) { toast('这条任务暂时无法找到，请刷新后重试。'); return; }
     detailTaskId = id;
-    const teams = task.source === 'teams', due = taskDue(task), source = teams ? 'teams' : 'managebac';
-    document.getElementById('detail-content').innerHTML = '<div class="dialog-heading"><span class="task-tag ' + (teams ? 'teams-tag' : '') + '">' + esc(sourceName(source)) + '</span><button class="icon-button" type="button" data-action="close-detail" aria-label="关闭任务详情">×</button></div><h2 id="detail-title">' + esc(task.title) + '</h2><div class="detail-meta"><span>' + esc(task.course || '') + '</span><span>' + esc(due.label) + (task.dueOverride ? ' · 本机设置' : '') + '</span><span>' + (task.completed ? '本机已完成' : '未完成') + '</span></div><h3 class="detail-subtitle">作业要求</h3><div class="requirements-text">' + esc(task.requirements || task.description || '尚未读取到这份作业的详细要求，请打开学校原页面查看。') + '</div>' + (task.attachments && task.attachments.length ? '<h3 class="detail-subtitle">原文附件</h3>' + attachmentsHTML(task.attachments) + '<p class="gpa-note">附件在浏览器打开，可能需要 Microsoft 登录。附件文字读取状态请逐项核对；未成功解析的请查看原件。</p>' : '') + (teams ? '<div class="due-editor"><label for="detail-due">本机提醒截止时间（北京时间）</label><input id="detail-due" type="datetime-local" value="' + esc(localDateInput(task.dueAt)) + '"><p class="field-hint">请核对原文后设置。这里只改变本机提醒，不会修改 Teams 作业。' + (task.originalDueAt ? '原文已读取截止时间：' + esc(lastUpdated(task.originalDueAt)) + '。' : '原文未读取到可确认的完整截止时间。') + '</p><div class="due-actions">' + button('保存截止时间', 'save-task-due', 'data-id="' + esc(task.id) + '"') + (task.dueOverride ? button('恢复原文时间', 'reset-task-due', 'data-id="' + esc(task.id) + '"') : '') + '</div></div>' : '') + '<div class="dialog-actions">' + button(task.completed ? '标为未完成' : '标为已完成', 'toggle-detail-task', 'data-id="' + esc(task.id) + '"') + (task.url ? button('打开原文 ↗', 'open-source', 'data-source="' + source + '" data-url="' + esc(task.url) + '"', 'button-primary') : '') + '</div>';
+    const teams = task.source === 'teams', manual = task.source === 'manual', due = taskDue(task), source = teams ? 'teams' : manual ? 'manual' : 'managebac';
+    const localDeadline = localDateInput(task.dueAt).split('T');
+    const deadlineEditor = teams ? '<div class="due-editor"><label for="detail-due">本机提醒截止时间（北京时间）</label><input id="detail-due" type="datetime-local" value="' + esc(localDateInput(task.dueAt)) + '"><p class="field-hint">请核对原文后设置。这里只改变本机提醒，不会修改 Teams 作业。' + (task.originalDueAt ? '原文已读取截止时间：' + esc(lastUpdated(task.originalDueAt)) + '。' : '原文未读取到可确认的完整截止时间。') + '</p><div class="due-actions">' + button('保存截止时间', 'save-task-due', 'data-id="' + esc(task.id) + '"') + (task.dueOverride ? button('恢复原文时间', 'reset-task-due', 'data-id="' + esc(task.id) + '"') : '') + '</div></div>' : manual ? '<div class="due-editor"><strong>个人截止时间（北京时间，可选）</strong><div class="task-deadline-fields"><label for="manual-due-date">截止日期<input id="manual-due-date" type="text" maxlength="10" placeholder="YYYY-MM-DD" autocomplete="off" spellcheck="false" value="' + esc(localDeadline[0] || '') + '"></label><label for="manual-due-time">时间（24 小时制，可选）<input id="manual-due-time" type="text" inputmode="numeric" maxlength="5" placeholder="选填，默认 23:59" value="' + esc(localDeadline[1] ? localDeadline[1].slice(0, 5) : '') + '" autocomplete="off" spellcheck="false"></label></div><p class="field-hint">补录或修改后，待办卡片会显示截止时间、倒计时和紧急度进度条；选日期不填时间则默认为当天 23:59，清空日期和时间可移除截止时间。</p><div class="due-actions">' + button('保存个人截止时间', 'save-manual-task-due', 'data-id="' + esc(task.id) + '"') + '</div></div>' : '';
+    document.getElementById('detail-content').innerHTML = '<div class="dialog-heading"><span class="task-tag ' + (teams ? 'teams-tag' : '') + '">' + esc(sourceName(source)) + '</span><button class="icon-button" type="button" data-action="close-detail" aria-label="关闭任务详情">×</button></div><h2 id="detail-title">' + esc(task.title) + '</h2><div class="detail-meta"><span>' + esc(task.course || '') + '</span><span>' + esc(due.label) + (task.dueOverride ? ' · 本机设置' : '') + '</span><span>' + (task.completed ? '本机已完成' : '未完成') + '</span></div>' + (manual ? '' : '<h3 class="detail-subtitle">作业要求</h3><div class="requirements-text">' + esc(task.requirements || task.description || '尚未读取到这份作业的详细要求，请打开学校原页面查看。') + '</div>') + (task.attachments && task.attachments.length ? '<h3 class="detail-subtitle">原文附件</h3>' + attachmentsHTML(task.attachments) + '<p class="gpa-note">附件在浏览器打开，可能需要 Microsoft 登录。附件文字读取状态请逐项核对；未成功解析的请查看原件。</p>' : '') + deadlineEditor + '<div class="dialog-actions">' + button(task.completed ? '标为未完成' : '标为已完成', 'toggle-detail-task', 'data-id="' + esc(task.id) + '"') + (task.url ? button('打开原文 ↗', 'open-source', 'data-source="' + source + '" data-url="' + esc(task.url) + '"', 'button-primary') : '') + '</div>';
     showDialog('detail-dialog');
   }
   function openTeamsPageDialog(id, candidate) {
@@ -2343,6 +2641,7 @@
     return true;
   }
   function syncReminders() {
+    if (pendingImportRequestID) return;
     if (!native) return;
     const now = Date.now(), lead = Number(state.settings.reminderMinutes == null ? 30 : state.settings.reminderMinutes) * 60000;
     const allowedSubjects = new Set(state.settings.reminderSubjects || []);
@@ -2356,17 +2655,78 @@
     if (signature !== lastReminderSignature) { send('syncReminders', { items: items }); lastReminderSignature = signature; }
   }
   function exportBrowser() {
-    const blob = new Blob([JSON.stringify(state, null, 2)], { type: 'application/json' });
+    const blob = new Blob([JSON.stringify(Core.exportBackup(state), null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob), anchor = document.createElement('a');
     anchor.href = url; anchor.download = 'CampusDesk-backup-' + Core.today() + '.json'; anchor.click();
     setTimeout(() => URL.revokeObjectURL(url), 3000);
   }
-  function applyImport(input) {
+  function applyImport(input, verified = false) {
+    if (pendingImportRequestID) return;
     try {
-      const candidate = Core.validateState(input);
+      const rawLegacy = !verified && input && !Object.prototype.hasOwnProperty.call(input, 'app') && !Object.prototype.hasOwnProperty.call(input, 'data');
+      if (rawLegacy && !window.confirm('这是没有应用标识的旧格式备份。请确认它来自 CampusDesk，再继续恢复。')) return;
+      const candidate = verified ? Core.validateState(input) : Core.importBackup(input, { allowLegacy: rawLegacy }).state;
       if (!window.confirm('导入将替换当前课程缓存、个人待办与 GPA 记录。确定恢复这份备份吗？')) return;
-      state = candidate; persist({ imported: true }); render(); toast('已恢复备份。Teams 重新同步时会按当前账号重建缓存，其他学校账号需要在这台 Mac 上重新登录。');
-    } catch (err) { toast('无法导入：' + (err.message || '备份格式无效。')); }
+      if (native) {
+        pendingImportRequestID = 'import-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10);
+        pendingImportEvents = [];
+        setImportInteractionBlocked(true);
+        send('saveState', { state: candidate, imported: true, importRequestId: pendingImportRequestID });
+        toast('正在验证并保存备份，完成后将更新看板。');
+        return;
+      }
+      // A separate immutable recovery entry survives subsequent routine saves.
+      // If it cannot be written (for example storage is full), do not import.
+      if (!native) {
+        localStorage.setItem('campusdesk.preimport.' + new Date().toISOString() + '-' + Math.random().toString(36).slice(2, 10), JSON.stringify(Core.exportBackup(state)));
+        localStorage.setItem(storageKey, JSON.stringify(candidate));
+      }
+      stopAssistantGeneration(true); assistantTranscript = []; assistantReferences = [];
+      state = candidate;
+      if (native) persist({ imported: true }); else { invalidateDerivedCaches(); syncReminders(); }
+      render(); toast('已恢复备份。Teams 重新同步时会按当前账号重建缓存，其他学校账号需要在这台 Mac 上重新登录。');
+    } catch (err) {
+      pendingImportRequestID = ''; pendingImportEvents = [];
+      setImportInteractionBlocked(false);
+      toast('无法导入：' + (err.message || '备份格式无效。'));
+    }
+  }
+  function setImportInteractionBlocked(blocked) {
+    // Keep drafts and focusable controls mounted, but do not allow editing the
+    // old state during the replacement transaction. Both outcomes unlock them.
+    for (const id of ['app-shell', 'task-dialog', 'detail-dialog', 'agenda-event-dialog', 'teams-page-dialog', 'calendar-preview-dialog', 'setup-wizard-dialog', 'quick-connect-dialog', 'assistant-confirm-dialog']) {
+      const node = document.getElementById(id);
+      if (node) node.inert = blocked;
+    }
+  }
+  function applyNativeImportResult(event) {
+    if (!pendingImportRequestID || event.requestId !== pendingImportRequestID) return;
+    const generation = Number.isSafeInteger(event.stateGeneration) && event.stateGeneration >= 0 ? event.stateGeneration : null;
+    if (nativeStateGeneration !== null && (generation === null || generation < nativeStateGeneration)) return;
+    // Updated native builds return the authoritative state on failure too. Old
+    // desktop bridges without generations retain their previous failure path.
+    let next = state;
+    if (event.success === true || (event.state && Object.keys(event.state).length)) next = Core.validateState(event.state);
+    else if (event.state && typeof event.state === 'object') next = Core.emptyState();
+    const queued = pendingImportEvents;
+    state = next;
+    if (generation !== null) nativeStateGeneration = generation;
+    pendingImportRequestID = ''; pendingImportEvents = [];
+    setImportInteractionBlocked(false);
+    invalidateDerivedCaches();
+    graphBatchRenderPending = false;
+    statuses = {}; graphStatus.busy = false; teamsAuto.running = false;
+    // Native keeps saves and restarted producers gated until this exact result
+    // is applied, so its generation cannot race a save of the preceding state.
+    send('importResultApplied', { requestId: event.requestId });
+    if (event.success === true) {
+      stopAssistantGeneration(true); assistantTranscript = []; assistantReferences = [];
+    }
+    render(); lastReminderSignature = ''; syncReminders();
+    for (const pending of queued) {
+      if (generation !== null ? pending.stateGeneration === generation : event.success !== true) window.CampusDesk.receive(pending);
+    }
+    toast(event.success === true ? '已恢复备份。Teams 重新同步时会按当前账号重建缓存。' : '无法导入：' + (event.message || '备份未能保存，原有数据仍然保留。'));
   }
   function setGpaKlineInterval(value, shouldRender) {
     const index = Math.max(0, Math.min(GPA_KLINE_INTERVALS.length - 1, Number(value)));
@@ -2381,7 +2741,40 @@
     if (!target) return;
     if (target.dataset.page) { navigate(target.dataset.page); return; }
     const action = target.dataset.action;
-    if (action === 'setup-wizard-close') closeSetupWizard();
+    if (action === 'agenda-day') {
+      if (!validCalendarDay(target.dataset.date)) return;
+      calendarDay = target.dataset.date; calendarMonth = calendarDay.slice(0, 7); render();
+    }
+    else if (action === 'agenda-today') { calendarDay = window.CampusAgenda.today(); calendarMonth = calendarDay.slice(0, 7); render(); }
+    else if (action === 'agenda-month') {
+      const step = Number(target.dataset.step); if (step !== -1 && step !== 1) return;
+      const date = new Date(calendarMonth + '-01T00:00:00Z'); date.setUTCMonth(date.getUTCMonth() + step);
+      const day = date.toISOString().slice(0, 10); if (!validCalendarDay(day)) return;
+      calendarDay = day; calendarMonth = day.slice(0, 7); render();
+    }
+    else if (action === 'agenda-filter') {
+      const kind = target.dataset.kind; if (!['course', 'task', 'school', 'personal'].includes(kind)) return;
+      if (calendarKinds.has(kind)) calendarKinds.delete(kind); else calendarKinds.add(kind); render();
+    }
+    else if (action === 'agenda-add' || action === 'agenda-edit') openAgendaEvent(action === 'agenda-edit' ? target.dataset.id : '');
+    else if (action === 'agenda-close') closeDialog('agenda-event-dialog');
+    else if (action === 'agenda-detail') openAgendaDetail(target.dataset.id, target.dataset.date);
+    else if (action === 'agenda-refresh-widgets') {
+      if (!native || !widgetsStatus.supported || widgetsStatus.busy) return;
+      widgetsStatus.busy = true; widgetsStatus.error = null;
+      if (!send('refreshWidgets')) widgetsStatus.busy = false;
+      render();
+    }
+    else if (action === 'agenda-delete') {
+      if (!window.confirm(calendarCopy('删除这条个人日程？', 'Delete this personal event?'))) return;
+      const previous = state;
+      try {
+        state = window.CampusAgenda.removePersonalEvent(state, target.dataset.id);
+        if (persist() === false) { state = previous; invalidateDerivedCaches(); throw new Error(calendarCopy('未能保存，请重试。', 'Could not save. Please try again.')); }
+        closeDialog('agenda-event-dialog'); render(); toast(calendarCopy('日程已删除。', 'Event deleted.'));
+      } catch (error) { toast(error.message); }
+    }
+    else if (action === 'setup-wizard-close') closeSetupWizard();
     else if (action === 'setup-wizard-next' || action === 'setup-wizard-skip') advanceSetupWizard();
     else if (action === 'setup-wizard-back') {
       const input = document.getElementById('setup-identity-names');
@@ -2452,7 +2845,9 @@
       if (!themeEdition || !native || assistantKeyRecoveryBusy || !window.confirm(assistantCopy('删除保存在主题版中的 DeepSeek API 密钥？', 'Delete the DeepSeek API key saved for this Theme Edition?'))) return;
       send('assistantDeleteDeepSeekKey');
     }
+    else if (action === 'assistant-stop') { stopAssistantGeneration(); render(); }
     else if (action === 'assistant-clear') {
+      stopAssistantGeneration(true);
       assistantTranscript = []; assistantReferences = []; assistantQuestionDraft = ''; assistantBusy = false; assistantActiveRequestID = '';
       render(); toast(assistantCopy('当前窗口中的对话和来源引用已清除。', 'Conversation and source references in this window were cleared.'));
     }
@@ -2564,6 +2959,17 @@
       state.settings.teamsDueOverrides[task.id] = date.toISOString();
       persist(); render(); openTaskDetail(task.id); toast('本机截止时间已保存。');
     }
+    else if (action === 'save-manual-task-due') {
+      const task = state.manualTasks.find(item => item.id === target.dataset.id);
+      if (!task) { toast('这条个人待办已不存在，请刷新后重试。'); return; }
+      const dateInput = document.getElementById('manual-due-date'), timeInput = document.getElementById('manual-due-time');
+      const due = makeBeijingDeadline(dateInput && dateInput.value || '', timeInput && timeInput.value || '');
+      if (dateInput && dateInput.validity && dateInput.validity.badInput) { toast('截止日期无效，请重新选择。'); dateInput.focus(); return; }
+      if (due.error) { toast(due.error); (due.field === 'time' ? timeInput : dateInput).focus(); return; }
+      task.dueAt = due.date ? due.date.toISOString() : null;
+      task.dueLabel = '';
+      persist(); render(); openTaskDetail(task.id); toast(due.date ? '个人截止时间已保存，卡片倒计时和紧急度已更新。' : '已移除个人截止时间。');
+    }
     else if (action === 'reset-task-due') {
       delete state.settings.teamsDueOverrides[target.dataset.id]; persist(); render(); openTaskDetail(target.dataset.id); toast('已恢复读取到的原文截止时间。');
     }
@@ -2602,6 +3008,15 @@
     else if (action === 'ec-clear') { ecQuery='';ecDateFilter='all';ecVisibleLimit=MESSAGE_PAGE_SIZE;const search=document.getElementById('ec-search'),date=document.getElementById('ec-date-filter');if(search)search.value='';if(date)date.value='all';updateECResults();if(search)search.focus(); }
     else if (action === 'add-task') { document.getElementById('task-form').reset(); openTaskDialog(); document.getElementById('task-title').focus(); }
     else if (action === 'close-task') closeTaskDialog();
+    else if (action === 'task-date-shortcut') {
+      const clear = target.dataset.value === 'none';
+      document.getElementById('task-due-date').value = clear ? '' : Core.today(new Date(Date.now() + (target.dataset.value === 'tomorrow' ? 86400000 : 0)), 'Asia/Shanghai');
+      if (clear) {
+        document.getElementById('task-due-time').value = '';
+        if (taskTimePicker) taskTimePicker.reset(isEnglish());
+      }
+      updateTaskDraft(false);
+    }
     else if (action === 'toggle-task') {
       const item = taskRowsForState().find(t => t.id === target.dataset.id);
       if (item) { state.taskChecks[item.id] = !item.completed; persist(); render(); }
@@ -2678,7 +3093,12 @@
   });
   document.addEventListener('change', event => {
     const el = event.target;
+    if (el.id === 'agenda-all-day') { document.getElementById('agenda-time-fields').hidden = el.checked; return; }
     if (getGradePlanner().change(el)) return;
+    if (el.id === 'graphics-mode') {
+      if (['auto', 'low-power'].includes(el.value)) { state.settings.graphicsMode = el.value; persist(); render(); window.CampusGlassInvalidate?.(); }
+      return;
+    }
     if (el.id === 'assistant-provider' || el.id === 'setup-ai-provider') {
       const provider = el.value;
       if (!themeEdition || !['off', 'ollama', 'deepseek', 'hybrid'].includes(provider)) return;
@@ -2806,6 +3226,7 @@
     sendAssistantQuestion();
   });
   document.addEventListener('input', event => {
+    if (['task-title', 'task-due-date', 'task-due-time'].includes(event.target.id) && !event.isComposing) updateTaskDraft(false);
     if (getGradePlanner().input(event.target)) return;
     if (event.target.id === 'assistant-question') {
       assistantQuestionDraft = String(event.target.value || '').slice(0, 6000);
@@ -2990,16 +3411,47 @@
     event.preventDefault();
     if (saveTeamsPage({ id: document.getElementById('teams-page-id').value, label: document.getElementById('teams-page-label').value, url: document.getElementById('teams-page-url').value, kind: document.getElementById('teams-page-kind').value })) closeDialog('teams-page-dialog');
   });
+  document.getElementById('agenda-event-content').addEventListener('keydown', event => {
+    if (event.key === 'Enter' && (event.isComposing || event.keyCode === 229)) event.preventDefault();
+  });
+  document.getElementById('agenda-event-content').addEventListener('submit', event => {
+    if (event.target.id !== 'agenda-event-form') return;
+    event.preventDefault();
+    if (pendingImportRequestID || !document.getElementById('agenda-event-dialog').open) return;
+    const previous = state, form = event.target;
+    const value = name => document.getElementById('agenda-' + name).value.trim();
+    try {
+      const input = { id: form.dataset.eventId || undefined, title: value('title'), startDate: value('start-date'), endDate: value('end-date'), allDay: document.getElementById('agenda-all-day').checked, startTime: value('start-time'), endTime: value('end-time'), location: value('location'), notes: value('notes') };
+      if (!input.title) throw new Error(calendarCopy('请填写日程名称。', 'Enter an event title.'));
+      if (!validCalendarDay(input.startDate) || (input.endDate && !validCalendarDay(input.endDate))) throw new Error(calendarCopy('请填写真实日期，格式为 YYYY-MM-DD。', 'Enter a valid date in YYYY-MM-DD format.'));
+      if (input.id && !(state.personalEvents || []).some(item => item.id === input.id)) throw new Error(calendarCopy('这条日程已被移除，请重新打开行事历。', 'This event was removed. Reopen the calendar.'));
+      state = window.CampusAgenda.upsertPersonalEvent(state, input);
+      if (persist() === false) { state = previous; invalidateDerivedCaches(); throw new Error(calendarCopy('未能保存，填写内容已保留，请重试。', 'Could not save. Your entries are kept here; please try again.')); }
+      calendarDay = input.startDate; calendarMonth = calendarDay.slice(0, 7);
+      closeDialog('agenda-event-dialog'); render(); toast(calendarCopy('日程已保存。', 'Event saved.'));
+    } catch (error) {
+      state = previous;
+      const message = document.getElementById('agenda-form-error'); message.textContent = calendarFormError(error); message.hidden = false;
+    }
+  });
+  document.getElementById('task-form').addEventListener('keydown', event => {
+    if (event.key === 'Enter' && (event.isComposing || event.keyCode === 229)) event.preventDefault();
+  });
   document.getElementById('task-form').addEventListener('submit', event => {
     event.preventDefault();
-    const title = document.getElementById('task-title').value.trim();
-    if (!title) return;
-    const due = document.getElementById('task-due').value;
-    const dueDate = due ? new Date(due + ':00+08:00') : null;
-    if (dueDate && !Number.isFinite(dueDate.getTime())) { toast('截止日期无效，请重新选择。'); return; }
+    if (!document.getElementById('task-dialog').open) return;
+    if (taskTimePicker) taskTimePicker.commit();
+    const { title, due, error } = updateTaskDraft(true);
+    if (error) return;
     const id = 'manual-' + (window.crypto && window.crypto.randomUUID ? window.crypto.randomUUID() : Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10));
-    state.manualTasks.push({ id: id, title: title, course: '个人待办', dueAt: dueDate ? dueDate.toISOString() : null, dueLabel: '', status: 'open', createdAt: new Date().toISOString() });
-    persist(); closeTaskDialog(); render(); toast('个人待办已添加。');
+    state.manualTasks.push({ id: id, title: title, course: '个人待办', dueAt: due.date ? due.date.toISOString() : null, dueLabel: '', status: 'open', createdAt: new Date().toISOString() });
+    if (persist() === false) {
+      state.manualTasks.pop(); invalidateDerivedCaches();
+      const message = document.getElementById('task-form-error');
+      message.textContent = isEnglish() ? 'Could not save. Your entries are kept here; please try again.' : '未能保存，已保留填写内容，请重试。'; message.hidden = false;
+      return;
+    }
+    closeTaskDialog(); render(); toast('个人待办已添加。');
   });
   document.getElementById('import-file').addEventListener('change', async event => {
     const file = event.target.files[0];
@@ -3047,6 +3499,30 @@
     receive: function (event) {
       if (!event || typeof event !== 'object') return;
       try {
+        if (event.type === 'navigate' && event.page === 'calendar') {
+          if (!validCalendarDay(event.date)) return;
+          if (['task-dialog', 'agenda-event-dialog', 'setup-wizard-dialog'].some(id => document.getElementById(id)?.open)) { toast(calendarCopy('请先完成或关闭当前编辑，再打开行事历。', 'Finish or close the current editor before opening the calendar.')); return; }
+          calendarDay = event.date; calendarMonth = event.date.slice(0, 7);
+          if (state.settings.focusMode) { state.settings.focusMode = false; persist(); }
+          page = 'calendar'; location.hash = 'calendar'; render(); return;
+        }
+        if (event.type === 'widgetsStatus') {
+          widgetsStatus = { supported: event.supported === true, updatedAt: typeof event.updatedAt === 'string' && Number.isFinite(Date.parse(event.updatedAt)) ? event.updatedAt : null, busy: event.busy === true, error: typeof event.error === 'string' ? event.error.slice(0, 600) : null };
+          if (page === 'calendar') requestBackgroundRender();
+          return;
+        }
+        if (event.type === 'importResult') { applyNativeImportResult(event); return; }
+        if (stateScopedNativeEvents.has(event.type)) {
+          const generation = Number.isSafeInteger(event.stateGeneration) && event.stateGeneration >= 0 ? event.stateGeneration : null;
+          if (nativeStateGeneration !== null && (generation === null || generation < nativeStateGeneration)) return;
+          if (pendingImportRequestID) {
+            if (event.type !== 'import') pendingImportEvents.push(event);
+            return;
+          }
+          // Outside an import result, only an explicit authoritative reset
+          // (for example Teams sign-out/account replacement) may advance it.
+          if (nativeStateGeneration !== null && generation !== nativeStateGeneration && !(event.type === 'state' && event.replaceState === true)) return;
+        }
         if (event.type === 'assistantStatus') {
           const keyWasReady = assistantKeyReady();
           assistantStatus.deepSeekKeyConfigured = event.deepSeekKeyConfigured === true;
@@ -3075,9 +3551,26 @@
             catalog.loaded = true;
             const setting = event.provider === 'ollama' ? 'aiOllamaModel' : 'aiModel';
             const selected = event.provider === 'ollama' ? assistantOllamaModel() : assistantModel();
-            if (catalog.models.length && !catalog.models.includes(selected)) { state.settings[setting] = catalog.models[0]; persist(); }
+            // Model discovery may finish across an import. Always release its
+            // loading state, but never let an old response edit the new state.
+            if (!pendingImportRequestID && (nativeStateGeneration === null || event.stateGeneration === nativeStateGeneration) && catalog.models.length && !catalog.models.includes(selected)) { state.settings[setting] = catalog.models[0]; persist(); }
           }
           if (themeEdition && ['assistant', 'settings'].includes(page)) render();
+        }
+        else if (event.type === 'windowVisibility') {
+          document.documentElement.dataset.windowVisible = event.visible === false ? 'false' : 'true';
+          if (dashboardHidden()) {
+            for (const chart of Object.values(gpaKlineCharts)) chart?._campusHoverHide?.();
+          } else { flushBackgroundRender(); tickDashboardClock(); }
+          window.CampusGlassInvalidate?.();
+        }
+        else if (event.type === 'assistantChunk') {
+          if (!assistantBusy || event.requestId !== assistantActiveRequestID || typeof event.text !== 'string') return;
+          assistantPartialAnswer = (assistantPartialAnswer + event.text).slice(0, 100_000);
+          if (!assistantStreamRenderQueued) {
+            assistantStreamRenderQueued = true;
+            setTimeout(() => { assistantStreamRenderQueued = false; if (page === 'assistant') updateAssistantWorkspace(); }, 80);
+          }
         }
         else if (event.type === 'assistantResponse') {
           if (event.requestId !== assistantActiveRequestID) return;
@@ -3096,9 +3589,10 @@
             const providerName = event.providerUsed === 'ollama' ? 'Ollama' : 'DeepSeek';
             const reason = event.fallbackReason === 'offline' ? assistantCopy('（当前离线）', ' (offline)') : event.fallbackReason === 'deepseekUnavailable' ? assistantCopy('（DeepSeek 网络不可达，已改用本机）', ' (DeepSeek unreachable; used local model)') : '';
             const attribution = assistantCopy('\n\n— 本次由 ' + providerName + ' 回复' + reason, '\n\n— Answered by ' + providerName + reason);
-            assistantTranscript.push({ role: 'assistant', content: event.answer.slice(0, 100_000), display: event.answer.slice(0, 100_000) + attribution });
+            assistantTranscript.push({ role: 'assistant', content: event.answer.slice(0, 100_000), display: event.answer.slice(0, 100_000) + attribution, contextKey: assistantActiveContextKey });
           }
-          else assistantTranscript.push({ role: 'assistant', content: assistantErrorText(event.errorCode), display: assistantErrorText(event.errorCode) });
+          else assistantTranscript.push({ role: 'assistant', content: assistantPartialAnswer, display: (assistantPartialAnswer ? assistantPartialAnswer + '\n\n' : '') + assistantErrorText(event.errorCode), contextKey: assistantActiveContextKey, failed: true });
+          assistantPartialAnswer = '';
           if (assistantTranscript.length > 12) assistantTranscript = assistantTranscript.slice(-12);
           if (page === 'assistant') render();
           if (event.errorCode) toast(assistantErrorText(event.errorCode));
@@ -3112,7 +3606,11 @@
           quickConnectionError('学校网址未能保存，请检查网址及本机磁盘写入权限后重试。');
           toast(t('学校网址未能保存，请检查网址及本机磁盘写入权限后重试。'));
         }
-        else if (event.type === 'state') { state = event.state && Object.keys(event.state).length ? Core.validateState(event.state) : Core.emptyState(); invalidateDerivedCaches(); render(); syncReminders(); maybeOpenSetupWizard(); }
+        else if (event.type === 'state') {
+          state = event.state && Object.keys(event.state).length ? Core.validateState(event.state) : Core.emptyState();
+          if (Number.isSafeInteger(event.stateGeneration) && event.stateGeneration >= 0) nativeStateGeneration = event.stateGeneration;
+          invalidateDerivedCaches(); render(); syncReminders(); maybeOpenSetupWizard();
+        }
         else if (event.type === 'teamsAutoStatus') {
           teamsAuto.running = Boolean(event.running);
           ['phase','message','updatedAt','coverage'].forEach(key => { if (typeof event[key] === 'string') teamsAuto[key] = event[key].slice(0,1600); });
@@ -3146,7 +3644,7 @@
               if(!item.cached)item.capturedAt = new Date().toISOString(); changed = true;
             }
           }
-          if (changed) { state = Core.validateState(next); persist(); render(); }
+          if (changed) { state = Core.validateState(next); persist(); requestBackgroundRender(); }
         }
         else if (event.type === 'teamsAttachmentUnchanged') {
           if(!event.accountId || !event.snapshotId || !event.attachmentId || typeof event.versionKey!=='string' || !event.versionKey || typeof event.checkedAt!=='string' || !Number.isFinite(Date.parse(event.checkedAt)))return;
@@ -3211,7 +3709,7 @@
         }
         else if (event.type === 'snapshot') {
           state = Core.mergeSnapshot(state, event.snapshot);
-          persist(); render();
+          persist(); requestBackgroundRender();
         } else if (event.type === 'status') {
           statuses[event.source || 'app'] = { busy: Boolean(event.busy), message: String(event.message || '') };
           if (['seiue', 'managebac'].includes(event.source)) {
@@ -3226,7 +3724,7 @@
           updateStatus();
           if (!event.busy && event.message && (event.source === 'app' || event.source === 'teams')) toast(event.message);
           // Progress messages update the toolbar in place; settings forms stay put.
-        } else if (event.type === 'import') applyImport(event.state);
+        } else if (event.type === 'import') applyImport(event.state, event.validated === true || event.legacyApproved === true || event.legacy === false);
         else if (event.type === 'pinTeamsPage' && event.page) {
           const url = Core.safeURL(event.page.url, 'teams');
           if (!url) { toast('当前页面不是可关注的 Teams 页面，请先在浏览器打开目标频道。'); return; }
@@ -3274,16 +3772,26 @@
   send('ready');
   send('requestGraphStatus');
   send('requestTeamsAutoStatus');
-  setInterval(() => {
-    document.getElementById('sidebar-clock').textContent = Core.clock();
+  function tickDashboardClock() {
+    // Native menu/countdown still runs while hidden, without touching the DOM.
+    if (dashboardHidden()) { updateMenu(classClockForState()); return; }
+    flushBackgroundRender();
+    setText('sidebar-clock', Core.clock());
     const todoMinute = Math.floor(Date.now() / 60000);
     if (todoMinute !== lastTodoCountdownMinute) { lastTodoCountdownMinute = todoMinute; updateTaskCardCountdowns(); }
     const clock = updateClock(); updateMenu(clock);
     const today = Core.today(), boundary = clock.phase + ':' + (clock.current && clock.current.id || '') + ':' + (clock.next && clock.next.id || '');
-    const dialogOpen = ['task-dialog', 'detail-dialog', 'teams-page-dialog'].some(id => document.getElementById(id).open);
-    if (!dialogOpen && (page === 'overview' || page === 'schedule') && (today !== lastRenderedDay || boundary !== lastClockBoundary)) {
+    const dialogOpen = ['task-dialog', 'detail-dialog', 'agenda-event-dialog', 'teams-page-dialog'].some(id => document.getElementById(id).open);
+    if (!dialogOpen && (page === 'overview' || page === 'schedule' || (page === 'calendar' && today !== lastRenderedDay)) && (today !== lastRenderedDay || boundary !== lastClockBoundary)) {
       if (selectedDate === lastRenderedDay && today !== lastRenderedDay) selectedDate = today;
+      if (calendarDay === lastRenderedDay && today !== lastRenderedDay) { calendarDay = today; calendarMonth = today.slice(0, 7); }
       lastRenderedDay = today; lastClockBoundary = boundary; render();
     }
-  }, 1000);
+  }
+  document.addEventListener('visibilitychange', () => { if (!dashboardHidden()) tickDashboardClock(); });
+  // close also covers Escape and the native dialog close button.
+  for (const id of ['task-dialog', 'detail-dialog', 'agenda-event-dialog', 'teams-page-dialog', 'calendar-preview-dialog', 'setup-wizard-dialog', 'quick-connect-dialog', 'assistant-confirm-dialog']) {
+    document.getElementById(id)?.addEventListener('close', () => flushBackgroundRender());
+  }
+  setInterval(tickDashboardClock, 1000);
 })();

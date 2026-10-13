@@ -7,6 +7,61 @@ const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 const Core = require('../Resources/core.js');
 
+test('GPA MA legends match the real chart indicator across intervals and missing records', { skip: !process.env.PLAYWRIGHT_MODULE }, async () => {
+  const { chromium } = require(process.env.PLAYWRIGHT_MODULE);
+  const browser = await chromium.launch({ headless: true, executablePath: process.env.CHROME_EXECUTABLE || undefined });
+  try {
+    const page = await browser.newPage({ viewport: { width: 1400, height: 1000 }, deviceScaleFactor: 2 });
+    const errors = [];
+    page.on('pageerror', error => errors.push(error.message));
+    const state = Core.emptyState();
+    state.gradeHistory = [3.67, 3.33, 3.71, 3.71, 3.71, 3.71, 3.25, 3.25, 3.25, 3.75].map((value, i) => ({
+      capturedAt: new Date(Date.UTC(2026, 8, 1 + i * 2)).toISOString(), date: new Date(Date.UTC(2026, 8, 1 + i * 2)).toISOString().slice(0, 10), value,
+      linearValue: i < 5 ? null : 3.4 + (i - 5) / 10, count: 7
+    }));
+    await page.addInitScript(state => localStorage.setItem('campusdesk.browser.v1', JSON.stringify(state)), state);
+    await page.goto(pathToFileURL(path.resolve(__dirname, '../Resources/index.html')).href + '#grades');
+    await page.waitForFunction(() => document.querySelector('#gpa-kline-linear-chart canvas'));
+    const verify = async (id, periods) => {
+      await page.waitForFunction(id => klinecharts.init(id).getIndicators({ name: 'MA' })[0]?.result.length > 0, id);
+      const values = await page.evaluate(id => {
+        const chart = klinecharts.init(id), indicator = chart.getIndicators({ name: 'MA' })[0];
+        const card = document.getElementById(id).closest('.gpa-kline-card');
+        return { count: chart.getDataList().length, params: indicator.calcParams, lines: indicator.styles.lines,
+          last: indicator.result.at(-1), legend: [...card.querySelectorAll('[data-gpa-ma]')].map(el => ({
+            period: Number(el.dataset.gpaMa), ready: el.dataset.maReady === 'true',
+            value: el.querySelector('strong').textContent, color: el.querySelector('i').style.backgroundColor
+          })) };
+      }, id);
+      assert.equal(values.count, periods);
+      assert.deepEqual(values.params, [1, 5, 10, 30, 60]);
+      for (const [i, entry] of values.legend.entries()) {
+        const computed = values.last['ma' + (i + 2)];
+        assert.equal(entry.ready, periods >= entry.period);
+        if (entry.ready) assert.equal(entry.value, computed.toFixed(2));
+        else assert.equal(computed, undefined, 'insufficient data must not fabricate an average');
+      }
+      assert.equal(values.legend[0].color, 'rgb(240, 162, 59)');
+      assert.equal(values.lines[1].color, '#f0a23b');
+      return values;
+    };
+    assert.equal((await verify('gpa-kline-chart', 10)).legend[0].value, '3.44');
+    assert.equal((await verify('gpa-kline-linear-chart', 5)).legend[0].value, '3.60');
+    await page.locator('.gpa-kline-card').first().screenshot({ path: '/tmp/campusdesk-ma-legend.png' });
+    for (const [value, banded, linear] of [['10', 1, 1], ['0', 10, 5]]) {
+      await page.locator('#gpa-kline-interval').evaluate((el, value) => { el.value = value; el.dispatchEvent(new Event('change', { bubbles: true })); }, value);
+      await page.waitForFunction(count => klinecharts.init('gpa-kline-chart').getDataList().length === count, banded);
+      await verify('gpa-kline-chart', banded);
+      await verify('gpa-kline-linear-chart', linear);
+    }
+    await page.setViewportSize({ width: 760, height: 1000 });
+    for (const legend of await page.locator('.gpa-kline-averages').all()) {
+      assert.ok(await legend.evaluate(el => el.scrollWidth <= el.clientWidth + 1), 'legend must wrap within the card');
+    }
+    assert.deepEqual(errors, []);
+  } finally { await browser.close(); }
+});
+
 test('GPA chart stays readable under repeated zoom, pan, aggregation and refresh', { skip: !process.env.PLAYWRIGHT_MODULE }, async () => {
   const { chromium } = require(process.env.PLAYWRIGHT_MODULE);
   const browser = await chromium.launch({ headless: true, executablePath: process.env.CHROME_EXECUTABLE || undefined });

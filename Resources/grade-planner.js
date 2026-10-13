@@ -10,6 +10,9 @@
   const nameKey = value => clean(value).toLowerCase();
   const number = value => value === null || value === undefined || clean(value) === '' ? null : Number.isFinite(Number(value)) ? Number(value) : NaN;
   const validScore = value => Number.isFinite(value) && value >= 0 && value <= 100;
+  // Keep arithmetic noise below the precision of school marks, without rounding
+  // ordinary near-boundary marks (for example 89.999) into a higher GPA band.
+  const stableScore = value => Number.isFinite(value) ? Math.round(value * 1e10) / 1e10 : value;
   const key = course => JSON.stringify([String(course.id || course.name), nameKey(course.term).replace(/\s*\((?:current|current term)\)/g, '').trim()]);
   function categories(course, plan) {
     return (plan && plan.manual ? plan.categories || [] : course.gradeComponents || []).map(row => ({ name: clean(row.name), weight: number(row.weight), percentage: number(row.percentage) }));
@@ -18,22 +21,27 @@
     const rows = categories(course, plan), target = number(plan.target === undefined ? 90 : plan.target);
     const totalWeight = rows.reduce((sum, row) => sum + (Number.isFinite(row.weight) ? row.weight : 0), 0);
     const names = rows.map(row => nameKey(row.name));
-    let reason = !rows.length ? 'missing-categories' : rows.some(row => !row.name || !Number.isFinite(row.weight) || row.weight <= 0 || row.weight > 100 || (row.percentage !== null && !validScore(row.percentage))) || new Set(names).size !== names.length ? 'invalid-category' : Math.abs(totalWeight - 100) > 0.01 ? 'weight-total' : null;
+    let reason = !rows.length ? 'missing-categories' : rows.some(row => !row.name || !Number.isFinite(row.weight) || row.weight <= 0 || row.weight > 100 || (row.percentage !== null && !validScore(row.percentage))) || new Set(names).size !== names.length ? 'invalid-category' : Math.abs(totalWeight - 100) > 0.01 + 1e-10 ? 'weight-total' : null;
+    // Accepted rounding tolerance must not create a total above 100%, or move
+    // every category below a grade boundary when displayed weights total 99.99.
+    const weightScale = reason ? 1 : 100 / totalWeight;
     const known = rows.filter(row => validScore(row.percentage) && row.weight > 0);
     const knownWeight = known.reduce((sum, row) => sum + row.weight, 0);
-    const baseline = knownWeight > 0 ? known.reduce((sum, row) => sum + row.percentage * row.weight, 0) / knownWeight : validScore(number(course.percentage)) ? number(course.percentage) : null;
+    const baseline = knownWeight > 0 ? stableScore(known.reduce((sum, row) => sum + row.percentage * row.weight, 0) / knownWeight) : validScore(number(course.percentage)) ? number(course.percentage) : null;
     let heldPoints = 0, adjustableWeight = 0, projected = 0;
     const components = rows.map(row => {
+      const effectiveWeight = row.weight * weightScale;
       const override = (plan.overrides || []).find(item => nameKey(item.name) === nameKey(row.name));
       const mode = validScore(row.percentage) && (!override || override.mode !== 'estimate') ? 'hold' : 'estimate';
       const explicit = override && number(override.score);
       const score = mode === 'hold' ? row.percentage : override && override.score !== null && override.score !== undefined && clean(override.score) !== '' ? explicit : baseline;
-      if (mode === 'hold') heldPoints += row.percentage * row.weight / 100;
-      else adjustableWeight += row.weight;
+      if (mode === 'hold') heldPoints += row.percentage * effectiveWeight / 100;
+      else adjustableWeight += effectiveWeight;
       if (!validScore(score)) projected = NaN;
-      else projected += score * row.weight / 100;
+      else projected += score * effectiveWeight / 100;
       return { ...row, mode, score, automatic: mode === 'estimate' && (!override || override.score == null || clean(override.score) === '') };
     });
+    heldPoints = stableScore(heldPoints); adjustableWeight = stableScore(adjustableWeight); projected = stableScore(projected);
     const goalReason = reason || (!validScore(target) ? 'invalid-target' : null);
     const required = goalReason || adjustableWeight <= 0 ? null : (target - heldPoints) / (adjustableWeight / 100);
     const goalStatus = goalReason ? 'missing' : adjustableWeight <= 0 ? heldPoints >= target ? 'met' : 'fixed' : required <= 0 ? 'met' : required > 100 + 1e-9 ? 'unreachable' : 'possible';

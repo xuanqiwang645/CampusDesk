@@ -15,9 +15,6 @@ enum CampusAssistantAI {
         remove: { AssistantCredentialBridge.remove($0) },
         authorizeMatching: { AssistantCredentialBridge.lookup($0, allowInteraction: true) }
     )
-    private static let maximumMessageCount = 12
-    private static let maximumTotalCharacters = 40_000
-
     static func status() -> [String: Any] {
         let state = keyStore.state()
         return ["type": "assistantStatus", "deepSeekKeyConfigured": state == .stored || state == .locked,
@@ -38,104 +35,14 @@ enum CampusAssistantAI {
 
     static func keyForModelCatalog() throws -> String { try keyStore.read() }
 
-    static func request(provider: String, model rawModel: String, fallbackModel rawFallbackModel: String?, networkAvailable: Bool, messages rawMessages: [[String: Any]], completion: @escaping (Result<AssistantReply, AssistantError>) -> Void) {
-        guard ["deepseek", "ollama", "hybrid"].contains(provider) else { completion(.failure(.invalidRequest)); return }
-        let model = rawModel.trimmingCharacters(in: .whitespacesAndNewlines)
-        let localModel = (provider == "hybrid" ? rawFallbackModel : rawModel)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        func validModel(_ value: String) -> Bool {
-            (1...100).contains(value.count) && value.range(of: "^[A-Za-z0-9._:/-]+$", options: .regularExpression) != nil
-        }
-        guard validModel(model), (provider != "hybrid" || validModel(localModel)),
-              !rawMessages.isEmpty, rawMessages.count <= maximumMessageCount else {
-            completion(.failure(.invalidRequest)); return
-        }
-        var totalCharacters = 0
-        var messages: [[String: String]] = []
-        for item in rawMessages {
-            guard let role = item["role"] as? String, ["system", "user", "assistant"].contains(role),
-                  let content = item["content"] as? String, !content.isEmpty, content.count <= maximumTotalCharacters else {
-                completion(.failure(.invalidRequest)); return
-            }
-            totalCharacters += content.count
-            guard totalCharacters <= maximumTotalCharacters else { completion(.failure(.invalidRequest)); return }
-            messages.append(["role": role, "content": content])
-        }
-
-        if provider == "hybrid" {
-            if !networkAvailable {
-                performRequest(provider: "ollama", model: localModel, messages: messages, timeout: 90) { result in
-                    completion(result.map { AssistantReply(answer: $0, providerUsed: "ollama", fallbackReason: "offline") })
-                }
-                return
-            }
-            performRequest(provider: "deepseek", model: model, messages: messages, timeout: 15) { result in
-                switch result {
-                case .success(let answer): completion(.success(AssistantReply(answer: answer, providerUsed: "deepseek", fallbackReason: nil)))
-                case .failure(.network):
-                    performRequest(provider: "ollama", model: localModel, messages: messages, timeout: 90) { localResult in
-                        completion(localResult.map { AssistantReply(answer: $0, providerUsed: "ollama", fallbackReason: "deepseekUnavailable") })
-                    }
-                case .failure(let error): completion(.failure(error))
-                }
-            }
-            return
-        }
-
-        performRequest(provider: provider, model: model, messages: messages, timeout: 90) { result in
-            completion(result.map { AssistantReply(answer: $0, providerUsed: provider, fallbackReason: nil) })
-        }
-    }
-
-    private static func performRequest(provider: String, model: String, messages: [[String: String]], timeout: TimeInterval, completion: @escaping (Result<String, AssistantError>) -> Void) {
-        var request: URLRequest
-        if provider == "deepseek" {
-            let key: String
-            do { key = try keyStore.read() }
-            catch let error as AssistantError { completion(.failure(error)); return }
-            catch { completion(.failure(.keyStore)); return }
-            request = URLRequest(url: URL(string: "https://api.deepseek.com/chat/completions")!)
-            request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
-            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-            var payload: [String: Any] = ["model": model, "messages": messages, "stream": false, "max_tokens": 4096]
-            payload["temperature"] = 0.4
-            guard let data = try? JSONSerialization.data(withJSONObject: payload) else { completion(.failure(.invalidRequest)); return }
-            request.httpBody = data
-        } else {
-            request = URLRequest(url: URL(string: "http://127.0.0.1:11434/api/chat")!)
-            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-            let payload: [String: Any] = ["model": model, "messages": messages, "stream": false]
-            guard let data = try? JSONSerialization.data(withJSONObject: payload) else { completion(.failure(.invalidRequest)); return }
-            request.httpBody = data
-        }
-        request.httpMethod = "POST"
-        request.timeoutInterval = timeout
-
-        let session = URLSession(configuration: .ephemeral, delegate: NoRedirectDelegate(), delegateQueue: nil)
-        session.dataTask(with: request) { data, response, error in
-            defer { session.finishTasksAndInvalidate() }
-            if error != nil { completion(.failure(provider == "ollama" ? .localUnavailable : .network)); return }
-            guard let http = response as? HTTPURLResponse, let data, data.count <= 2_000_000 else { completion(.failure(.badResponse)); return }
-            guard (200...299).contains(http.statusCode) else {
-                if provider == "ollama" && http.statusCode == 404 { completion(.failure(.localModelMissing)); return }
-                completion(.failure(provider == "deepseek" && http.statusCode == 401 ? .unauthorized : .serviceRejected)); return
-            }
-            guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { completion(.failure(.badResponse)); return }
-            let content: String?
-            if provider == "deepseek" {
-                let choices = object["choices"] as? [[String: Any]]
-                if let message = choices?.first?["message"] as? [String: Any] {
-                    content = message["content"] as? String
-                } else {
-                    content = nil
-                }
-            } else {
-                content = (object["message"] as? [String: Any])?["content"] as? String
-            }
-            guard let answer = content?.trimmingCharacters(in: .whitespacesAndNewlines), !answer.isEmpty, answer.count <= 100_000 else {
-                completion(.failure(.badResponse)); return
-            }
-            completion(.success(answer))
-        }.resume()
+    /// Completion and chunks are ordered on a background serial queue. Even
+    /// validation failures and cancellation complete asynchronously exactly once.
+    @discardableResult static func request(provider: String, model: String, fallbackModel: String?, networkAvailable: Bool,
+                                           messages: [[String: Any]], onChunk: ((AssistantStreamChunk) -> Void)? = nil,
+                                           completion: @escaping (Result<AssistantReply, AssistantError>) -> Void) -> AssistantRequestHandle {
+        AssistantRequestOperation(provider: provider, model: model, fallbackModel: fallbackModel,
+                                  networkAvailable: networkAvailable, messages: messages,
+                                  keyProvider: { try keyStore.read() }, onChunk: onChunk, completion: completion).start()
     }
 
 }
@@ -146,15 +53,179 @@ struct AssistantReply {
     let fallbackReason: String?
 }
 
-private final class NoRedirectDelegate: NSObject, URLSessionTaskDelegate {
-    func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse, newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) {
-        completionHandler(nil)
+struct AssistantStreamChunk {
+    let text: String
+    let providerUsed: String
+    let fallbackReason: String?
+}
+
+final class AssistantRequestHandle {
+    private let cancellation: () -> Void
+    init(_ cancellation: @escaping () -> Void) { self.cancellation = cancellation }
+    func cancel() { cancellation() }
+}
+
+/// Dependencies are injectable for URLProtocol fixtures; production callers
+/// cannot change endpoints or supply a key from the JavaScript bridge.
+final class AssistantRequestOperation {
+    private let queue = DispatchQueue(label: "CampusDesk.assistant.request")
+    private let provider: String, model: String, localModel: String
+    private let networkAvailable: Bool
+    private let rawMessages: [[String: Any]]
+    private let keyProvider: () throws -> String
+    private let configuration: () -> URLSessionConfiguration
+    private let onChunk: ((AssistantStreamChunk) -> Void)?
+    private let completion: (Result<AssistantReply, AssistantError>) -> Void
+    private var messages: [[String: String]] = []
+    private var task: AssistantHTTPTask?
+    private var finished = false
+    private var emittedText = false
+
+    init(provider: String, model: String, fallbackModel: String?, networkAvailable: Bool,
+         messages: [[String: Any]], keyProvider: @escaping () throws -> String,
+         configuration: @escaping () -> URLSessionConfiguration = { .ephemeral },
+         onChunk: ((AssistantStreamChunk) -> Void)? = nil,
+         completion: @escaping (Result<AssistantReply, AssistantError>) -> Void) {
+        self.provider = provider; self.model = model.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.localModel = (provider == "hybrid" ? fallbackModel ?? "" : model).trimmingCharacters(in: .whitespacesAndNewlines)
+        self.networkAvailable = networkAvailable; self.rawMessages = messages
+        self.keyProvider = keyProvider; self.configuration = configuration
+        self.onChunk = onChunk; self.completion = completion
+    }
+
+    func start() -> AssistantRequestHandle {
+        let handle = AssistantRequestHandle { self.queue.async { self.finish(.failure(.cancelled)) } }
+        queue.async {
+            guard ["deepseek", "ollama", "hybrid"].contains(self.provider),
+                  CampusAssistantModels.validModelName(self.model),
+                  self.provider != "hybrid" || CampusAssistantModels.validModelName(self.localModel),
+                  !self.rawMessages.isEmpty, self.rawMessages.count <= 12 else {
+                self.finish(.failure(.invalidRequest)); return
+            }
+            var count = 0
+            for item in self.rawMessages {
+                guard let role = item["role"] as? String, ["system", "user", "assistant"].contains(role),
+                      let content = item["content"] as? String, !content.isEmpty else {
+                    self.finish(.failure(.invalidRequest)); return
+                }
+                count += content.count
+                guard count <= 40_000 else { self.finish(.failure(.invalidRequest)); return }
+                self.messages.append(["role": role, "content": content])
+            }
+            if self.provider == "ollama" || (self.provider == "hybrid" && !self.networkAvailable) {
+                self.verifyAndSendLocal(reason: self.provider == "hybrid" ? "offline" : nil)
+            } else if !self.networkAvailable {
+                self.finish(.failure(.network))
+            } else { self.send(provider: "deepseek", model: self.model, reason: nil) }
+        }
+        return handle
+    }
+
+    private func verifyAndSendLocal(reason: String?) {
+        guard !finished else { return }
+        guard !CampusAssistantModels.isCloudModelName(localModel),
+              let request = try? CampusAssistantModels.makeLocalDetailsRequest(model: localModel) else {
+            finish(.failure(.localModelNotLocal)); return
+        }
+        var body = Data()
+        let task = AssistantHTTPTask(queue: queue, maximumBytes: CampusAssistantModels.maximumResponseBytes,
+                                     receive: { body.append($0) }) { result in
+            guard !self.finished else { return }
+            switch result {
+            case .failure(let error): self.finish(.failure(self.map(error, provider: "ollama")))
+            case .success:
+                guard CampusAssistantModels.isVerifiedLocalDetails(body, model: self.localModel) else {
+                    self.finish(.failure(.localModelNotLocal)); return
+                }
+                self.send(provider: "ollama", model: self.localModel, reason: reason)
+            }
+        }
+        self.task = task
+        task.start(request, local: true, resourceTimeout: 5, configuration: configuration())
+    }
+
+    private func send(provider: String, model: String, reason: String?) {
+        guard !finished else { return }
+        var request = URLRequest(url: URL(string: provider == "deepseek" ? "https://api.deepseek.com/chat/completions" : "http://127.0.0.1:11434/api/chat")!)
+        request.httpMethod = "POST"
+        request.httpShouldHandleCookies = false
+        request.cachePolicy = .reloadIgnoringLocalCacheData
+        request.timeoutInterval = provider == "deepseek" && self.provider == "hybrid" ? 15 : 90
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue(provider == "deepseek" ? "text/event-stream" : "application/x-ndjson", forHTTPHeaderField: "Accept")
+        var payload: [String: Any] = ["model": model, "messages": messages, "stream": true]
+        if provider == "deepseek" {
+            do {
+                let key = try keyProvider()
+                guard (8...512).contains(key.count), CampusSecurity.isSafeHTTPHeaderValue(key) else { finish(.failure(.invalidKey)); return }
+                request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
+            } catch let error as AssistantError { finish(.failure(error)); return }
+            catch { finish(.failure(.keyStore)); return }
+            payload["max_tokens"] = 4096; payload["temperature"] = 0.4
+        }
+        guard let data = try? JSONSerialization.data(withJSONObject: payload) else { finish(.failure(.invalidRequest)); return }
+        request.httpBody = data
+        let decoder = AssistantStreamDecoder(provider: provider)
+        let task = AssistantHTTPTask(queue: queue, maximumBytes: 2_000_000, receive: { data in
+            guard !self.finished else { return }
+            do {
+                self.deliver(try decoder.append(data), provider: provider, reason: reason)
+                if decoder.done { self.complete(decoder, provider: provider, reason: reason) }
+            } catch { self.finish(.failure(.badResponse)) }
+        }) { result in
+            guard !self.finished else { return }
+            switch result {
+            case .success: self.complete(decoder, provider: provider, reason: reason)
+            case .failure(let failure):
+                let error = self.map(failure, provider: provider)
+                if self.provider == "hybrid", provider == "deepseek", error == .network, !self.emittedText {
+                    self.verifyAndSendLocal(reason: "deepseekUnavailable")
+                } else { self.finish(.failure(error)) }
+            }
+        }
+        self.task = task
+        task.start(request, local: provider == "ollama", resourceTimeout: 180, configuration: configuration())
+    }
+
+    private func deliver(_ chunks: [String], provider: String, reason: String?) {
+        guard !finished else { return }
+        for text in chunks {
+            emittedText = true
+            onChunk?(AssistantStreamChunk(text: text, providerUsed: provider, fallbackReason: reason))
+        }
+    }
+
+    private func complete(_ decoder: AssistantStreamDecoder, provider: String, reason: String?) {
+        do {
+            deliver(try decoder.finish(), provider: provider, reason: reason)
+            finish(.success(AssistantReply(answer: decoder.answer.trimmingCharacters(in: .whitespacesAndNewlines), providerUsed: provider, fallbackReason: reason)))
+        } catch { finish(.failure(.badResponse)) }
+    }
+
+    private func map(_ error: AssistantHTTPError, provider: String) -> AssistantError {
+        switch error {
+        case .cancelled: return .cancelled
+        case .network: return provider == "ollama" ? .localUnavailable : .network
+        case .rejected(let code):
+            if provider == "ollama" && code == 404 { return .localModelMissing }
+            return provider == "deepseek" && (code == 401 || code == 403) ? .unauthorized : .serviceRejected
+        case .invalidResponse, .tooLarge: return .badResponse
+        }
+    }
+
+    private func finish(_ result: Result<AssistantReply, AssistantError>) {
+        guard !finished else { return }
+        finished = true
+        let task = self.task
+        self.task = nil
+        task?.cancel()
+        completion(result)
     }
 }
 
 enum AssistantError: Error {
     case invalidKey, keyStore, keyAccess, invalidRequest, missingKey, localUnavailable, localModelMissing
-    case network, unauthorized, serviceRejected, badResponse
+    case network, unauthorized, serviceRejected, badResponse, localModelNotLocal, cancelled
 
     var code: String {
         switch self {
@@ -169,6 +240,8 @@ enum AssistantError: Error {
         case .unauthorized: return "unauthorized"
         case .serviceRejected: return "serviceRejected"
         case .badResponse: return "badResponse"
+        case .localModelNotLocal: return "localModelNotLocal"
+        case .cancelled: return "cancelled"
         }
     }
 
@@ -185,6 +258,8 @@ enum AssistantError: Error {
         case .unauthorized: return "DeepSeek API 密钥无效或已失效。"
         case .serviceRejected: return "AI 服务拒绝了这次请求；请检查模型设置或稍后重试。"
         case .badResponse: return "AI 服务返回的内容无法识别，请稍后重试。"
+        case .localModelNotLocal: return "此模型无法确认为本机模型。请选择已下载到这台 Mac 的模型；云模型和远程别名不可用于仅本机模式。"
+        case .cancelled: return "已停止生成。"
         }
     }
 }

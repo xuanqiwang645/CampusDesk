@@ -77,8 +77,13 @@ enum CampusSecurity {
               (snapshots["managebac"] as? [String: Any])?.count ?? 0 <= 250,
               (snapshots["teams"] as? [String: Any])?.count ?? 0 <= 500,
               let tasks = state["manualTasks"] as? [Any], tasks.count <= 3000,
-              let grades = state["gradeHistory"] as? [Any], grades.count <= 120,
-              let changes = state["changeLog"] as? [Any], changes.count <= 600 else { return false }
+              let grades = state["gradeHistory"] as? [Any], grades.count <= 120 else { return false }
+
+        // Version 1 backups predating the inbox omitted changeLog. The complete
+        // shared schema adds its empty default before this state is written.
+        if let changes = state["changeLog"] {
+            guard let rows = changes as? [Any], rows.count <= 600 else { return false }
+        }
 
         if let provider = settings["aiProvider"] as? String,
            !["off", "ollama", "deepseek", "hybrid", "auto"].contains(provider) { return false }

@@ -61,6 +61,7 @@ function harness({ native = true, hash = '#overview', saved = null, idle = false
     node: id => { const node = nodes.get(id); assert.ok(node, 'Missing rendered element: ' + id); return node; },
     click: dataset => { const element = new Element(); element.dataset = dataset; for (const listener of listeners.click || []) listener({ target: element }); },
     change: (id, data) => { const element = nodes.get(id); assert.ok(element, id); Object.assign(element, data); for (const listener of listeners.change || []) listener({ target: element }); },
+    changeAttributes: (attributes, data) => { const element = new Element(); for (const [name, value] of Object.entries(attributes)) { element.setAttribute(name, value); if (name.startsWith('data-')) element.dataset[name.slice(5).replace(/-([a-z])/g, (_, letter) => letter.toUpperCase())] = value; } Object.assign(element, data); for (const listener of listeners.change || []) listener({ target: element }); },
     input: (id, value) => { const element = nodes.get(id); assert.ok(element, id); element.value = value; for (const listener of listeners.input || []) listener({ target: element }); },
     runIdleStep: () => { const callback = idleQueue.shift(); if (callback) callback({ timeRemaining: () => 50 }); },
     drainIdle: () => { let steps = 0; while (idleQueue.length && steps++ < 1000) { const callback = idleQueue.shift(); callback({ timeRemaining: () => 50 }); } assert.ok(steps < 1000, 'idle work should finish'); },
@@ -100,6 +101,25 @@ function teamsSnapshot(tasks = []) {
     { id: 'work-message', title: 'Writing task', text: 'Write a paragraph.\nExplain your evidence.', kind: 'assignment', recipient: 'Grade 10 A', channel: 'HOMEWORK', dateLabel: '5:18 PM', url: 'https://teams.microsoft.com/v2/#/channels/test' }
   ] };
 }
+test('GPA legends identify every moving average and keep the two methods independent', () => {
+  for (const language of ['zh-CN', 'en-US']) {
+    const app = harness({ hash: '#grades' });
+    const state = app.ctx.CampusCore.emptyState();
+    state.settings.language = language;
+    // Deliberate calendar gaps: MA5 must average recorded periods, not fill days.
+    state.gradeHistory = [3.71, 3.25, 3.25, 3.25, 3.75].map((value, i) => ({
+      value, linearValue: 3.5 + i / 10, date: new Date(Date.UTC(2026, 8, 1 + i * 3)).toISOString().slice(0, 10), capturedAt: new Date(Date.UTC(2026, 8, 1 + i * 3)).toISOString(), count: 7
+    }));
+    app.receive({ type: 'state', state });
+    const html = app.node('content').innerHTML;
+    assert.equal((html.match(/data-gpa-ma="5" data-ma-ready="true"/g) || []).length, 2);
+    assert.match(html, /background:#f0a23b[^]*?MA5[^]*?<strong>3\.44<\/strong>/);
+    assert.match(html, /data-gpa-ma="5"[^]*?<strong>3\.70<\/strong>/);
+    for (const period of [10, 30, 60]) assert.equal((html.match(new RegExp('data-gpa-ma="' + period + '" data-ma-ready="false"', 'g')) || []).length, 2);
+    if (language === 'zh-CN') assert.match(html, /不是当前 GPA、目标或预测/);
+    else assert.match(html, /not your current GPA, target or forecast/);
+  }
+});
 function assistantModelOptions(app, id) {
   const select = new RegExp('<select id="' + id + '"[^>]*>([\\s\\S]*?)<\\/select>').exec(app.node('content').innerHTML);
   assert.ok(select, 'Missing model dropdown: ' + id);
@@ -860,7 +880,7 @@ test('dashboard appearance setting switches between the preserved classic panel 
   assert.equal(app.node('app-shell').dataset.dashboardTheme, 'board');
   app.click({ page: 'overview' });
   assert.match(app.node('content').innerHTML, /集中处理最重要的事/);
-  assert.match(app.node('content').innerHTML, /task-source-grid/);
+  assert.match(app.node('content').innerHTML, /board-task-columns/);
   assert.match(app.node('content').innerHTML, /board-task-grid/);
   assert.match(app.node('content').innerHTML, /data-todo-countdown/);
   assert.match(app.node('class-clock-detail').textContent, /下节 English · 08:50–09:30/);
@@ -1046,10 +1066,11 @@ test('semester date drafts survive background sync, blur, navigation and clearin
 
 test('overview preserves source and subject groups while tasks retain deadline cards and focus controls', () => {
   const app = harness(); app.receive({ type: 'snapshot', snapshot: teamsSnapshot([task(), task({ id: 'math-work', title: 'Math work', course: 'Math' })]) }); app.receive({ type: 'snapshot', snapshot: { source: 'managebac', url: 'https://example-school.managebac.cn/tasks', capturedAt: '2026-09-19T00:42:00Z', warnings: [], courses: [], tasks: [{ id: 'biology-work', title: 'Biology work', course: 'Biology', dueAt: null, dueLabel: '', status: 'open', url: 'https://example-school.managebac.cn/tasks' }], feedback: [], officialGPA: null } });
+  app.flushTimeouts();
   assert.match(app.node('content').innerHTML, /task-source-grid/); assert.match(app.node('content').innerHTML, /task-source-teams/); assert.match(app.node('content').innerHTML, /task-source-managebac/);
   assert.match(app.node('content').innerHTML, /task-subject-group/);
   app.click({ page: 'settings' }); app.click({ action: 'dashboard-theme', theme: 'board' }); app.click({ page: 'overview' });
-  assert.match(app.node('content').innerHTML, /task-source-grid/); assert.match(app.node('content').innerHTML, /task-source-teams/); assert.match(app.node('content').innerHTML, /task-source-managebac/);
+  assert.match(app.node('content').innerHTML, /board-task-columns/); assert.match(app.node('content').innerHTML, /task-source-teams/); assert.match(app.node('content').innerHTML, /task-source-managebac/);
   assert.match(app.node('content').innerHTML, /task-subject-group/);
   assert.match(app.node('content').innerHTML, /board-due-card/);
   assert.match(app.node('content').innerHTML, /data-todo-countdown/);
@@ -1414,7 +1435,7 @@ test('parsed attachment text is linked to exact account and source, safely rende
   app.receive({type:'snapshot',snapshot});
   const event={type:'teamsAttachment',accountId:'other',snapshotId:'browser:ec',attachmentId:'file-1',result:{status:'read',text:'Roster <script>bad</script>\nStudent A\t14:00'}};
   app.receive(event); assert.doesNotMatch(app.node('content').innerHTML,/Student A/);
-  event.accountId='account-1'; app.receive(event);
+  event.accountId='account-1'; app.receive(event); app.flushTimeouts();
   assert.match(app.node('content').innerHTML,/Student A/);
   assert.match(app.node('content').innerHTML,/&lt;script&gt;bad&lt;\/script&gt;/);
   assert.doesNotMatch(app.node('content').innerHTML,/<script>bad/);
@@ -1509,6 +1530,48 @@ test('Graph disconnect clears Teams cache and reminders while preserving persona
   assert.doesNotMatch(app.node('content').innerHTML, /Account A/);
 });
 
+test('manual to-do deadline accepts a separate typed 24-hour time in Beijing time', () => {
+  const app = harness();
+  app.click({ action: 'add-task' });
+  assert.equal(app.node('task-due-date').value, '');
+  assert.equal(app.node('task-due-time').value, '');
+  app.node('task-title').value = 'Prepare notes';
+  app.node('task-due-date').value = '2026-09-28';
+  app.node('task-due-time').value = '18:30';
+  app.submit('task-form');
+  assert.equal(app.last('saveState').state.manualTasks[0].dueAt, '2026-09-28T10:30:00.000Z');
+  app.click({ action: 'add-task' });
+  app.node('task-title').value = 'Default late deadline';
+  app.node('task-due-date').value = '2026-09-29';
+  app.submit('task-form');
+  assert.equal(app.last('saveState').state.manualTasks[1].dueAt, '2026-09-29T15:59:00.000Z');
+});
+
+test('manual to-do rejects invalid dates and times without saving a partial task', () => {
+  const app = harness();
+  app.click({ action: 'add-task' });
+  app.node('task-title').value = 'Invalid deadline';
+  app.node('task-due-date').value = '2026-09-28';
+  app.node('task-due-time').value = '25:00';
+  app.submit('task-form');
+  assert.equal(app.last('saveState'), undefined);
+  assert.equal(app.node('task-dialog').open, true);
+  app.node('task-due-time').value = '18:75';
+  app.submit('task-form');
+  assert.equal(app.last('saveState'), undefined);
+  app.node('task-due-date').value = '2026-02-30';
+  app.node('task-due-time').value = '09:05';
+  app.submit('task-form');
+  assert.equal(app.last('saveState'), undefined);
+  app.node('task-due-date').value = '';
+  app.submit('task-form');
+  assert.equal(app.last('saveState'), undefined);
+  assert.match(app.node('task-form-error').textContent, /同时选择截止日期/);
+  app.node('task-due-time').value = '';
+  app.submit('task-form');
+  assert.equal(app.last('saveState').state.manualTasks[0].dueAt, null);
+});
+
 test('Teams teacher feedback opens the Teams source and never renders as ManageBac content', () => {
   const app = harness({ hash: '#feedback' });
   app.receive({ type: 'graphBatch', batchId: 'assignment-feedback', batch: { kind: 'assignment', capturedAt: '2026-09-19T00:41:00Z', class: { id: 'class-id', displayName: 'English' }, userId: 'me', assignment: {
@@ -1522,7 +1585,7 @@ test('Teams teacher feedback opens the Teams source and never renders as ManageB
   assert.match(app.node('content').innerHTML, /data-source="teams" data-url="https:\/\/teams.microsoft.com\/l\/entity\/assignments\/essay"/);
 });
 
-test('backup import resets native account affinity only after accepting the import', () => {
+test('backup import resets native account affinity only after accepting and acknowledging the import', () => {
   const app = harness();
   app.receive({ type: 'snapshot', snapshot: schedule() });
   const candidate = app.ctx.CampusCore.emptyState();
@@ -1535,6 +1598,9 @@ test('backup import resets native account affinity only after accepting the impo
   app.receive({ type: 'import', state: candidate });
   assert.equal(app.last('saveState').imported, true);
   assert.equal(app.last('saveState').state.manualTasks[0].title, 'Restored personal task');
+  const pending = app.last('saveState');
+  assert.match(pending.importRequestId, /^import-/);
+  app.receive({ type: 'importResult', requestId: pending.importRequestId, success: true, state: pending.state });
   app.receive({ type: 'graphReset' });
   assert.equal(app.last('saveState').imported, undefined);
   assert.equal(app.last('saveState').state.manualTasks[0].title, 'Restored personal task');
@@ -1632,6 +1698,7 @@ test('attachment text metadata is bounded, persisted and shown without claiming 
   app.receive({type:'teamsAttachment',accountId:'account-one',snapshotId:'browser:ec',attachmentId:'file-a',versionKey:'v1:abcdef0123456789',result:{status:'partial',text:'Alice\n张同学',truncated:true,extractionCoverage:'partial',textOnly:true,semanticVerified:false,pagesTotal:4,pagesRead:2,ocrPages:1,warnings:['<unverified>','Visual layout may matter',...Array(10).fill('w'.repeat(600))],pageCoverage:[page,{...page,page:-1}]}});
   const item=Object.values(app.last('saveState').state.snapshots.teams)[0].posts[0].attachments[0];
   assert.equal(item.versionKey,'v1:abcdef0123456789');assert.equal(item.extractionCoverage,'partial');assert.equal(item.semanticVerified,false);assert.equal(item.textOnly,true);
+  app.flushTimeouts();
   assert.equal(item.warnings.length,8);assert.equal(item.warnings[2].length,500);assert.equal(item.pageCoverage.length,1);assert.equal(item.pageCoverage[0].ocrMeanConfidence,0.7);assert.equal(item.pagesTotal,4);
   assert.match(app.node('content').innerHTML,/已提取部分文字/);assert.match(app.node('content').innerHTML,/提取文字不等于名单已核验/);assert.match(app.node('content').innerHTML,/&lt;unverified&gt;/);assert.doesNotMatch(app.node('content').innerHTML,/<unverified>/);
 });
@@ -1654,8 +1721,57 @@ test('unchanged attachment requires exact account, snapshot, file and version wi
 test('failed new-version extraction preserves old text version and capture time for honest cache reuse',()=>{
   const app=harness({hash:'#ec'}),snapshot=searchableEC();Object.assign(snapshot.posts[0].attachments[0],{versionKey:'v1:abcdef0123456789',capturedAt:'2026-09-18T02:00:00Z',extractionStatus:'partial',truncated:true});app.receive({type:'snapshot',snapshot});
   app.receive({type:'teamsAttachment',accountId:'account-one',snapshotId:'browser:ec',attachmentId:'file-a',versionKey:'v1:99999999',result:{status:'error',error:'Extraction failed'}});
+  app.flushTimeouts();
   const item=Object.values(app.last('saveState').state.snapshots.teams)[0].posts[0].attachments[0];
   assert.equal(item.versionKey,'v1:abcdef0123456789');assert.equal(item.capturedAt,'2026-09-18T02:00:00.000Z');assert.equal(item.cached,true);assert.equal(item.truncated,true);assert.equal(item.text,'Student Alice\n张同学');assert.match(app.node('content').innerHTML,/缓存文字/);
+});
+
+test('sync bursts persist every snapshot but coalesce page rendering to the newest state', () => {
+  const app = harness();
+  const savedBefore = app.sent.filter(item => item.action === 'saveState').length;
+  for (let index = 0; index < 8; index++) {
+    app.receive({ type: 'snapshot', snapshot: teamsSnapshot([task({title: 'Newest task ' + index})]) });
+    if (index === 0) app.firstSyncWrites = app.node('content').writes;
+  }
+  assert.equal(app.sent.filter(item => item.action === 'saveState').length - savedBefore, 8, 'no persistence is debounced or dropped');
+  assert.equal(app.node('content').writes, app.firstSyncWrites, 'burst does not rebuild the page eight times');
+  app.flushTimeouts();
+  assert.equal(app.node('content').writes, app.firstSyncWrites + 1);
+  assert.match(app.node('content').innerHTML, /Newest task 7/);
+});
+
+test('hidden windows and an open task editor defer sync painting and reveal the latest saved data', () => {
+  const app = harness();
+  const initial = app.node('content').writes;
+  app.receive({ type: 'windowVisibility', visible: false });
+  app.receive({ type: 'snapshot', snapshot: teamsSnapshot([task({title: 'Hidden update'})]) });
+  app.tick(1000); app.flushTimeouts();
+  assert.equal(app.node('content').writes, initial);
+  assert.match(JSON.stringify(app.last('saveState')), /Hidden update/);
+  app.receive({ type: 'windowVisibility', visible: true });
+  assert.match(app.node('content').innerHTML, /Hidden update/);
+  app.click({action: 'add-task'});
+  app.input('task-title', 'Keep my unsaved title');
+  const writes = app.node('content').writes;
+  app.receive({ type: 'snapshot', snapshot: teamsSnapshot([task({title: 'While editing'})]) });
+  app.tick(1000); app.flushTimeouts();
+  assert.equal(app.node('content').writes, writes);
+  assert.equal(app.node('task-title').value, 'Keep my unsaved title');
+  app.node('task-dialog').close(); app.tick(1000);
+  assert.match(app.node('content').innerHTML, /While editing/);
+});
+
+test('clock cache expires each second and invalidates when the schedule is replaced', () => {
+  const app = harness();
+  app.receive({type: 'snapshot', snapshot: schedule()});
+  assert.equal(app.node('class-clock-time').textContent, '08:32');
+  app.tick(0); app.tick(0);
+  assert.equal(app.node('class-clock-time').textContent, '08:32');
+  app.tick(1000);
+  assert.equal(app.node('class-clock-time').textContent, '08:31');
+  app.receive({type: 'state', state: app.ctx.CampusCore.emptyState()});
+  assert.equal(app.node('class-clock-label').textContent, '等待今日课表');
+  assert.equal(app.node('class-clock-time').textContent, '—');
 });
 
 test('successful replacement text clears an old version when new identity is absent or invalid',()=>{
@@ -1748,4 +1864,471 @@ test('native PDF school calendar opens an editable event preview without importi
   app.click({action:'confirm-calendar-preview'});
   assert.equal(app.last('saveState').state.schoolCalendar.events[0].endDate,'2026-09-28');
   assert.equal(app.node('calendar-preview-dialog').open,false);
+});
+
+function assistantAuditHarness(categories = [], provider = 'ollama') {
+  const app = harness({ themeEdition: true, hash: '#assistant' });
+  const state = app.ctx.CampusCore.emptyState();
+  Object.assign(state.settings, { setupWizardCompleted: true, setupWizardIntroVersion: '1.0.0', aiProvider: provider, aiContextCategories: categories });
+  app.receive({ type: 'state', state });
+  let requestSequence = 0;
+  app.ctx.crypto.randomUUID = () => 'audit-request-' + (++requestSequence);
+  return app;
+}
+function sendAuditQuestion(app, question) {
+  const count = app.sent.filter(row => row.action === 'assistantRequest').length;
+  app.input('assistant-question', question);
+  app.click({ action: 'assistant-send' });
+  assert.equal(app.sent.filter(row => row.action === 'assistantRequest').length, count + 1, 'each valid question dispatches exactly once');
+  return app.last('assistantRequest');
+}
+function replyAuditQuestion(app, request, answer = 'Synthetic answer') {
+  app.receive({ type: 'assistantResponse', requestId: request.requestId, answer, providerUsed: request.provider === 'ollama' ? 'ollama' : 'deepseek' });
+}
+function auditRequestContext(request) {
+  const content = request.messages.at(-1).content;
+  return JSON.parse(content.slice(content.indexOf('{')));
+}
+
+test('setup bounds each long alias and keeps exactly one active step across restart, close, and a new session', () => {
+  const app = harness({ themeEdition: true });
+  const state = app.ctx.CampusCore.emptyState();
+  Object.assign(state.settings, { setupWizardCompleted: true, setupWizardIntroVersion: '1.0.0' });
+  state.manualTasks.push({ id: 'keep', title: 'Keep this personal task', status: 'open', dueAt: null });
+  app.receive({ type: 'state', state });
+  app.click({ action: 'setup-wizard-restart' });
+  assert.equal(app.last('saveState').state.settings.setupWizardCompleted, false, 'restart is persisted as an unfinished setup');
+  const oneActive = target => {
+    const html = target.node('setup-wizard-content').innerHTML;
+    assert.equal((html.match(/class="setup-rail-item active"/g) || []).length, 1);
+    assert.equal((html.match(/aria-current="step"/g) || []).length, 1);
+  };
+  oneActive(app);
+  app.click({ action: 'setup-wizard-next' });
+  app.input('setup-identity-names', '名'.repeat(150) + ', Other Name');
+  app.click({ action: 'setup-wizard-next' });
+  const saved = app.last('saveState').state;
+  assert.equal(saved.settings.ecIdentityNames[0], '名'.repeat(100));
+  assert.equal(saved.settings.ecIdentityNames[1], 'Other Name');
+  assert.doesNotThrow(() => app.ctx.CampusCore.validateState(JSON.stringify(saved)), 'wizard must never save an alias rejected by Core');
+  assert.equal(saved.settings.setupWizardStep, 2);
+  oneActive(app);
+  app.click({ action: 'setup-wizard-close' });
+  const resumed = harness({ themeEdition: true });
+  resumed.receive({ type: 'state', state: app.last('saveState').state });
+  assert.equal(resumed.node('setup-wizard-dialog').open, true);
+  assert.match(resumed.node('setup-wizard-content').innerHTML, /id="setup-wizard-title">连接 ManageBac<\/h1>/);
+  oneActive(resumed);
+  resumed.click({ action: 'setup-wizard-restart' });
+  assert.match(resumed.node('setup-wizard-content').innerHTML, /欢迎使用/);
+  for (let step = 0; step < 9; step++) { oneActive(resumed); resumed.click({ action: 'setup-wizard-next' }); }
+  assert.equal(resumed.node('setup-wizard-dialog').open, false);
+  assert.equal(resumed.last('saveState').state.settings.setupWizardCompleted, true);
+  assert.equal(resumed.last('saveState').state.manualTasks[0].title, 'Keep this personal task');
+});
+
+test('changing assistant scope excludes hidden old data, old questions, and answers derived from that scope', () => {
+  const app = assistantAuditHarness(['tasks']);
+  app.receive({ type: 'snapshot', snapshot: teamsSnapshot([task({ requirements: 'PRIVATE_CONTEXT_MARKER' })]) });
+  const first = sendAuditQuestion(app, 'PRIVATE_OLD_QUESTION');
+  replyAuditQuestion(app, first, 'PRIVATE_DERIVED_ANSWER');
+  app.click({ page: 'settings' });
+  app.changeAttributes({ 'data-ai-context': 'tasks' }, { checked: false });
+  app.click({ page: 'assistant' });
+  const second = sendAuditQuestion(app, 'An unrelated question');
+  assert.deepEqual(auditRequestContext(second), {});
+  assert.equal(second.messages.length, 2);
+  assert.doesNotMatch(JSON.stringify(second.messages), /PRIVATE_CONTEXT_MARKER|PRIVATE_OLD_QUESTION|PRIVATE_DERIVED_ANSWER/);
+});
+
+test('switching from local Ollama to DeepSeek starts fresh context even if selected categories stay unchanged', () => {
+  const app = assistantAuditHarness([]);
+  const local = sendAuditQuestion(app, 'LOCAL_PRIVATE_QUESTION');
+  replyAuditQuestion(app, local, 'LOCAL_PRIVATE_ANSWER');
+  app.receive({ type: 'assistantStatus', deepSeekKeyConfigured: true, deepSeekKeyState: 'stored' });
+  app.click({ action: 'assistant-switch-provider', provider: 'deepseek' });
+  const remote = sendAuditQuestion(app, 'REMOTE_NEW_QUESTION');
+  assert.equal(remote.provider, 'deepseek');
+  assert.equal(remote.messages.length, 2);
+  assert.doesNotMatch(JSON.stringify(remote.messages), /LOCAL_PRIVATE_QUESTION|LOCAL_PRIVATE_ANSWER/);
+});
+
+test('a hybrid preview cannot forward offline-only history if connectivity changes before confirmation', () => {
+  const app = assistantAuditHarness([], 'hybrid');
+  app.setOnline(false);
+  const local = sendAuditQuestion(app, 'OFFLINE_PRIVATE_QUESTION');
+  app.receive({ type: 'assistantResponse', requestId: local.requestId, answer: 'OFFLINE_PRIVATE_ANSWER', providerUsed: 'ollama', fallbackReason: 'offline' });
+  app.input('assistant-question', 'New preview question');
+  app.click({ action: 'assistant-review' });
+  assert.equal(app.node('assistant-confirm-dialog').open, true);
+  app.receive({ type: 'assistantStatus', deepSeekKeyConfigured: true, deepSeekKeyState: 'stored' });
+  app.setOnline(true);
+  app.click({ action: 'assistant-confirm-send' });
+  const requests = app.sent.filter(row => row.action === 'assistantRequest');
+  assert.ok(requests.length <= 2);
+  // Implementations may require a fresh preview or rebuild safe context. They
+  // must never send the offline history under the new online route.
+  if (requests.length === 2) {
+    assert.equal(requests[1].networkAvailable, true);
+    assert.doesNotMatch(JSON.stringify(requests[1].messages), /OFFLINE_PRIVATE_QUESTION|OFFLINE_PRIVATE_ANSWER/);
+  } else {
+    assert.match(app.node('toast').textContent, /改变|变化|重新|changed|again/i);
+  }
+});
+
+test('assistant sends missing course percentages as null and preserves a real zero grade', () => {
+  const app = assistantAuditHarness(['grades']);
+  app.receive({ type: 'snapshot', snapshot: {
+    source: 'managebac', url: 'https://example-school.managebac.cn/grades', capturedAt: '2026-09-19T00:40:00Z', warnings: [],
+    courses: [{ id: 'missing', name: 'Missing grade', percentage: null, term: 'Term 1', isCurrentTerm: true, isCourseGrade: true },
+      { id: 'zero', name: 'Zero grade', percentage: 0, term: 'Term 1', isCurrentTerm: true, isCourseGrade: true }], tasks: [], feedback: []
+  } });
+  const grades = auditRequestContext(sendAuditQuestion(app, 'Review my grades')).grades;
+  assert.equal(grades.find(row => row.course === 'Missing grade').percentage, null);
+  assert.equal(grades.find(row => row.course === 'Zero grade').percentage, 0);
+});
+
+test('assistant trims whole historical turns to budget without repeating hidden context or blocking later questions', () => {
+  const app = assistantAuditHarness(['tasks']);
+  app.receive({ type: 'snapshot', snapshot: teamsSnapshot(Array.from({ length: 20 }, (_, index) => task({
+    id: 'budget-' + index, title: 'Budget task ' + index, requirements: (index ? '' : 'UNIQUE_CONTEXT_MARKER') + 'R'.repeat(760)
+  }))) });
+  let latest;
+  for (let turn = 0; turn < 8; turn++) {
+    latest = sendAuditQuestion(app, 'Budget question ' + turn);
+    assert.ok(JSON.stringify(latest.messages).length <= 40_000);
+    assert.equal((JSON.stringify(latest.messages).match(/UNIQUE_CONTEXT_MARKER/g) || []).length, 1, 'source data belongs only in the current request message');
+    assert.equal((latest.messages.length - 2) % 2, 0, 'trimming keeps complete user/assistant pairs');
+    replyAuditQuestion(app, latest, 'ANSWER_' + turn + '_' + 'A'.repeat(7000));
+  }
+  assert.ok(latest.messages.length > 2, 'recent conversation remains available when it fits');
+  assert.doesNotMatch(JSON.stringify(latest.messages), /ANSWER_0_/);
+  assert.match(JSON.stringify(latest.messages), /ANSWER_6_/);
+  app.click({ page: 'settings' });
+  app.changeAttributes({ 'data-ai-context': 'tasks' }, { checked: false });
+  app.click({ page: 'assistant' });
+  const next = sendAuditQuestion(app, 'Still able to ask');
+  assert.deepEqual(auditRequestContext(next), {});
+  assert.equal(next.messages.length, 2);
+});
+
+test('assistant chunks update incrementally, preserve the draft, and keep stop available after navigating back', () => {
+  const app = assistantAuditHarness();
+  const request = sendAuditQuestion(app, 'Start streaming');
+  assert.equal(app.node('assistant-send').dataset.action, 'assistant-stop');
+  assert.equal(app.node('assistant-send').disabled, false);
+  app.receive({ type: 'assistantChunk', requestId: request.requestId, text: 'First ', providerUsed: 'ollama' });
+  app.flushTimeouts();
+  assert.match(app.node('assistant-chat-log').innerHTML, /First /);
+  const editor = app.node('assistant-question'); editor.focus();
+  app.input('assistant-question', 'Preserve my next draft');
+  app.receive({ type: 'assistantChunk', requestId: request.requestId, text: '<second>', providerUsed: 'ollama' });
+  app.flushTimeouts();
+  assert.match(app.node('assistant-chat-log').innerHTML, /First &lt;second&gt;/);
+  assert.equal(app.node('assistant-question'), editor);
+  assert.equal(editor.value, 'Preserve my next draft');
+  app.blur('assistant-question');
+  app.click({ page: 'settings' });
+  app.click({ page: 'assistant' });
+  assert.equal(app.node('assistant-send').dataset.action, 'assistant-stop', 'a complete render must preserve the stop action while generation is in flight');
+  assert.equal(app.node('assistant-send').disabled, false);
+  replyAuditQuestion(app, request, 'First <second>');
+  app.flushTimeouts();
+  const log = app.node('assistant-chat-log').innerHTML || app.node('content').innerHTML;
+  assert.equal((log.match(/First &lt;second&gt;/g) || []).length, 1, 'final text replaces the partial answer instead of duplicating it');
+  assert.doesNotMatch(log, /assistant-typing/);
+});
+
+test('stop and clear cancel the native request and ignore late chunks or completions without polluting future history', () => {
+  for (const action of ['assistant-stop', 'assistant-clear']) {
+    const app = assistantAuditHarness();
+    const first = sendAuditQuestion(app, 'INTERRUPTED_QUESTION');
+    app.receive({ type: 'assistantChunk', requestId: first.requestId, text: 'INTERRUPTED_PARTIAL', providerUsed: 'ollama' });
+    app.flushTimeouts();
+    app.click({ action });
+    assert.deepEqual(app.last('assistantCancelRequest'), { action: 'assistantCancelRequest', requestId: first.requestId });
+    const second = sendAuditQuestion(app, 'Fresh after stop');
+    assert.doesNotMatch(JSON.stringify(second.messages), /INTERRUPTED_QUESTION|INTERRUPTED_PARTIAL/);
+    app.receive({ type: 'assistantChunk', requestId: first.requestId, text: 'LATE_CHUNK', providerUsed: 'ollama' });
+    app.receive({ type: 'assistantResponse', requestId: first.requestId, answer: 'LATE_ANSWER', providerUsed: 'ollama' });
+    app.flushTimeouts();
+    assert.doesNotMatch(app.node('content').innerHTML + app.node('assistant-chat-log').innerHTML, /LATE_CHUNK|LATE_ANSWER/);
+    assert.equal(app.node('assistant-send').dataset.action, 'assistant-stop', 'a stale completion must not finish the newer request');
+    replyAuditQuestion(app, second, 'Fresh answer');
+    const third = sendAuditQuestion(app, 'Next question');
+    assert.doesNotMatch(JSON.stringify(third.messages), /INTERRUPTED_QUESTION|INTERRUPTED_PARTIAL|LATE_CHUNK|LATE_ANSWER/);
+    assert.match(JSON.stringify(third.messages), /Fresh answer/);
+  }
+});
+
+test('empty, errored, and incomplete assistant answers never become history in the next model request', () => {
+  for (const failure of [{ answer: '' }, { answer: '  ' }, { errorCode: 'network' }, { errorCode: 'badResponse' }]) {
+    const app = assistantAuditHarness();
+    const first = sendAuditQuestion(app, 'FAILED_QUESTION');
+    app.receive({ type: 'assistantChunk', requestId: first.requestId, text: 'FAILED_PARTIAL', providerUsed: 'ollama' });
+    app.receive(Object.assign({ type: 'assistantResponse', requestId: first.requestId, providerUsed: 'ollama' }, failure));
+    const second = sendAuditQuestion(app, 'A fresh question');
+    assert.equal(second.messages.length, 2);
+    assert.doesNotMatch(JSON.stringify(second.messages), /FAILED_QUESTION|FAILED_PARTIAL/);
+    assert.ok(second.messages.every(message => message.content.trim()));
+  }
+});
+
+async function importAuditFile(app, value) {
+  const input = app.node('import-file'), text = JSON.stringify(value);
+  input.files = [{ name: 'synthetic-backup.json', size: Buffer.byteLength(text), text: async () => text }];
+  await input.events.change({ target: input });
+}
+
+test('browser backup envelopes require confirmation and retain an immutable recovery copy across later saves', async () => {
+  const app = harness({ native: false, themeEdition: true });
+  app.click({ action: 'add-task' }); app.node('task-title').value = 'Original browser task'; app.submit('task-form');
+  const original = JSON.parse(app.store.get('campusdesk.browser.v1'));
+  const candidate = app.ctx.CampusCore.emptyState();
+  candidate.manualTasks.push({ id: 'imported', title: 'Imported browser task', dueAt: null, status: 'open' });
+  const envelope = app.ctx.CampusCore.exportBackup(JSON.stringify(candidate)), confirmations = [];
+  app.ctx.confirm = message => { confirmations.push(message); return false; };
+  await importAuditFile(app, envelope);
+  assert.equal(confirmations.length, 1, 'a recognized envelope needs the replacement confirmation only');
+  assert.equal(JSON.parse(app.store.get('campusdesk.browser.v1')).manualTasks[0].title, 'Original browser task');
+  assert.equal([...app.store.keys()].filter(key => key.startsWith('campusdesk.preimport.')).length, 0);
+  app.ctx.confirm = message => { confirmations.push(message); return true; };
+  await importAuditFile(app, envelope);
+  assert.equal(JSON.parse(app.store.get('campusdesk.browser.v1')).manualTasks[0].title, 'Imported browser task');
+  const recoveryKeys = [...app.store.keys()].filter(key => key.startsWith('campusdesk.preimport.'));
+  assert.equal(recoveryKeys.length, 1);
+  const recovered = JSON.parse(app.store.get(recoveryKeys[0]));
+  assert.equal(recovered.app, 'CampusDesk'); assert.equal(recovered.edition, 'theme'); assert.equal(recovered.schemaVersion, 1);
+  assert.deepEqual(recovered.data, JSON.parse(JSON.stringify(app.ctx.CampusCore.validateState(JSON.stringify(original)))));
+  const recoveryBytes = app.store.get(recoveryKeys[0]);
+  app.click({ action: 'add-task' }); app.node('task-title').value = 'Added after import'; app.submit('task-form');
+  assert.equal(app.store.get(recoveryKeys[0]), recoveryBytes, 'routine saves never overwrite the pre-import copy');
+});
+
+test('browser import rejects foreign envelopes and aborts when the recovery copy cannot be saved', async () => {
+  const app = harness({ native: false, themeEdition: true });
+  app.click({ action: 'add-task' }); app.node('task-title').value = 'Keep on failure'; app.submit('task-form');
+  const before = app.store.get('campusdesk.browser.v1'), candidate = app.ctx.CampusCore.emptyState();
+  const envelope = app.ctx.CampusCore.exportBackup(candidate);
+  const prompts = [];
+  app.ctx.confirm = message => { prompts.push(message); return true; };
+  for (const bad of [Object.assign({}, envelope, { app: 'OtherApp' }), Object.assign({}, envelope, { edition: 'standard' }), Object.assign({}, envelope, { schemaVersion: 99 })]) {
+    await importAuditFile(app, bad);
+    assert.equal(app.store.get('campusdesk.browser.v1'), before);
+  }
+  assert.equal(prompts.length, 0, 'invalid envelopes are rejected before offering to replace current data');
+  const setItem = app.ctx.localStorage.setItem;
+  app.ctx.localStorage.setItem = (key, value) => { if (key.startsWith('campusdesk.preimport.')) throw new Error('Synthetic storage full'); setItem(key, value); };
+  await importAuditFile(app, envelope);
+  assert.equal(app.store.get('campusdesk.browser.v1'), before);
+  assert.match(app.node('toast').textContent, /无法导入.*Synthetic storage full/);
+});
+
+test('legacy browser imports require both provenance and replacement confirmations, and either decline preserves state', async () => {
+  const app = harness({ native: false });
+  app.click({ action: 'add-task' }); app.node('task-title').value = 'Existing legacy test'; app.submit('task-form');
+  const before = app.store.get('campusdesk.browser.v1'), candidate = app.ctx.CampusCore.emptyState();
+  for (const decisions of [[false], [true, false]]) {
+    const prompts = []; let index = 0;
+    app.ctx.confirm = message => { prompts.push(message); return decisions[index++]; };
+    await importAuditFile(app, candidate);
+    assert.equal(prompts.length, decisions.length);
+    assert.match(prompts[0], /旧格式备份/);
+    assert.equal(app.store.get('campusdesk.browser.v1'), before);
+    assert.equal([...app.store.keys()].filter(key => key.startsWith('campusdesk.preimport.')).length, 0);
+  }
+});
+
+test('browser import never reports success when the replacement state cannot be persisted', async () => {
+  const app = harness({ native: false, themeEdition: true });
+  app.click({ action: 'add-task' }); app.node('task-title').value = 'Original before quota failure'; app.submit('task-form');
+  const original = app.store.get('campusdesk.browser.v1'), candidate = app.ctx.CampusCore.emptyState();
+  candidate.manualTasks.push({ id: 'replacement', title: 'Replacement too large to save', dueAt: null, status: 'open' });
+  const envelope = app.ctx.CampusCore.exportBackup(JSON.stringify(candidate));
+  const setItem = app.ctx.localStorage.setItem;
+  app.ctx.localStorage.setItem = (key, value) => { if (key === 'campusdesk.browser.v1') throw new Error('Synthetic replacement quota exceeded'); setItem(key, value); };
+  await importAuditFile(app, envelope);
+  assert.equal(app.store.get('campusdesk.browser.v1'), original);
+  assert.equal([...app.store.keys()].filter(key => key.startsWith('campusdesk.preimport.')).length, 1, 'the original recovery copy is retained');
+  assert.doesNotMatch(app.node('toast').textContent, /已恢复备份|restored successfully/i);
+  assert.match(app.node('toast').textContent, /无法|失败|could not|failed/i);
+});
+
+test('native imports keep current data until a matching successful acknowledgement and use the native normalized state', () => {
+  const app = harness({ hash: '#tasks' }), original = app.ctx.CampusCore.emptyState();
+  original.manualTasks.push({ id: 'original', title: 'Original before native import', dueAt: null, status: 'open' });
+  app.receive({ type: 'state', state: original });
+  const candidate = app.ctx.CampusCore.emptyState();
+  candidate.manualTasks.push({ id: 'candidate', title: 'Candidate awaiting native save', dueAt: null, status: 'open' });
+  app.receive({ type: 'import', state: candidate, validated: true });
+  const pending = app.last('saveState');
+  assert.equal(pending.imported, true);
+  assert.match(pending.importRequestId, /^import-/);
+  assert.match(app.node('content').innerHTML, /Original before native import/);
+  assert.doesNotMatch(app.node('content').innerHTML, /Candidate awaiting native save/);
+  assert.doesNotMatch(app.node('toast').textContent, /已恢复备份/);
+  app.receive({ type: 'importResult', requestId: 'unrelated-import', success: true, state: candidate });
+  assert.match(app.node('content').innerHTML, /Original before native import/);
+  const normalized = JSON.parse(JSON.stringify(pending.state));
+  normalized.manualTasks[0].title = 'Native normalized restored task';
+  app.receive({ type: 'importResult', requestId: pending.importRequestId, success: true, state: normalized });
+  assert.match(app.node('content').innerHTML, /Native normalized restored task/);
+  assert.doesNotMatch(app.node('content').innerHTML, /Original before native import|Candidate awaiting native save/);
+  assert.match(app.node('toast').textContent, /已恢复备份/);
+  assert.equal(app.sent.filter(row => row.action === 'saveState' && row.imported).length, 1, 'the successful acknowledgement never resubmits the import');
+  app.receive({ type: 'importResult', requestId: pending.importRequestId, success: true, state: original });
+  assert.match(app.node('content').innerHTML, /Native normalized restored task/, 'duplicate acknowledgements cannot overwrite the restored state');
+});
+
+test('failed native import leaves the original frontend state intact and a retry ignores the previous acknowledgement', () => {
+  const app = harness({ hash: '#tasks' }), original = app.ctx.CampusCore.emptyState();
+  original.manualTasks.push({ id: 'safe', title: 'Keep after native failure', dueAt: null, status: 'open' });
+  app.receive({ type: 'state', state: original });
+  const candidate = app.ctx.CampusCore.emptyState();
+  candidate.manualTasks.push({ id: 'incoming', title: 'Incoming retry task', dueAt: null, status: 'open' });
+  app.receive({ type: 'import', state: candidate, validated: true });
+  const first = app.last('saveState');
+  app.receive({ type: 'importResult', requestId: first.importRequestId, success: false, message: 'Synthetic native disk full' });
+  assert.match(app.node('content').innerHTML, /Keep after native failure/);
+  assert.doesNotMatch(app.node('content').innerHTML, /Incoming retry task/);
+  assert.match(app.node('toast').textContent, /无法导入.*Synthetic native disk full/);
+  app.receive({ type: 'state', state: original });
+  app.receive({ type: 'import', state: candidate, validated: true });
+  const retry = app.last('saveState');
+  assert.notEqual(retry.importRequestId, first.importRequestId);
+  app.receive({ type: 'importResult', requestId: first.importRequestId, success: true, state: candidate });
+  assert.match(app.node('content').innerHTML, /Keep after native failure/);
+  assert.doesNotMatch(app.node('content').innerHTML, /Incoming retry task/);
+  app.receive({ type: 'importResult', requestId: retry.importRequestId, success: true, state: retry.state });
+  assert.match(app.node('content').innerHTML, /Incoming retry task/);
+  assert.doesNotMatch(app.node('content').innerHTML, /Keep after native failure/);
+});
+
+test('native import generation gates old batches and acknowledges the result before saving queued fresh data', () => {
+  const app = harness({ hash: '#tasks' }), original = app.ctx.CampusCore.emptyState();
+  original.manualTasks.push({ id: 'old-local', title: 'PRE_IMPORT_LOCAL', dueAt: null, status: 'open' });
+  app.receive({ type: 'state', state: original, stateGeneration: 4 });
+  const candidate = app.ctx.CampusCore.emptyState();
+  candidate.manualTasks.push({ id: 'restored-local', title: 'RESTORED_LOCAL', dueAt: null, status: 'open' });
+  app.receive({ type: 'import', state: candidate, validated: true, stateGeneration: 4 });
+  const request = app.last('saveState');
+  assert.equal(request.stateGeneration, 4);
+  assert.equal(app.node('app-shell').inert, true);
+  const sendsBefore = app.sent.length;
+  app.receive({ type: 'snapshot', snapshot: teamsSnapshot([task({ title: 'STALE_SNAPSHOT' })]), stateGeneration: 4 });
+  app.receive({ type: 'graphBatch', batchId: 'stale-batch', batch: graphBatch([{ id: 'old-graph', subject: 'STALE_GRAPH' }]), stateGeneration: 4 });
+  app.receive({ type: 'state', state: original, stateGeneration: 4 });
+  app.receive({ type: 'snapshot', snapshot: teamsSnapshot([task({ title: 'FRESH_SNAPSHOT' })]), stateGeneration: 5 });
+  app.receive({ type: 'graphBatch', batchId: 'fresh-batch', batch: graphBatch([{ id: 'new-graph', subject: 'FRESH_GRAPH' }]), stateGeneration: 5 });
+  assert.equal(app.sent.length, sendsBefore, 'pending import events cannot emit saves or Graph acknowledgements');
+  app.receive({ type: 'importResult', requestId: 'unrelated', success: true, state: candidate, stateGeneration: 5 });
+  assert.equal(app.node('app-shell').inert, true);
+  app.receive({ type: 'importResult', requestId: request.importRequestId, success: true, state: candidate, stateGeneration: 5 });
+  assert.equal(app.node('app-shell').inert, false);
+  const ackIndex = app.sent.findIndex(row => row.action === 'importResultApplied');
+  const firstSave = app.sent.findIndex((row, index) => index > sendsBefore - 1 && row.action === 'saveState');
+  assert.ok(ackIndex >= sendsBefore && firstSave > ackIndex, 'applied-state acknowledgement precedes every replayed save');
+  assert.equal(app.sent[ackIndex].stateGeneration, 5);
+  assert.equal(app.sent[ackIndex].requestId, request.importRequestId);
+  const saved = JSON.stringify(app.last('saveState').state);
+  assert.match(saved, /RESTORED_LOCAL/); assert.match(saved, /FRESH_SNAPSHOT/); assert.match(saved, /FRESH_GRAPH/);
+  assert.doesNotMatch(saved, /STALE_SNAPSHOT|STALE_GRAPH|PRE_IMPORT_LOCAL/);
+  assert.equal(app.last('graphBatchProcessed').batchId, 'fresh-batch');
+  assert.equal(app.last('graphBatchProcessed').stateGeneration, 5);
+  const saveCount = app.sent.filter(row => row.action === 'saveState').length;
+  for (const stateGeneration of [4, undefined]) {
+    app.receive({ type: 'state', state: original, stateGeneration });
+    app.receive({ type: 'snapshot', snapshot: teamsSnapshot([task({ title: 'LATE_OLD' })]), stateGeneration });
+    app.receive({ type: 'graphBatch', batchId: 'late-batch', batch: graphBatch([{ id: 'late-old' }]), stateGeneration });
+  }
+  assert.equal(app.sent.filter(row => row.action === 'saveState').length, saveCount);
+  app.click({ action: 'toggle-task', id: 'restored-local' });
+  assert.equal(app.last('saveState').stateGeneration, 5);
+  assert.match(JSON.stringify(app.last('saveState').state), /RESTORED_LOCAL/);
+  assert.doesNotMatch(JSON.stringify(app.last('saveState').state), /PRE_IMPORT_LOCAL|LATE_OLD/);
+});
+
+test('failed generated import applies native state, unlocks editing, and a retry cannot be completed by an old result', () => {
+  const app = harness({ hash: '#tasks' }), original = app.ctx.CampusCore.emptyState();
+  original.manualTasks.push({ id: 'safe', title: 'AUTHORITATIVE_ORIGINAL', dueAt: null, status: 'open' });
+  app.receive({ type: 'state', state: original, stateGeneration: 0 });
+  const candidate = app.ctx.CampusCore.emptyState();
+  app.receive({ type: 'import', state: candidate, validated: true, stateGeneration: 0 });
+  const first = app.last('saveState');
+  app.receive({ type: 'state', state: original, stateGeneration: 1 });
+  assert.equal(app.node('app-shell').inert, true, 'a state event alone must not clear the pending request');
+  app.receive({ type: 'importResult', requestId: first.importRequestId, success: false, state: original, stateGeneration: 1, message: 'Synthetic write failure' });
+  assert.equal(app.node('app-shell').inert, false);
+  assert.equal(app.last('importResultApplied').stateGeneration, 1);
+  assert.match(app.node('content').innerHTML, /AUTHORITATIVE_ORIGINAL/);
+  assert.match(app.node('toast').textContent, /Synthetic write failure/);
+  app.receive({ type: 'import', state: candidate, validated: true, stateGeneration: 1 });
+  const retry = app.last('saveState');
+  assert.equal(retry.stateGeneration, 1);
+  const ackCount = app.sent.filter(row => row.action === 'importResultApplied').length;
+  app.receive({ type: 'importResult', requestId: first.importRequestId, success: true, state: candidate, stateGeneration: 2 });
+  app.receive({ type: 'importResult', requestId: retry.importRequestId, success: true, state: candidate, stateGeneration: 0 });
+  assert.equal(app.node('app-shell').inert, true);
+  assert.equal(app.sent.filter(row => row.action === 'importResultApplied').length, ackCount);
+  app.receive({ type: 'importResult', requestId: retry.importRequestId, success: false, state: original, stateGeneration: 2 });
+  assert.equal(app.node('app-shell').inert, false);
+  app.click({ action: 'add-task' }); app.node('task-title').value = 'EDIT_AFTER_FAILURE'; app.submit('task-form');
+  assert.equal(app.last('saveState').stateGeneration, 2);
+  assert.match(JSON.stringify(app.last('saveState').state), /AUTHORITATIVE_ORIGINAL/);
+  assert.match(JSON.stringify(app.last('saveState').state), /EDIT_AFTER_FAILURE/);
+});
+
+test('non-state assistant completions cross import generations without retaining a permanently busy request', () => {
+  const app = harness({ themeEdition: true, hash: '#assistant' });
+  const original = app.ctx.CampusCore.emptyState();
+  Object.assign(original.settings, { setupWizardCompleted: true, setupWizardIntroVersion: '1.0.0', aiProvider: 'ollama', aiContextCategories: [] });
+  app.receive({ type: 'state', state: original, stateGeneration: 2 });
+  const request = sendAuditQuestion(app, 'FIRST_QUESTION');
+  app.receive({ type: 'import', state: original, validated: true, stateGeneration: 2 });
+  const imported = app.last('saveState');
+  app.receive({ type: 'assistantChunk', requestId: request.requestId, text: 'Completed ', stateGeneration: 2 });
+  app.receive({ type: 'assistantResponse', requestId: request.requestId, answer: 'Completed answer', providerUsed: 'ollama', stateGeneration: 2 });
+  app.receive({ type: 'importResult', requestId: imported.importRequestId, success: false, state: original, stateGeneration: 3 });
+  const next = sendAuditQuestion(app, 'SECOND_QUESTION');
+  assert.equal(next.stateGeneration, 3);
+  assert.match(app.node('content').innerHTML, /Completed answer/);
+});
+
+test('failed first-run import accepts the native empty state and unlocks another attempt', () => {
+  const app = harness({ hash: '#tasks' });
+  app.receive({ type: 'state', state: {}, stateGeneration: 0 });
+  const candidate = app.ctx.CampusCore.emptyState();
+  app.receive({ type: 'import', state: candidate, validated: true, stateGeneration: 0 });
+  const first = app.last('saveState');
+  app.receive({ type: 'importResult', requestId: first.importRequestId, success: false, state: {}, stateGeneration: 1 });
+  assert.equal(app.node('app-shell').inert, false);
+  assert.equal(app.last('importResultApplied').stateGeneration, 1);
+  app.receive({ type: 'import', state: candidate, validated: true, stateGeneration: 1 });
+  assert.notEqual(app.last('saveState').importRequestId, first.importRequestId);
+});
+
+test('authoritative account reset advances generation and late old Teams batches cannot restore cleared data', () => {
+  const app = harness({ hash: '#tasks' }), initial = app.ctx.CampusCore.emptyState();
+  initial.manualTasks.push({ id: 'personal', title: 'KEEP_PERSONAL_TASK', dueAt: null, status: 'open' });
+  app.receive({ type: 'state', state: initial, stateGeneration: 0 });
+  app.receive({ type: 'graphBatch', batchId: 'old-before-reset', batch: graphBatch([{ id: 'prior-account', subject: 'OLD_ACCOUNT_CONTENT' }]), stateGeneration: 0 });
+  assert.equal(app.last('saveState').stateGeneration, 0);
+  assert.match(JSON.stringify(app.last('saveState').state), /OLD_ACCOUNT_CONTENT/);
+  app.receive({ type: 'state', replaceState: true, state: initial, stateGeneration: 1 });
+  app.receive({ type: 'graphReset', stateGeneration: 1 });
+  assert.equal(app.last('saveState').stateGeneration, 1);
+  assert.doesNotMatch(JSON.stringify(app.last('saveState').state), /OLD_ACCOUNT_CONTENT/);
+  const savedCount = app.sent.filter(row => row.action === 'saveState').length;
+  app.receive({ type: 'snapshot', snapshot: teamsSnapshot([task({ title: 'LATE_OLD_ACCOUNT' })]), stateGeneration: 0 });
+  app.receive({ type: 'graphBatch', batchId: 'old-after-reset', batch: graphBatch([{ id: 'prior-late', subject: 'LATE_OLD_ACCOUNT' }]), stateGeneration: 0 });
+  const unexpected = app.ctx.CampusCore.emptyState();
+  unexpected.manualTasks.push({ id: 'unexpected', title: 'UNMARKED_FUTURE_STATE', dueAt: null, status: 'open' });
+  app.receive({ type: 'state', state: unexpected, stateGeneration: 99 });
+  assert.equal(app.sent.filter(row => row.action === 'saveState').length, savedCount);
+  app.receive({ type: 'graphBatch', batchId: 'new-after-reset', batch: graphBatch([{ id: 'new-account', subject: 'NEW_ACCOUNT_CONTENT' }]), stateGeneration: 1 });
+  const fresh = JSON.stringify(app.last('saveState').state);
+  assert.match(fresh, /KEEP_PERSONAL_TASK/); assert.match(fresh, /NEW_ACCOUNT_CONTENT/);
+  assert.doesNotMatch(fresh, /OLD_ACCOUNT_CONTENT|LATE_OLD_ACCOUNT|UNMARKED_FUTURE_STATE/);
+  assert.equal(app.last('graphBatchProcessed').batchId, 'new-after-reset');
+  assert.equal(app.last('graphBatchProcessed').stateGeneration, 1);
 });

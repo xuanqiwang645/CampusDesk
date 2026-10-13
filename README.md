@@ -69,6 +69,30 @@ CAMPUSDESK_INFO_PLIST="$PWD/Info-ThemeEdition.plist" bash build.sh
 
 主题版使用独立应用标识和图标；安装到 `~/Applications/CampusDesk Theme Edition.app` 可与原版并存。安装包不含个人登录状态、API 密钥、学校网址或同步数据。
 
+主题版构建产物为 `build/CampusDesk Theme Edition.app`（不会再使用原版的文件名）。从源码安装主题版：
+
+```sh
+CAMPUSDESK_INFO_PLIST="$PWD/Info-ThemeEdition.plist" bash Install.command
+```
+
+安装器只检查和备份所选版本，不要求另一版本退出；主题版数据目录为 `~/Library/Application Support/CampusDesk-local-campusdesk-mac-themeedition`。
+
+本地生成 DMG、ZIP 与可移植的校验文件（不上传）：
+
+```sh
+CAMPUSDESK_INFO_PLIST="$PWD/Info-ThemeEdition.plist" bash scripts/package-macos.sh
+# 进入脚本输出的安装包目录后，可校验下载/搬移后的文件：
+shasum -a 256 -c SHA256SUMS.txt
+```
+
+当前源码包含 **v1.1.0 Build 70 本地更新**，尚未替换上方 Build 55 公开下载。保留个人待办表单的年-月-日输入、今天/明天/不设截止快捷操作及独立小时、分钟数字滚轮；默认不设截止，仅填日期默认 23:59，按北京时间预览与保存。继续保留中文输入法及重复提交保护。
+
+Build 69 新增独立**行事历**：月视图与每日清单统一显示课程、明确截止时间的待办、校历和个人日程，支持分类筛选、全天/跨日事件的新增、编辑、删除。继续采用北京时间和已有假期、调休规则，不猜测缺失的截止日期；个人日程仅保存在本机，并纳入备份。
+
+主题版附带原生 **macOS 桌面小组件**（macOS 14 或更新版本）：“今日行事历”和“截止提醒”支持小/中/大尺寸；“下一节课”支持小/中尺寸，显示当前或下一节课、教室和开课/下课倒计时。截止提醒显示剩余时间与紧迫度条（不是完成进度）。安装后打开 CampusDesk，在桌面右键 → 编辑小组件 → 搜索 CampusDesk 并添加。组件点击可返回行事历的对应日期；应用保存后更新专用摘要，系统按 WidgetKit 刷新预算刷新，不能保证逐秒同步。摘要超过 24 小时会提示打开应用刷新，超出已缓存的 7 天范围后停止展示旧安排。读取失败会区分尚未同步、权限不足和摘要损坏。专用文件 `~/Library/Application Support/CampusDesk Widgets/agenda.json` 仅包含最多 100 项日程展示字段（标题、日期时间、类别、地点），不含账号、API 密钥、原网页或附件正文；组件没有网络权限。仅允许当前用户读取该文件，小组件通过精确到文件的只读沙箱权限访问，不开放 CampusDesk 的主数据目录。旧版 macOS 仍可使用应用内行事历。
+
+Build 68 优化 English Corner 搜索索引复用、界面翻译查找缓存和 GPA 悬停的逐帧更新；普通状态写盘改为串行后台合并，退出和导入前仍检查保存结果。UI 统一了间距、文字层级、圆角和键盘焦点，降低大面积阴影与悬停重绘，改善窄窗口和深色主题的可读性。总览分组保持不变：个人待办仍在左栏顶部，Teams 作业在其下，ManageBac 在右栏；保留完整截止时间、倒计时、紧急度条及 Liquid Glass 选项。
+
 ## 从源码安装（仓库原版）
 
 需要 macOS 12 或更新版本、可用的 Apple Command Line Tools，以及 Chrome 或 Edge（使用默认 Teams 模式时）。构建不需要 Node.js、Python、npm 或付费开发者账号。当前按本机架构构建；已在 Apple Silicon 上验证编译，未完成 Intel 实机验收。
@@ -88,7 +112,7 @@ bash build.sh
 CAMPUSDESK_BUILD_DIR="$(mktemp -d /private/tmp/CampusDesk-build.XXXXXX)" bash build.sh
 ```
 
-默认产物是 `build/CampusDesk.app`，使用本机临时签名，**没有 Developer ID 公证**。请自行核对源码；不要全局关闭 Gatekeeper。
+默认原版产物是 `build/CampusDesk.app`，使用本机持久签名身份以保持升级后的钥匙串访问，**没有 Developer ID 公证**。请自行核对源码；不要全局关闭 Gatekeeper。
 
 ### 学校入口
 

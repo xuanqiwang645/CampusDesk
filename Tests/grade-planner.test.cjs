@@ -60,3 +60,24 @@ test('local plans round-trip through state validation and are isolated by course
   state.settings.gradePlans[P.key(c)].overrides[0].score=101;
   assert.throws(()=>Core.validateState(state));
 });
+
+test('weighted boundaries and tolerated displayed weights remain consistent with rendered GPA', () => {
+  for (const weights of [[21,52,27], [33.33,33.33,33.33], [33.335,33.335,33.335]]) {
+    for (const score of [0,60,70,80,90,100]) {
+      const c = {...course(), gradeComponents: weights.map((weight,i) => ({name:'Category '+i,weight,percentage:score}))};
+      const result = P.evaluate(c);
+      assert.equal(result.reason, null);
+      assert.equal(result.projectedPercent, score, JSON.stringify({weights,score}));
+      assert.equal(P.aggregate([c], {}, Core.gradePoints).gpa, Core.gradePoints(score));
+      const planner = P.create({Core,getState:()=>Core.emptyState(),isEnglish:()=>false,esc:String,persist:()=>{},render:()=>{},openCourse:()=>{}});
+      assert.doesNotThrow(() => planner.goal([c]));
+      assert.doesNotThrow(() => planner.summary([c]));
+    }
+  }
+  const nearBoundary = {...course(),gradeComponents:[{name:'A',weight:100,percentage:89.999}]};
+  assert.equal(P.aggregate([nearBoundary], {}, Core.gradePoints).gpa, 3, 'a real sub-boundary mark is not rounded into the higher band');
+  const c = {...course(),gradeComponents:[{name:'A',weight:50.0025,percentage:80},{name:'B',weight:50.0025,percentage:null}]};
+  const result = P.evaluate(c, {target:90});
+  near(result.heldPoints,40); near(result.adjustableWeight,50); near(result.required,100);
+  assert.equal(P.evaluate({...c,gradeComponents:[{name:'A',weight:100,percentage:90},{name:'B',weight:0.02,percentage:90}]}).reason,'weight-total');
+});

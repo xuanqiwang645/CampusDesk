@@ -1,0 +1,66 @@
+{
+  "name": "campusdesk",
+  "version": "0.5.13",
+  "private": true,
+  "description": "CampusDesk school dashboard",
+  "author": "xuanqiwang645",
+  "license": "MIT",
+  "main": "Windows/main.cjs",
+  "scripts": {
+    "start:windows": "electron .",
+    "test:windows": "node --test Tests/windows-*.test.cjs",
+    "build:windows": "electron-builder --win nsis --x64 --arm64 --publish never"
+  },
+  "dependencies": {
+    "@azure/msal-node": "7.0.0",
+    "@napi-rs/canvas": "1.0.9",
+    "fast-xml-parser": "5.11.1",
+    "fflate": "0.8.3",
+    "pdfjs-dist": "6.3.289",
+    "tesseract.js": "7.0.0"
+  },
+  "devDependencies": {
+    "electron": "44.4.5",
+    "electron-builder": "26.15.3"
+  },
+  "build": {
+    "appId": "local.campusdesk.windows",
+    "productName": "CampusDesk",
+    "directories": {
+      "output": "dist-windows"
+    },
+    "files": [
+      "Windows/*.cjs",
+      "Windows/icon.png",
+      "Resources/**/*",
+      "LICENSE",
+      "package.json"
+    ],
+    "asarUnpack": [
+      "node_modules/@napi-rs/**/*",
+      "node_modules/tesseract.js-core/**/*",
+      "Windows/ocr-data/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "Windows/ocr-data",
+        "to": "ocr-data"
+      }
+    ],
+    "win": {
+      "target": "nsis",
+      "signAndEditExecutable": false
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "deleteAppDataOnUninstall": false,
+      "artifactName": "CampusDesk-${version}-Windows-Setup.${ext}"
+    }
+  },
+  "optionalDependencies": {
+    "@napi-rs/canvas-win32-arm64-msvc": "^1.0.9",
+    "@napi-rs/canvas-win32-x64-msvc": "^1.0.9"
+  }
+}

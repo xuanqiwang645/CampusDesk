@@ -1,0 +1,43 @@
+#task-dialog { width: min(600px, calc(100vw - 32px)); max-height: calc(100vh - 32px); padding: 28px; overflow-y: auto; box-sizing: border-box; color: var(--text, #233f3b); }
+#task-dialog .dialog-heading { margin-bottom: 8px; }
+#task-dialog .dialog-heading h2 { font-size: 24px; letter-spacing: -.4px; }
+#task-dialog .task-local-note { font-size: 12px; line-height: 1.6; margin: 0 0 22px; }
+#task-dialog #task-form > label { margin: 0; font-size: 13px; }
+#task-dialog #task-title { margin-top: 8px; height: 48px; box-sizing: border-box; }
+#task-dialog .task-deadline-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin: 24px 0 12px; }
+#task-dialog .task-deadline-heading strong { font-size: 14px; font-weight: 600; }
+#task-dialog .task-deadline-heading span { font-size: 11px; color: var(--muted, #6d7c70); }
+#task-dialog .task-deadline-fields { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 20px; padding: 18px; border: 1px solid var(--line, #ccded3); border-radius: 18px; background: var(--card, #fff); }
+#task-dialog .task-date-panel, #task-dialog .task-time-picker { min-width: 0; }
+#task-dialog .task-deadline-fields label { margin: 0; font-size: 12px; }
+#task-dialog #task-due-date { margin-top: 10px; padding: 12px; width: 100%; box-sizing: border-box; font-size: 15px; font-variant-numeric: tabular-nums; }
+#task-dialog #task-due-date::placeholder { font-size: 13px; }
+#task-dialog .task-date-shortcuts { display: flex; flex-wrap: wrap; gap: 6px; margin: 12px 0; }
+#task-dialog .task-date-shortcuts button { padding: 6px 10px; border: 1px solid var(--line, #ccded3); border-radius: 8px; background: transparent; color: inherit; font: inherit; font-size: 11px; cursor: pointer; }
+#task-dialog .task-date-shortcuts button:hover { border-color: var(--teal, #246b57); background: rgba(100, 150, 126, .08); }
+#task-dialog .task-date-shortcuts button:focus-visible, #task-dialog .task-number-wheel:focus-visible { outline: 2px solid var(--teal, #246b57); outline-offset: 3px; }
+#task-dialog .field-hint { font-size: 11px; line-height: 1.65; margin: 8px 0 0; }
+#task-dialog .task-time-toggle { display: flex; align-items: center; gap: 7px; cursor: pointer; line-height: 20px; }
+#task-dialog #task-time-custom { width: 16px; height: 16px; margin: 0; padding: 0; flex: 0 0 16px; accent-color: var(--teal, #246b57); }
+#task-dialog .task-time-wheels { display: grid; grid-template-columns: minmax(0, 1fr) 12px minmax(0, 1fr); align-items: end; gap: 5px; margin-top: 10px; }
+#task-dialog .task-wheel-label { display: block; text-align: center; font-size: 10px; color: var(--muted, #6d7c70); margin-bottom: 5px; }
+#task-dialog .task-wheel-colon { align-self: center; margin-top: 18px; text-align: center; font-size: 22px; font-weight: 600; color: var(--teal, #246b57); }
+#task-dialog .task-number-wheel { height: 120px; box-sizing: border-box; padding: 40px 0; overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; scroll-snap-type: y mandatory; scrollbar-width: none; border-radius: 12px; background: linear-gradient(to bottom, rgba(100, 150, 126, .035) 0 40px, rgba(100, 150, 126, .15) 40px 80px, rgba(100, 150, 126, .035) 80px); font-variant-numeric: tabular-nums; user-select: none; -webkit-user-select: none; }
+#task-dialog .task-number-wheel::-webkit-scrollbar { display: none; }
+#task-dialog .task-wheel-option { height: 40px; line-height: 40px; box-sizing: border-box; scroll-snap-align: center; text-align: center; font-size: 18px; color: var(--muted, #6d7c70); cursor: pointer; }
+#task-dialog .task-wheel-option[aria-selected="true"] { color: var(--teal, #246b57); font-size: 25px; font-weight: 650; }
+#task-dialog .task-time-picker[data-enabled="false"] .task-time-wheels { opacity: .45; }
+#task-dialog .task-number-wheel[aria-disabled="true"] { pointer-events: none; overflow-y: hidden; }
+#task-dialog input[aria-invalid="true"] { border-color: #b64e40; }
+#task-dialog .task-deadline-preview { padding: 13px 15px; margin: 12px 0 0; border-left: 3px solid var(--teal, #246b57); border-radius: 4px 12px 12px 4px; background: rgba(100, 150, 126, .08); color: inherit; font-size: 13px; font-weight: 550; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+#task-dialog .task-form-error { color: #b64e40; font-size: 12px; margin: 10px 0 0; line-height: 1.6; }
+#task-dialog .task-form-error[hidden] { display: none; }
+#task-dialog .dialog-actions { margin-top: 22px; }
+#task-dialog .dialog-actions .button { min-height: 44px; }
+@media (max-width: 480px) {
+  #task-dialog { padding: 20px; }
+  #task-dialog .task-deadline-fields { grid-template-columns: 1fr; gap: 16px; padding: 14px; }
+  #task-dialog .task-time-picker { border-top: 1px solid var(--line, #ccded3); padding-top: 14px; }
+  #task-dialog .task-time-wheels { max-width: 230px; margin: 10px auto 0; }
+  #task-dialog .task-deadline-heading { flex-wrap: wrap; gap: 4px; }
+}

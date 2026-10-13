@@ -50,3 +50,16 @@ test('explicit source dates take precedence and cached tasks use their own term'
   assert.equal(Core.getTasks(state)[0].dueAt, '2027-01-17T01:15:00.000Z');
   assert.equal(state.snapshots.managebac.example.tasks[0].dueAt, undefined);
 });
+
+test('Chinese evening deadlines preserve their day period and unclear periods stay unresolved', () => {
+  for (const period of ['下午', '晚上', '晚间']) {
+    assert.equal(Core.resolveTaskDeadline({requirements:'提交截止：2026年9月28日 '+period+'9:00'}).dueAt, '2026-09-28T13:00:00.000Z');
+  }
+  assert.equal(parse('2026年9月28日 早上9:00').dueAt, '2026-09-28T01:00:00.000Z');
+  for (const period of ['中午','午间','傍晚','凌晨','半夜','午夜','深夜']) {
+    assert.equal(parse('2026年9月28日 '+period+'1:00').dueAt, null, period);
+  }
+  assert.equal(parse('2026年9月28日 晚上13:00').dueAt, null);
+  assert.equal(parse('2026年9月28日 晚上12:00').dueAt, null);
+  assert.equal(parse('2026年9月28日 晚上9:00 AM').dueAt, null);
+});

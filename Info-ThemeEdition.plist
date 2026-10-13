@@ -19,7 +19,7 @@
 	<key>CFBundleShortVersionString</key>
 	<string>1.1.0</string>
 	<key>CFBundleVersion</key>
-  <string>55</string>
+	<string>70</string>
 	<key>CampusDeskReleaseName</key>
 	<string>Super Orion</string>
 	<key>CFBundleGetInfoString</key>
@@ -41,6 +41,14 @@
 	</dict>
 	<key>CFBundleURLTypes</key>
 	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>CampusDesk calendar</string>
+			<key>CFBundleURLSchemes</key>
+			<array><string>campusdesk-theme</string></array>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+		</dict>
 		<dict>
 			<key>CFBundleURLName</key>
 			<string>CampusDesk Microsoft sign-in</string>

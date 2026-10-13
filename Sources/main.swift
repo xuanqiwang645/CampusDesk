@@ -3,6 +3,7 @@ import WebKit
 import UniformTypeIdentifiers
 import PDFKit
 import Vision
+import WidgetKit
 
 let campusDeskBundleIdentifier = Bundle.main.bundleIdentifier ?? "local.campusdesk.mac"
 let campusDeskSupportFolderName = campusDeskBundleIdentifier == "local.campusdesk.mac"
@@ -71,13 +72,13 @@ enum StateReadError: LocalizedError {
     var errorDescription: String? { "文件不是有效的 CampusDesk 备份，或超过 25 MiB。" }
 }
 
+let nativeStateValidator: Result<CampusStateValidator, Error> = Result {
+    guard let resources = Bundle.main.resourceURL else { throw StateReadError.invalid }
+    return try CampusStateValidator(resources: resources, themeEdition: campusDeskBundleIdentifier == "local.campusdesk.mac.themeedition")
+}
+
 func readSavedState(_ url: URL) throws -> [String: Any] {
-    guard CampusSecurity.isRegularNonSymlinkFile(url, maximumBytes: CampusSecurity.maximumStateBytes) else { throw StateReadError.invalid }
-    let data = try Data(contentsOf: url)
-    guard data.count <= CampusSecurity.maximumStateBytes,
-          let candidate = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-          CampusSecurity.validStateEnvelope(candidate) else { throw StateReadError.invalid }
-    return candidate
+    try nativeStateValidator.get().read(url, schools: schoolEndpoints.frontend)
 }
 
 final class SchoolBrowser: NSObject, WKNavigationDelegate, WKUIDelegate, NSWindowDelegate {
@@ -436,6 +437,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
     var graphSigningIn = false
     var pendingGraphBatches = Set<String>()
     var assistantRequestsInFlight = Set<String>()
+    var assistantRequestHandles: [String: AssistantRequestHandle] = [:]
     var assistantModelRequestsInFlight = Set<String>()
     var assistantKeyRecoveryInFlight = false
     var pendingGraphCheckpoint: [String: Any]?
@@ -444,7 +446,54 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
     var graphLocalWarnings: [String] = []
     var graphSaveFailed = false
     var stateDurable = true
+    var pendingStateSave: UInt64?
+    var stateSaveNeedsTeamsAutoStart = false
+    var stateSaveTeamsAutoFocus = "all"
+    var stateBridge = CampusStateBridgeBoundary()
+    var resumeAfterImportAcknowledgement = false
+    var pendingAgendaDay: String?
+    var widgetTimer: Timer?
+    var pendingWidgetWrite: UInt64?
+    var widgetForceRefresh = false
+    var widgetError: String?
+    var widgetsSupported: Bool {
+        if #available(macOS 14.0, *) {
+            return campusDeskBundleIdentifier == "local.campusdesk.mac.themeedition"
+                && FileManager.default.fileExists(atPath: Bundle.main.bundleURL.appendingPathComponent("Contents/PlugIns/CampusDeskWidgets.appex").path)
+        }
+        return false
+    }
+    var widgetSnapshotURL: URL {
+        FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/CampusDesk Widgets/agenda.json")
+    }
+    lazy var widgetWriter: CampusLatestValueWriter<CampusAgendaPublicationRequest> = {
+        let publisher = CampusAgendaPublication(resources: resources, target: widgetSnapshotURL)
+        return CampusLatestValueWriter(label: "CampusDesk.widget-publisher", delay: 1, write: { request in
+            if try publisher.publish(state: request.state, force: request.force) {
+                WidgetCenter.shared.reloadTimelines(ofKind: "CampusDesk.Today")
+                WidgetCenter.shared.reloadTimelines(ofKind: "CampusDesk.Deadlines")
+                WidgetCenter.shared.reloadTimelines(ofKind: "CampusDesk.NextClass")
+            }
+        }, completion: { [weak self] receipt in self?.completeWidgetWrite(receipt) })
+    }()
+    let eventEncoder = CampusJSONEventEncoder()
+    lazy var stateWriter: CampusLatestValueWriter<CampusStateValidator.PreparedState> = {
+        let target = stateURL
+        let previous = dataFolder.appendingPathComponent("state.previous.json")
+        return CampusLatestValueWriter(label: "CampusDesk.state-writer", write: { candidate in
+            _ = try nativeStateValidator.get().writePrepared(candidate, to: target, previous: previous)
+        }, completion: { [weak self] receipt in self?.completeStateWrite(receipt) })
+    }()
+    lazy var teamsStatusWriter: CampusLatestValueWriter<[String: Any]> = {
+        let target = teamsAutoStatusURL
+        return CampusLatestValueWriter(label: "CampusDesk.teams-status-writer", delay: 0.2, write: { event in
+            let data = try JSONSerialization.data(withJSONObject: event)
+            guard data.count <= 262_144 else { return }
+            try CampusStateValidator.writePrivate(data, to: target)
+        })
+    }()
     var canSaveState = true
+    var importFailurePaused = false
     var ready = false
     var freshThemeSetupInProgress = false
     var refreshMinutes = 15
@@ -496,6 +545,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         window.minSize = NSSize(width: 900, height: 640)
         window.isReleasedWhenClosed = false
         window.contentView = dashboard
+        for name in [NSWindow.didChangeOcclusionStateNotification, NSWindow.didMiniaturizeNotification,
+                     NSWindow.didDeminiaturizeNotification, NSWindow.willCloseNotification] {
+            NotificationCenter.default.addObserver(self, selector: #selector(windowVisibilityChanged(_:)), name: name, object: window)
+        }
         window.center(); window.makeKeyAndOrderFront(nil)
         dashboard.loadFileURL(resources.appendingPathComponent("index.html"), allowingReadAccessTo: resources)
         notifications.onEvent = { [weak self] event in self?.emit(event) }
@@ -517,7 +570,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         let menu = NSMenu()
         let appItem = NSMenuItem(); let appMenu = NSMenu()
         appMenu.addItem(withTitle: "显示学习看板", action: #selector(showDashboard), keyEquivalent: "1").target = self
-        appMenu.addItem(withTitle: "刷新学校数据", action: #selector(sync), keyEquivalent: "r").target = self
+        appMenu.addItem(withTitle: "刷新学校数据", action: #selector(manualSync), keyEquivalent: "r").target = self
         appMenu.addItem(.separator())
         appMenu.addItem(withTitle: "退出 CampusDesk", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         appItem.submenu = appMenu; menu.addItem(appItem)
@@ -532,7 +585,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         statusItem.button?.title = "◷ 学习看板"
         let tray = NSMenu()
         tray.addItem(withTitle: "打开学习看板", action: #selector(showDashboard), keyEquivalent: "").target = self
-        tray.addItem(withTitle: "刷新学校数据", action: #selector(sync), keyEquivalent: "").target = self
+        tray.addItem(withTitle: "刷新学校数据", action: #selector(manualSync), keyEquivalent: "").target = self
         tray.addItem(withTitle: "打开希悦", action: #selector(openSeiue), keyEquivalent: "").target = self
         tray.addItem(withTitle: "打开 ManageBac", action: #selector(openManageBac), keyEquivalent: "").target = self
         tray.addItem(withTitle: "打开 Microsoft Teams", action: #selector(openTeams), keyEquivalent: "").target = self
@@ -592,12 +645,72 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
     }
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool { showDashboard(); return true }
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        flushPendingStateWrites()
+        guard !stateDurable, !state.isEmpty else { return .terminateNow }
+        let alert = NSAlert()
+        alert.messageText = "仍有数据未能保存"
+        alert.informativeText = "请取消退出并导出当前数据，或检查磁盘空间和数据目录权限。继续退出将丢失尚未保存的修改。"
+        alert.addButton(withTitle: "取消退出"); alert.addButton(withTitle: "仍然退出")
+        return alert.runModal() == .alertFirstButtonReturn ? .terminateCancel : .terminateNow
+    }
     func applicationWillTerminate(_ notification: Notification) {
+        assistantRequestHandles.values.forEach { $0.cancel() }
+        assistantRequestHandles.removeAll()
         teamsLoginRetryTimer?.invalidate()
         teamsBrowserBridge.cancel(); teamsAutoBridge.cancel(); teamsGraph.cancel()
         workers.values.forEach { $0.cancel() }
+        flushPendingStateWrites()
+        teamsStatusWriter.flush()
+        widgetTimer?.invalidate()
+        if widgetsSupported { widgetWriter.flush() }
     }
     @objc func showDashboard() { window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true) }
+    func application(_ application: NSApplication, open urls: [URL]) {
+        guard campusDeskBundleIdentifier == "local.campusdesk.mac.themeedition",
+              let day = urls.compactMap({ CampusAgendaLink.day(from: $0) }).first else { return }
+        pendingAgendaDay = day
+        if window != nil { showDashboard() }
+        deliverAgendaNavigation()
+    }
+    func deliverAgendaNavigation() {
+        guard ready, let day = pendingAgendaDay else { return }
+        pendingAgendaDay = nil
+        emit(["type": "navigate", "page": "calendar", "date": day])
+    }
+    func queueWidgetProjection(force: Bool = false) {
+        guard widgetsSupported, state["version"] as? Int == 1 else { return }
+        widgetError = nil
+        widgetForceRefresh = widgetForceRefresh || force
+        pendingWidgetWrite = widgetWriter.submit(CampusAgendaPublicationRequest(state: state, force: widgetForceRefresh))
+        if force { emitWidgetsStatus() }
+    }
+    func completeWidgetWrite(_ receipt: CampusLatestValueWriter<CampusAgendaPublicationRequest>.Receipt) {
+        guard pendingWidgetWrite == receipt.revision else { return }
+        pendingWidgetWrite = nil
+        widgetForceRefresh = false
+        if case .failure = receipt.result { widgetError = "小组件摘要未能保存，请检查磁盘空间和数据目录权限后重试。" }
+        else { widgetError = nil }
+        emitWidgetsStatus()
+    }
+    func emitWidgetsStatus() {
+        let modified = (try? FileManager.default.attributesOfItem(atPath: widgetSnapshotURL.path))?[.modificationDate] as? Date
+        emit(["type": "widgetsStatus", "supported": widgetsSupported, "busy": pendingWidgetWrite != nil,
+              "updatedAt": modified.map { ISO8601DateFormatter().string(from: $0) } as Any? ?? NSNull(),
+              "error": widgetError as Any? ?? NSNull()])
+    }
+    func configureWidgets() {
+        guard widgetsSupported else { emitWidgetsStatus(); return }
+        if stateDurable { queueWidgetProjection() }
+        if widgetTimer == nil {
+            widgetTimer = Timer.scheduledTimer(withTimeInterval: 300, repeats: true) { [weak self] _ in
+                guard let self, self.stateDurable else { return }
+                self.queueWidgetProjection()
+            }
+            widgetTimer?.tolerance = 60
+        }
+        emitWidgetsStatus()
+    }
     var teamsPages: [[String: Any]] { validatedTeamsPages((state["settings"] as? [String: Any])?["teamsPages"] as? [[String: Any]] ?? []) }
     var teamsBrowserChoice: String { (state["settings"] as? [String: Any])?["teamsBrowser"] as? String == "edge" ? "edge" : "chrome" }
     var teamsBrowserAutomation: Bool { (state["settings"] as? [String: Any])?["teamsBrowserAutomation"] as? Bool ?? false }
@@ -605,11 +718,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
     var teamsMode: String { (state["settings"] as? [String: Any])?["teamsMode"] as? String == "browser" ? "browser" : "graph" }
     var graphIncludeChats: Bool { (state["settings"] as? [String: Any])?["graphIncludeChats"] as? Bool ?? true }
     @objc func sync() {
-        if freshThemeSetupInProgress { return }
+        guard !freshThemeSetupInProgress, !importFailurePaused, stateBridge.awaitingImportRequestID == nil else { return }
         for worker in workers.values { worker.start() }
         syncTeams()
     }
+    @objc func manualSync() { importFailurePaused = false; sync() }
     func syncTeams() {
+        guard !importFailurePaused, stateBridge.awaitingImportRequestID == nil else { return }
         if teamsMode == "graph" { syncGraph() }
         else if teamsAutoDiscover { startTeamsAuto() }
         else { runTeamsBrowser("sync") }
@@ -618,8 +733,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         stopTeamsAuto(message: "Mac 已休眠，已保留读取结果；唤醒后继续检查")
         teamsBrowserBridge.cancel(); cancelGraphSync()
         workers.values.forEach { $0.cancel() }
+        flushPendingStateWrites()
+        teamsStatusWriter.flush()
+        if widgetsSupported { widgetWriter.flush() }
     }
-    @objc func wokeUp() { updateCountdown(); DispatchQueue.main.asyncAfter(deadline: .now() + 4) { [weak self] in self?.sync() } }
+    @objc func wokeUp() {
+        updateCountdown()
+        if stateDurable { queueWidgetProjection() }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 4) { [weak self] in self?.sync() }
+    }
     @objc func openSeiue() { openSource("seiue", raw: nil) }
     @objc func openManageBac() { openSource("managebac", raw: nil) }
     @objc func openTeams() { openSource("teams", raw: nil) }
@@ -639,8 +761,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
             browser.onCapture = { [weak self] web, source, selectionOnly in self?.capture(web, source: source, selectionOnly: selectionOnly) }
             browser.onReturn = { [weak self] in self?.window.makeKeyAndOrderFront(nil) }
             browser.onConnected = { [weak self] snapshot in
-                self?.emit(["type": "snapshot", "snapshot": snapshot])
-                self?.workers[source]?.start()
+                guard let self, !self.importFailurePaused, self.stateBridge.awaitingImportRequestID == nil else { return }
+                self.emit(["type": "snapshot", "snapshot": snapshot])
+                self.workers[source]?.start()
             }
             browsers[source] = browser
         }
@@ -669,6 +792,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         }
     }
     func runTeamsBrowser(_ operation: String, selectionOnly: Bool = false) {
+        guard !importFailurePaused, stateBridge.awaitingImportRequestID == nil else { return }
         guard teamsMode == "browser" else { emitGraphStatus(); return }
         guard !teamsAutoBridge.isRunning else {
             status("teams", "Teams 正在自动遍历页面；请先停止自动读取再手动读取当前页", true); return
@@ -680,8 +804,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
             status("teams", "请在浏览器打开 Teams 频道，再点击「关注浏览器当前频道」", false); return
         }
         status("teams", operation == "sync" ? "正在读取浏览器中已打开的关注页面…" : "正在读取浏览器当前 Teams 页面…", true)
+        let expectedStateGeneration = stateBridge.generation
         teamsBrowserBridge.run(operation: operation, browser: teamsBrowserChoice, pages: teamsPages, selectionOnly: selectionOnly) { [weak self] result in
-            guard let self = self else { return }
+            guard let self, self.stateBridge.generation == expectedStateGeneration else { return }
             // Failure snapshots still record a failed attempt while Core retains the
             // last readable cache; never hide a login/parse failure behind old data.
             let snapshots = result["snapshots"] as? [[String: Any]] ?? []
@@ -712,7 +837,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         if state.isEmpty {
             state = ["version": 1, "settings": [String: Any](),
                      "snapshots": ["seiue": [String: Any](), "managebac": [String: Any](), "teams": [String: Any]()],
-                     "manualTasks": [Any](), "taskChecks": [String: Any](), "feedbackRead": [String: Any](), "gradeHistory": [Any]()]
+                     "manualTasks": [Any](), "taskChecks": [String: Any](), "feedbackRead": [String: Any](), "gradeHistory": [Any](), "changeLog": [Any]()]
         }
         var settings = state["settings"] as? [String: Any] ?? [:]
         // An unconfigured Graph client cannot sign in. Preserve the browser grant
@@ -747,12 +872,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         if event["updatedAt"] == nil { event["updatedAt"] = ISO8601DateFormatter().string(from: Date()) }
         // This small local status file contains counts and coverage, not messages
         // from Teams. It also makes interrupted native runs diagnosable.
-        if let encoded = json(event), encoded.utf8.count <= 262_144 {
-            do {
-                try Data(encoded.utf8).write(to: teamsAutoStatusURL, options: .atomic)
-                try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: teamsAutoStatusURL.path)
-            } catch { /* Losing status must not overwrite or discard saved snapshots. */ }
-        }
+        // Diagnostic progress can be coalesced independently from durable
+        // snapshots; a failed status write never acknowledges school data.
+        teamsStatusWriter.submit(event)
         emit(event)
         if teamsMode == "browser", teamsAutoDiscover {
             status("teams", event["message"] as? String ?? "等待 Teams 自动读取", event["running"] as? Bool ?? false)
@@ -783,6 +905,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         return result
     }
     func startTeamsAuto(loginOnly: Bool = false, focus: String = "all") {
+        guard !importFailurePaused, stateBridge.awaitingImportRequestID == nil else { return }
         guard teamsMode == "browser" else { emitGraphStatus(); return }
         guard !teamsAutoBridge.isRunning, !teamsBrowserBridge.isRunning else { return }
         teamsLoginRetryTimer?.invalidate(); teamsLoginRetryTimer = nil
@@ -791,6 +914,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
             teamsAutoProgress = ["running": false, "phase": "permission_required", "coverage": "unknown",
                                  "message": "请先在连接设置允许读取 Teams 浏览器页面，再登录 Teams"]
             emitTeamsAutoStatus(); return
+        }
+        if !loginOnly, pendingStateSave != nil {
+            // A just-edited setting may still be in the short write window.
+            // Resume this request after its real durable acknowledgement.
+            stateSaveNeedsTeamsAutoStart = true
+            stateSaveTeamsAutoFocus = focus
+            return
         }
         if !loginOnly && (!canSaveState || !stateDurable) {
             teamsAutoProgress = ["running": false, "phase": "storage_error", "coverage": "partial",
@@ -802,10 +932,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         // Announce before launch; the bridge may reject synchronously.
         emit(["type": "teamsAutoStatus", "running": true, "phase": teamsAutoProgress["phase"]!,
               "coverage": "partial", "message": teamsAutoProgress["message"]!])
+        var expectedStateGeneration = stateBridge.generation
         teamsAutoBridge.run(browser: teamsBrowserChoice, operation: loginOnly ? "login" : "sync", checkpointPath: teamsAutoCheckpointURL.path,
                             includeChats: graphIncludeChats, maximumSeconds: loginOnly ? 45 : 1200, focus: focus, attachmentCache: teamsAttachmentCache(),
                             onEvent: { [weak self] event in
-            guard let self = self else { return }
+            guard let self, self.stateBridge.generation == expectedStateGeneration else { return }
             switch event["type"] as? String {
             case "attachment": self.parseTeamsAttachment(event)
             case "attachmentUnchanged":
@@ -819,11 +950,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
                 }
                 if let account = snapshot["accountId"] as? String, !account.isEmpty,
                    !self.bindTeamsBrowserAccount(account) { return }
+                expectedStateGeneration = self.stateBridge.generation
                 self.emit(["type": "snapshot", "snapshot": snapshot])
             case "progress", "done":
                 if let progress = event["status"] as? [String: Any] {
                     if let account = progress["accountId"] as? String, !account.isEmpty,
                        !self.bindTeamsBrowserAccount(account) { return }
+                    expectedStateGeneration = self.stateBridge.generation
                     self.teamsAutoProgress.merge(progress) { _, new in new }
                 }
                 if event["type"] as? String == "done" { self.teamsAutoProgress["running"] = false }
@@ -832,7 +965,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
             default: break
             }
         }, completion: { [weak self] error in
-            guard let self = self else { return }
+            guard let self, self.stateBridge.generation == expectedStateGeneration else { return }
             if let error = error { self.handleTeamsAutoError(error) }
             self.teamsAutoProgress["running"] = false
             self.emitTeamsAutoStatus()
@@ -896,25 +1029,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
             handleTeamsAutoError(["code": "account_unknown", "message": "无法核对 Teams 账号身份，已暂停读取以避免混合不同账号的数据"])
             return false
         }
-        if teamsBrowserAccount == account { return true }
+        let cachedAccountMismatch = CampusTeamsAccountState.needsReset(state, browserAccount: account)
+        if teamsBrowserAccount == account && !cachedAccountMismatch { return true }
         do {
-            if let previous = teamsBrowserAccount, previous != account {
+            if cachedAccountMismatch || (teamsBrowserAccount != nil && teamsBrowserAccount != account) {
                 guard let encoded = json(state) else { throw StateReadError.invalid }
                 let archive = dataFolder.appendingPathComponent("state.before-teams-account-change-" + UUID().uuidString + ".json")
                 try Data(encoded.utf8).write(to: archive, options: .atomic)
                 try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: archive.path)
                 let original = state
-                var snapshots = state["snapshots"] as? [String: Any] ?? [:]
-                snapshots["teams"] = [String: Any](); state["snapshots"] = snapshots
-                for key in ["taskChecks", "feedbackRead"] {
-                    if let values = state[key] as? [String: Any] { state[key] = values.filter { !$0.key.hasPrefix("teams:") } }
-                }
-                if var settings = state["settings"] as? [String: Any] {
-                    settings["teamsDueOverrides"] = [String: Any](); state["settings"] = settings
-                }
+                state = CampusTeamsAccountState.reset(state)
                 guard persistState() else { state = original; throw StateReadError.invalid }
                 notifications.sync(items: [], enabled: false)
-                emit(["type": "state", "state": state])
+                stateBridge.replaceState()
+                emit(["type": "state", "state": state, "replaceState": true])
             }
             let encoded = try JSONSerialization.data(withJSONObject: ["accountId": account])
             try encoded.write(to: teamsBrowserIdentityURL, options: .atomic)
@@ -936,7 +1064,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
     }
     func stopTeamsAuto(message: String = "自动读取已停止，已保留成功读取的内容") {
         attachmentGeneration = UUID()
-        let wasRunning = teamsAutoBridge.isRunning || teamsLoginRetryTimer != nil
+        let wasRunning = teamsAutoBridge.isRunning || teamsLoginRetryTimer != nil || stateSaveNeedsTeamsAutoStart
+        stateSaveNeedsTeamsAutoStart = false
+        stateSaveTeamsAutoFocus = "all"
         teamsLoginRetryTimer?.invalidate(); teamsLoginRetryTimer = nil
         teamsAutoBridge.cancel()
         if wasRunning {
@@ -946,9 +1076,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         }
     }
     func capture(_ web: WKWebView, source: String, selectionOnly: Bool = false) {
+        guard !importFailurePaused, stateBridge.awaitingImportRequestID == nil else { return }
         guard source != "teams" else { runTeamsBrowser("capture", selectionOnly: selectionOnly); return }
         guard let raw = web.url?.absoluteString, schoolURL(raw, source: source) != nil, let script = workers[source]?.script else { status(source, "请先打开已登录的学校页面", false); return }
+        let expectedStateGeneration = stateBridge.generation
         web.evaluateJavaScript(extractionScript(script, source: source)) { [weak self] value, error in
+            guard self?.stateBridge.generation == expectedStateGeneration else { return }
             guard error == nil, let text = value as? String, let data = text.data(using: .utf8), let snapshot = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { self?.status(source, "读取失败，请等待页面加载完成再试", false); return }
             self?.emit(["type": "snapshot", "snapshot": snapshot])
             let loginRequired = snapshot["loginRequired"] as? Bool == true
@@ -964,8 +1097,41 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         }
     }
     func emit(_ value: [String: Any]) {
-        guard ready, let payload = json(value) else { return }
-        dashboard.evaluateJavaScript("window.CampusDesk.receive(" + payload + ");", completionHandler: nil)
+        guard ready else { return }
+        let generation = stateBridge.generation
+        var event = value
+        event["stateGeneration"] = generation
+        let type = value["type"] as? String ?? ""
+        eventEncoder.encode(event, failure: { [weak self] in
+            guard let self, self.stateBridge.generation == generation,
+                  value["type"] as? String == "importResult" else { return }
+            // Keep the mutation barrier closed. A fresh dashboard will request
+            // the authoritative committed state, rather than unlock stale UI.
+            self.ready = false
+            self.dashboard.reload()
+        }) { [weak self] payload in
+            guard let self, self.ready else { return }
+            guard self.stateBridge.allowsDelivery(type: type, generation: generation) else { return }
+            let script = "window.CampusDesk.receive(" + payload + ");"
+            guard type == "importResult" else {
+                self.dashboard.evaluateJavaScript(script, completionHandler: nil)
+                return
+            }
+            self.dashboard.evaluateJavaScript(script) { [weak self] _, error in
+                guard error != nil, let self,
+                      self.stateBridge.generation == generation,
+                      self.stateBridge.awaitingImportRequestID == value["requestId"] as? String else { return }
+                self.ready = false
+                self.dashboard.reload()
+            }
+        }
+    }
+    @objc func windowVisibilityChanged(_ notification: Notification) {
+        emitWindowVisibility(forceHidden: notification.name == NSWindow.willCloseNotification)
+    }
+    func emitWindowVisibility(forceHidden: Bool = false) {
+        let visible = !forceHidden && window.isVisible && !window.isMiniaturized && window.occlusionState.contains(.visible)
+        emit(["type": "windowVisibility", "visible": visible])
     }
     func status(_ source: String, _ message: String, _ busy: Bool) { emit(["type": "status", "source": source, "message": message, "busy": busy]) }
     func webView(_ webView: WKWebView, runJavaScriptConfirmPanelWithMessage message: String, initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping (Bool) -> Void) {
@@ -979,14 +1145,43 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         guard message.webView === dashboard, message.frameInfo.isMainFrame,
               let url = message.frameInfo.request.url, CampusSecurity.isDashboardResourceURL(url, resources: resources),
               let body = message.body as? [String: Any], let action = body["action"] as? String else { return }
-        guard action.utf8.count <= 80, let bodyJSON = json(body), bodyJSON.utf8.count <= CampusSecurity.maximumStateBytes else { return }
+        // Leave room for the IPC wrapper; the state itself retains its 25 MiB cap.
+        guard action.utf8.count <= 80, let bodyJSON = json(body), bodyJSON.utf8.count <= CampusSecurity.maximumStateBytes + 4096 else { return }
+        if CampusStateBridgeBoundary.requiresCurrentState(action), !stateBridge.acceptsMutation(body["stateGeneration"]) {
+            if action == "saveState", body["imported"] as? Bool == true,
+               let requestID = body["importRequestId"] as? String,
+               requestID.range(of: "^[A-Za-z0-9-]{1,100}$", options: .regularExpression) != nil {
+                emit(["type": "importResult", "requestId": requestID, "success": false, "state": state,
+                      "message": "当前数据已更新，请重新选择备份后导入。"])
+            }
+            return
+        }
+        if CampusStateBridgeBoundary.resumesAfterImportFailure(action) {
+            importFailurePaused = false
+        }
         switch action {
         case "ready":
+            stateBridge.dashboardReloaded()
+            resumeAfterImportAcknowledgement = false
             ready = true; emit(["type": "schoolConfiguration", "config": schoolEndpoints.frontend]); emit(["type": "state", "state": state]); emitGraphStatus(); emitTeamsAutoStatus()
+            emitWindowVisibility()
+            deliverAgendaNavigation()
+            configureWidgets()
             if assistantKeyRecoveryInFlight { emit(["type": "assistantStatus", "deepSeekKeyConfigured": true, "deepSeekKeyState": "locked"]) }
             else { emit(CampusAssistantAI.status()) }
             configureTimer()
             DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in self?.sync() }
+        case "refreshWidgets":
+            flushPendingStateWrites()
+            if stateDurable { queueWidgetProjection(force: true) }
+            else { widgetError = "当前更改尚未保存；请先检查数据保存状态，再刷新小组件。" }
+            emitWidgetsStatus()
+        case "importResultApplied":
+            guard let requestID = body["requestId"] as? String,
+                  stateBridge.acknowledgeImport(requestID, generation: body["stateGeneration"]) else { return }
+            let shouldResume = resumeAfterImportAcknowledgement
+            resumeAfterImportAcknowledgement = false
+            if shouldResume { syncTeams() }
         case "assistantOpenGuide":
             guard campusDeskBundleIdentifier == "local.campusdesk.mac.themeedition",
                   let id = body["id"] as? String, let url = CampusAssistantSetupGuide.url(for: id) else { return }
@@ -1105,10 +1300,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
                 emit(["type": "assistantResponse", "requestId": requestID, "errorCode": "keyAccess"]); return
             }
             assistantRequestsInFlight.insert(requestID)
-            CampusAssistantAI.request(provider: provider, model: model, fallbackModel: fallbackModel, networkAvailable: networkAvailable, messages: messages) { [weak self] result in
+            let handle = CampusAssistantAI.request(provider: provider, model: model, fallbackModel: fallbackModel, networkAvailable: networkAvailable, messages: messages, onChunk: { [weak self] chunk in
+                DispatchQueue.main.async {
+                    guard let self, self.assistantRequestsInFlight.contains(requestID) else { return }
+                    var event: [String: Any] = ["type": "assistantChunk", "requestId": requestID, "text": chunk.text, "providerUsed": chunk.providerUsed]
+                    if let reason = chunk.fallbackReason { event["fallbackReason"] = reason }
+                    self.emit(event)
+                }
+            }) { [weak self] result in
                 DispatchQueue.main.async {
                     guard let self else { return }
                     self.assistantRequestsInFlight.remove(requestID)
+                    self.assistantRequestHandles.removeValue(forKey: requestID)
                     switch result {
                     case .success(let reply):
                         var event: [String: Any] = ["type": "assistantResponse", "requestId": requestID, "answer": reply.answer, "providerUsed": reply.providerUsed]
@@ -1119,6 +1322,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
                     }
                 }
             }
+            assistantRequestHandles[requestID] = handle
+        case "assistantCancelRequest":
+            guard let requestID = body["requestId"] as? String else { return }
+            assistantRequestHandles[requestID]?.cancel()
         case "saveSchoolConfiguration":
             guard let config = body["config"] as? [String: Any], let target = userSchoolConfigURL else { return }
             do {
@@ -1136,23 +1343,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
                 emit(["type": "schoolConfigurationError"])
             }
         case "saveState":
-            if let candidate = body["state"] as? [String: Any], CampusSecurity.validStateEnvelope(candidate) {
-                // Keep current edits exportable even if this session cannot write its state file.
-                let acceptedImport = body["imported"] as? Bool == true
-                if acceptedImport {
-                    stopTeamsAuto(message: "正在导入数据，自动读取已停止")
-                    teamsBrowserBridge.cancel()
-                    cancelGraphSync(); clearGraphIdentity()
-                    if graphSigningIn { graphAuth.signOut(); graphSigningIn = false }
-                    notifications.sync(items: [], enabled: false)
+            if body["imported"] as? Bool == true {
+                guard let requestID = body["importRequestId"] as? String,
+                      requestID.range(of: "^[A-Za-z0-9-]{1,100}$", options: .regularExpression) != nil else {
+                    status("app", "导入请求标识无效，请重新选择备份。", false); return
                 }
+                guard let candidate = body["state"] as? [String: Any] else {
+                    emit(["type": "importResult", "requestId": requestID, "success": false, "state": state, "message": "导入数据格式无效，原数据保持不变。"]); return
+                }
+                commitStateImport(candidate, requestID: requestID)
+                return
+            }
+            if let rawCandidate = body["state"] as? [String: Any] {
+                let candidate: CampusStateValidator.PreparedState
+                do { candidate = try nativeStateValidator.get().prepare(rawCandidate, schools: schoolEndpoints.frontend) }
+                catch {
+                    flushPendingStateWrites()
+                    stateDurable = false; graphSaveFailed = true
+                    cancelGraphSync(); stopTeamsAuto(message: "数据格式校验失败，自动读取已暂停")
+                    emit(["type": "state", "state": state])
+                    status("app", "数据未能保存，已保留上次可恢复数据：" + error.localizedDescription, false)
+                    return
+                }
+                // Keep current edits exportable even if this session cannot write its state file.
                 let previousTeamsMode = teamsMode
                 let previousIncludeChats = graphIncludeChats
                 let previousTeamsBrowser = teamsBrowserChoice
                 let wasReadingTeams = teamsBrowserAutomation
                 let wasAutoDiscovering = teamsAutoDiscover
                 let previousTeamsPages = json(teamsPages)
-                state = candidate; configureTimer()
+                state = candidate.state; configureTimer()
                 if previousTeamsMode != teamsMode || previousIncludeChats != graphIncludeChats {
                     cancelGraphSync()
                     if graphSigningIn { graphAuth.signOut(); graphSigningIn = false }
@@ -1171,29 +1391,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
                 if (wasReadingTeams && (!teamsBrowserAutomation || previousTeamsBrowser != teamsBrowserChoice)) || (wasAutoDiscovering && !teamsAutoDiscover) {
                     stopTeamsAuto(message: "浏览器自动读取设置已更改，已保留读取缓存")
                 }
-                stateDurable = persistState()
-                graphSaveFailed = !stateDurable
-                if stateDurable { persistGraphCheckpointIfReady() }
-                else if teamsMode == "graph" {
-                    cancelGraphSync()
-                    if graphSigningIn { graphAuth.signOut(); graphSigningIn = false }
-                    graphProgress["status"] = "paused"; graphProgress["coverage"] = "partial"
-                    graphProgress["partial"] = true; graphProgress["historyComplete"] = false
-                    graphProgress["message"] = "Teams 同步已暂停：本机数据未能保存。请导出当前数据并检查磁盘空间；25 MiB 以上的备份不会覆盖原文件。"
-                    emitGraphStatus()
-                }
-                else {
-                    stopTeamsAuto(message: "本机数据未能保存，自动读取已暂停；请检查磁盘空间并导出当前数据")
-                }
-                if stateDurable, teamsMode == "browser", teamsAutoDiscover, teamsBrowserAutomation,
-                   (!wasReadingTeams || !wasAutoDiscovering || previousTeamsMode != teamsMode || previousTeamsBrowser != teamsBrowserChoice) {
-                    DispatchQueue.main.async { [weak self] in self?.startTeamsAuto() }
-                }
-                if acceptedImport, teamsMode == "graph", graphAuth.status()["connected"] as? Bool == true {
-                    // Imported caches have no authenticated account binding. Preserve
-                    // other platforms, then refetch Teams for the connected account.
-                    DispatchQueue.main.async { [weak self] in self?.syncGraph() }
-                }
+                let startTeamsOnSuccess = teamsMode == "browser" && teamsAutoDiscover && teamsBrowserAutomation
+                    && (!wasReadingTeams || !wasAutoDiscovering || previousTeamsMode != teamsMode || previousTeamsBrowser != teamsBrowserChoice)
+                queueStatePersistence(candidate, startTeamsOnSuccess: startTeamsOnSuccess)
             }
         case "openSource": if let source = body["source"] as? String { openSource(source, raw: body["url"] as? String) }
         case "pinTeamsBrowserPage": runTeamsBrowser("pin")
@@ -1294,7 +1494,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
                 event["message"] = "已完成可访问分页，但部分内容超出本地缓存容量；请在 Teams 查看完整历史。"
             }
         }
-        if graphProgress["status"] as? String == "complete", !pendingGraphBatches.isEmpty {
+        if graphProgress["status"] as? String == "complete", !pendingGraphBatches.isEmpty || pendingStateSave != nil {
             event["coverage"] = "partial"; event["historyComplete"] = false
             event["message"] = "已读取可访问内容，正在保存最后的数据…"
         }
@@ -1367,20 +1567,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         pendingGraphBatches.removeAll(); pendingGraphCheckpoint = nil
     }
     func resetTeamsData() {
+        cancelGraphSync()
+        flushPendingStateWrites()
+        stateBridge.replaceState()
         graphLocalPartial = false; graphLocalWarnings = []
         notifications.sync(items: [], enabled: false)
         removeGraphCheckpoint()
-        guard state["version"] as? Int == 1 else { emit(["type": "graphReset"]); return }
-        var snapshots = state["snapshots"] as? [String: Any] ?? [:]
-        snapshots["teams"] = [String: Any]()
-        state["snapshots"] = snapshots
-        for key in ["taskChecks", "feedbackRead"] {
-            if let values = state[key] as? [String: Any] { state[key] = values.filter { !$0.key.hasPrefix("teams:") } }
+        if state["version"] as? Int == 1 {
+            state = CampusTeamsAccountState.reset(state)
+            stateDurable = persistState(); graphSaveFailed = !stateDurable
         }
-        if var settings = state["settings"] as? [String: Any] {
-            settings["teamsDueOverrides"] = [String: Any](); state["settings"] = settings
-        }
-        stateDurable = persistState(); graphSaveFailed = !stateDurable
+        emit(["type": "state", "state": state, "replaceState": true])
         emit(["type": "graphReset"])
     }
     func signInGraph() {
@@ -1407,6 +1604,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         clearGraphIdentity(); resetTeamsData(); emitGraphStatus()
     }
     func syncGraph() {
+        guard !importFailurePaused, stateBridge.awaitingImportRequestID == nil else { return }
         guard teamsMode == "graph", !graphSigningIn, !teamsGraph.isRunning else { return }
         if graphSaveFailed {
             stateDurable = persistState(); graphSaveFailed = !stateDurable
@@ -1456,21 +1654,122 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         teamsGraph.sync(checkpoint: checkpoint, includeChats: graphIncludeChats)
         emitGraphStatus()
     }
-    @discardableResult func persistState() -> Bool {
+    @discardableResult func persistState(prepared: CampusStateValidator.PreparedState? = nil) -> Bool {
+        // Imports, identity changes, and explicit retry retain their synchronous
+        // success/failure contract. An older autosave must finish first.
+        flushPendingStateWrites()
         guard canSaveState else { status("app", "本次无法保存到磁盘，请导出备份并检查数据目录权限", false); return false }
-        guard let encoded = json(state), encoded.utf8.count <= 26_214_400 else {
-            status("app", "数据超过 25 MiB，未覆盖磁盘备份；请导出当前数据", false); return false
-        }
         do {
-            if FileManager.default.fileExists(atPath: stateURL.path), (try? readSavedState(stateURL)) != nil {
-                let backup = dataFolder.appendingPathComponent("state.previous.json")
-                try Data(contentsOf: stateURL).write(to: backup, options: .atomic)
-                try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: backup.path)
-            }
-            try Data(encoded.utf8).write(to: stateURL, options: .atomic)
-            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: stateURL.path)
+            let validator = try nativeStateValidator.get()
+            let candidate = try prepared ?? validator.prepare(state, schools: schoolEndpoints.frontend)
+            state = try validator.writePrepared(candidate, to: stateURL,
+                previous: dataFolder.appendingPathComponent("state.previous.json"))
+            queueWidgetProjection()
             return true
         } catch { status("app", "保存失败：" + error.localizedDescription, false); return false }
+    }
+    func queueStatePersistence(_ candidate: CampusStateValidator.PreparedState, startTeamsOnSuccess: Bool) {
+        stateDurable = false
+        stateSaveNeedsTeamsAutoStart = stateSaveNeedsTeamsAutoStart || startTeamsOnSuccess
+        guard canSaveState else {
+            stateSaveNeedsTeamsAutoStart = false
+            handleStateSaveFailure("本次无法保存到磁盘，请导出备份并检查数据目录权限")
+            return
+        }
+        pendingStateSave = stateWriter.submit(candidate)
+    }
+    func completeStateWrite(_ receipt: CampusLatestValueWriter<CampusStateValidator.PreparedState>.Receipt,
+                            resumeTeams: Bool = true) {
+        // Never copy an old committed snapshot back over newer UI edits. A
+        // receipt may make only the latest submitted snapshot durable.
+        guard pendingStateSave == receipt.revision else { return }
+        pendingStateSave = nil
+        let shouldStartTeams = stateSaveNeedsTeamsAutoStart && resumeTeams
+        let teamsFocus = stateSaveTeamsAutoFocus
+        stateSaveNeedsTeamsAutoStart = false
+        stateSaveTeamsAutoFocus = "all"
+        switch receipt.result {
+        case .success:
+            stateDurable = true; graphSaveFailed = false
+            queueWidgetProjection()
+            persistGraphCheckpointIfReady()
+            if teamsMode == "graph", pendingGraphBatches.isEmpty,
+               graphProgress["status"] as? String == "complete" { emitGraphStatus() }
+            if shouldStartTeams, teamsMode == "browser", teamsAutoDiscover, teamsBrowserAutomation {
+                let expected = attachmentGeneration
+                DispatchQueue.main.async { [weak self] in
+                    guard let self, self.attachmentGeneration == expected else { return }
+                    self.startTeamsAuto(focus: teamsFocus)
+                }
+            }
+        case .failure(let error): handleStateSaveFailure("保存失败：" + error.localizedDescription)
+        }
+    }
+    func flushPendingStateWrites() {
+        guard pendingStateSave != nil else { return }
+        if let receipt = stateWriter.flush() { completeStateWrite(receipt, resumeTeams: false) }
+    }
+    func handleStateSaveFailure(_ message: String) {
+        stateDurable = false; graphSaveFailed = true
+        status("app", message, false)
+        if teamsMode == "graph" {
+            cancelGraphSync()
+            if graphSigningIn { graphAuth.signOut(); graphSigningIn = false }
+            graphProgress["status"] = "paused"; graphProgress["coverage"] = "partial"
+            graphProgress["partial"] = true; graphProgress["historyComplete"] = false
+            graphProgress["message"] = "Teams 同步已暂停：本机数据未能保存。请导出当前数据并检查磁盘空间；25 MiB 以上的备份不会覆盖原文件。"
+            emitGraphStatus()
+        } else {
+            stopTeamsAuto(message: "本机数据未能保存，自动读取已暂停；请检查磁盘空间并导出当前数据")
+        }
+    }
+    func commitStateImport(_ candidate: [String: Any], requestID: String) {
+        stateBridge.beginImport(requestID)
+        resumeAfterImportAcknowledgement = false
+        importFailurePaused = true
+        workers.values.forEach { $0.cancel() }
+        browsers.values.forEach { $0.stopSignInWatch() }
+        stopTeamsAuto(message: "正在导入数据，自动读取已停止")
+        teamsBrowserBridge.cancel(); cancelGraphSync()
+        flushPendingStateWrites()
+        let original = state
+        let wasDurable = stateDurable
+        do {
+            guard canSaveState else { throw CampusStateValidationError(message: "本机数据目录不可写。") }
+            let committed = try nativeStateValidator.get().commitImport(candidate, replacing: original, to: stateURL,
+                previous: dataFolder.appendingPathComponent("state.previous.json"), schools: schoolEndpoints.frontend) {
+                // Stop producers before removing their checkpoint files. If any
+                // revocation fails, no imported state is committed or displayed.
+                importFailurePaused = true
+                stopTeamsAuto(message: "正在导入数据，自动读取已停止")
+                teamsBrowserBridge.cancel(); cancelGraphSync()
+                if graphSigningIn { graphAuth.signOut(); graphSigningIn = false }
+                notifications.sync(items: [], enabled: false)
+                for url in [teamsBrowserIdentityURL, teamsAutoCheckpointURL, graphIdentityURL, graphCheckpointURL]
+                    where FileManager.default.fileExists(atPath: url.path) {
+                    try FileManager.default.removeItem(at: url)
+                }
+                teamsBrowserAccount = nil
+            }
+            state = committed; stateDurable = true; graphSaveFailed = false
+            queueWidgetProjection()
+            graphProgress = [:]; importFailurePaused = false
+            resumeAfterImportAcknowledgement = true
+            configureTimer()
+            emit(["type": "importResult", "requestId": requestID, "success": true, "state": state])
+            // Producers resume only after the dashboard applies this generation
+            // and explicitly acknowledges it; encoding/IPC is asynchronous.
+        } catch {
+            state = original; stateDurable = wasDurable
+            importFailurePaused = true
+            stopTeamsAuto(message: "导入未完成，已保留原数据；请检查错误后手动重新同步")
+            teamsBrowserBridge.cancel(); cancelGraphSync()
+            graphProgress = ["status": "paused", "message": "导入未完成，已保留原数据；请手动重新同步", "partial": true, "historyComplete": false]
+            configureTimer()
+            emitGraphStatus()
+            emit(["type": "importResult", "requestId": requestID, "success": false,
+                  "state": state, "message": "导入失败，原数据保持不变：" + error.localizedDescription])
+        }
     }
     func configureTimer() {
         let value = (state["settings"] as? [String: Any])?["refreshMinutes"] as? Int ?? 15
@@ -1581,10 +1880,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
     func exportData() {
         let panel = NSSavePanel(); panel.nameFieldStringValue = "CampusDesk-backup.json"; panel.allowedFileTypes = ["json"]
         panel.beginSheetModal(for: window) { [weak self] response in
-            guard response == .OK, let self = self, let url = panel.url, let text = json(self.state) else { return }
+            guard response == .OK, let self = self, let url = panel.url else { return }
             do {
-                try Data(text.utf8).write(to: url, options: .atomic)
-                try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+                let backup = try nativeStateValidator.get().exportBackup(self.state, schools: schoolEndpoints.frontend)
+                try CampusStateValidator.writePrivate(try CampusStateValidator.encode(backup), to: url)
                 self.status("app", "备份已导出（不包含登录凭据）", false)
             }
             catch { self.status("app", "导出失败：" + error.localizedDescription, false) }
@@ -1595,10 +1894,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         panel.beginSheetModal(for: window) { [weak self] response in
             guard response == .OK, let self = self, let url = panel.url else { return }
             do {
-                let size = try url.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
-                guard size <= 26_214_400 else { self.status("app", "导入文件不能超过 25 MiB", false); return }
-                let candidate = try readSavedState(url)
-                self.emit(["type": "import", "state": candidate])
+                let object = try CampusStateValidator.readObject(url)
+                let legacy = object["app"] == nil && object["edition"] == nil && object["schemaVersion"] == nil && object["data"] == nil
+                let imported = try nativeStateValidator.get().importBackup(object, allowLegacy: legacy, schools: schoolEndpoints.frontend)
+                if imported.legacy {
+                    let alert = NSAlert()
+                    alert.messageText = "这是一份旧格式备份"
+                    alert.informativeText = "旧格式不包含应用与版本身份标识。数据结构已通过校验；请确认它来自你信任的 CampusDesk 备份，再继续恢复。"
+                    alert.addButton(withTitle: "允许恢复旧格式"); alert.addButton(withTitle: "取消")
+                    alert.beginSheetModal(for: self.window) { [weak self] response in
+                        guard response == .alertFirstButtonReturn else { return }
+                        self?.emit(["type": "import", "state": imported.state, "legacy": true, "legacyApproved": true])
+                    }
+                } else { self.emit(["type": "import", "state": imported.state, "legacy": false]) }
             } catch { self.status("app", "导入失败：" + error.localizedDescription, false) }
         }
     }

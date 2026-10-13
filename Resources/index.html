@@ -18,6 +18,9 @@
   <link rel="stylesheet" href="setup-wizard.css">
   <link rel="stylesheet" href="assistant.css">
   <link rel="stylesheet" href="study-center.css">
+  <link rel="stylesheet" href="task-dialog.css">
+  <link rel="stylesheet" href="ui-refresh.css">
+  <link rel="stylesheet" href="agenda.css">
 </head>
 <body>
   <canvas id="liquid-glass-canvas" aria-hidden="true" hidden></canvas>
@@ -37,8 +40,40 @@
   <dialog id="quick-connect-dialog" aria-labelledby="quick-connect-title"><div id="quick-connect-content"></div></dialog>
   <dialog id="setup-wizard-dialog" class="setup-wizard-dialog" aria-labelledby="setup-wizard-title"><div id="setup-wizard-content"></div></dialog>
   <dialog id="assistant-confirm-dialog" class="assistant-confirm-dialog" aria-labelledby="assistant-confirm-title"><div id="assistant-confirm-content"></div></dialog>
-  <dialog id="task-dialog"><form id="task-form"><div class="dialog-heading"><h2>添加待办</h2><button class="icon-button" type="button" data-action="close-task" aria-label="关闭">×</button></div><p class="subtle">个人待办保存在这台 Mac，不会提交至学校系统。</p><label>要做什么<input id="task-title" name="title" required maxlength="180" placeholder="例如：整理今天的化学笔记" autocomplete="off"></label><label>截止时间（可选）<input id="task-due" name="due" type="datetime-local"></label><p class="field-hint">按北京时间记录。</p><div class="dialog-actions"><button type="button" class="button button-light" data-action="close-task">取消</button><button type="submit" class="button button-primary">添加待办</button></div></form></dialog>
+  <dialog id="task-dialog" aria-labelledby="task-dialog-title">
+    <form id="task-form" novalidate>
+      <div class="dialog-heading"><h2 id="task-dialog-title">添加待办</h2><button class="icon-button" type="button" data-action="close-task" aria-label="关闭">×</button></div>
+      <p class="subtle task-local-note">仅保存在这台 Mac，不会提交至学校系统。</p>
+      <label for="task-title">要做什么<input id="task-title" name="title" required maxlength="180" placeholder="例如：整理今天的化学笔记" autocomplete="off" aria-describedby="task-form-error"></label>
+      <div class="task-deadline-heading"><strong>截止时间（选填）</strong><span>北京时间 · 24 小时制</span></div>
+      <div class="task-deadline-fields">
+        <div class="task-date-panel">
+          <label for="task-due-date">截止日期<input id="task-due-date" name="due-date" type="text" inputmode="text" maxlength="10" placeholder="YYYY-MM-DD" autocomplete="off" spellcheck="false" aria-describedby="task-deadline-hint task-form-error"></label>
+          <div class="task-date-shortcuts" aria-label="快速设置截止日期">
+            <button type="button" data-action="task-date-shortcut" data-value="today">今天</button>
+            <button type="button" data-action="task-date-shortcut" data-value="tomorrow">明天</button>
+            <button type="button" data-action="task-date-shortcut" data-value="none">不设截止</button>
+          </div>
+          <p id="task-deadline-hint" class="field-hint">日期留空则不设截止。只选日期时，默认当天 23:59。</p>
+        </div>
+        <div id="task-time-picker" class="task-time-picker" data-enabled="false">
+          <label class="task-time-toggle"><input id="task-time-custom" type="checkbox" aria-controls="task-time-wheels"><span>指定小时和分钟</span></label>
+          <input id="task-due-time" name="due-time" type="hidden">
+          <div id="task-time-wheels" class="task-time-wheels">
+            <div class="task-wheel-column"><span id="task-hour-label" class="task-wheel-label">小时</span><div id="task-hour-wheel" class="task-number-wheel" role="listbox" tabindex="-1" aria-labelledby="task-hour-label" aria-describedby="task-wheel-help" aria-orientation="vertical" aria-disabled="true"></div></div>
+            <span class="task-wheel-colon" aria-hidden="true">:</span>
+            <div class="task-wheel-column"><span id="task-minute-label" class="task-wheel-label">分钟</span><div id="task-minute-wheel" class="task-number-wheel" role="listbox" tabindex="-1" aria-labelledby="task-minute-label" aria-describedby="task-wheel-help" aria-orientation="vertical" aria-disabled="true"></div></div>
+          </div>
+          <p id="task-wheel-help" class="field-hint">默认当天 23:59；勾选后可滚动调整。</p>
+        </div>
+      </div>
+      <p id="task-deadline-preview" class="task-deadline-preview" role="status" aria-live="polite">不设置截止时间</p>
+      <p id="task-form-error" class="task-form-error" role="alert" hidden></p>
+      <div class="dialog-actions"><button type="button" class="button button-light" data-action="close-task">取消</button><button type="submit" class="button button-primary">添加待办</button></div>
+    </form>
+  </dialog>
   <dialog id="detail-dialog" class="detail-dialog" aria-labelledby="detail-title"><div id="detail-content"></div></dialog>
+  <dialog id="agenda-event-dialog" class="agenda-event-dialog" aria-labelledby="agenda-event-title"><div id="agenda-event-content"></div></dialog>
   <dialog id="calendar-preview-dialog" class="calendar-preview-dialog" aria-labelledby="calendar-preview-title">
     <div class="dialog-heading"><h2 id="calendar-preview-title">校历 PDF 识别预览</h2><button class="icon-button" type="button" data-action="cancel-calendar-preview" aria-label="关闭">×</button></div>
     <p id="calendar-preview-note" class="subtle"></p>
@@ -49,9 +84,12 @@
   <input id="import-file" type="file" accept="application/json,.json" hidden>
   <input id="school-calendar-file" type="file" accept=".ics,.pdf,text/calendar,application/pdf" hidden>
   <script src="core.js"></script>
+  <script src="agenda.js"></script>
   <script src="grade-planner.js"></script>
   <script src="graph.js"></script>
   <script src="klinecharts.min.js"></script>
+  <script src="dom-patch.js"></script>
+  <script src="time-wheel.js"></script>
   <script src="dashboard.js"></script>
   <script src="three.min.js"></script>
   <script src="liquid-glass-webgl.js"></script>

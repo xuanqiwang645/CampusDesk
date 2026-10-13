@@ -13,6 +13,7 @@
   const SOURCES = ['seiue', 'managebac', 'teams'];
   const TEAMS_HOSTS = new Set(['teams.microsoft.com', 'teams.cloud.microsoft']);
   const schoolCalendarEventsCache = new WeakMap();
+  const timeZoneFormatters = new Map();
   let configuredSchools = { seiue: '', managebac: '' };
   const snapshotEntriesCache = new WeakMap();
   function configureSchools(config) {
@@ -137,6 +138,23 @@
     if (zone && (Number(zone[1]) > 14 || Number(zone[2]) > 59 || (Number(zone[1]) === 14 && Number(zone[2]) !== 0))) fail('时区偏移无效');
     return dateISO(s, false);
   }
+  // User-entered deadlines have an explicit Beijing date. Never let the host
+  // locale, a native control's placeholder, or Date.parse guess that date.
+  function parseManualDeadline(dayInput, timeInput) {
+    const clean = value => String(value || '').normalize('NFKC').trim();
+    const dayText = clean(dayInput), timeText = clean(timeInput);
+    const invalid = (error, field) => ({ dueAt: null, day: '', time: '', error, field });
+    if (!dayText && !timeText) return { dueAt: null, day: '', time: '', error: '', field: '' };
+    if (!dayText) return invalid('missing-date', 'date');
+    const parts = /^(\d{4})([-/])(\d{1,2})\2(\d{1,2})$/.exec(dayText);
+    if (!parts || Number(parts[1]) < 1000) return invalid('invalid-date', 'date');
+    const day = parts[1] + '-' + parts[3].padStart(2, '0') + '-' + parts[4].padStart(2, '0');
+    try { dayKey(day); } catch (_) { return invalid('invalid-date', 'date'); }
+    const timeParts = /^(\d{1,2}):([0-5]\d)$/.exec(timeText || '23:59');
+    if (!timeParts || Number(timeParts[1]) > 23) return invalid('invalid-time', 'time');
+    const time = timeParts[1].padStart(2, '0') + ':' + timeParts[2];
+    return { dueAt: new Date(day + 'T' + time + ':00+08:00').toISOString(), day, time, error: '', field: '' };
+  }
   function dayKey(value) {
     const s = str(value, 10);
     if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) fail('日期无效');
@@ -149,26 +167,42 @@
     if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(s)) fail('上课时间无效');
     return s;
   }
-  function calendarDateTime(value, tzid, displayTimezone, allDay) {
-    const raw = String(value || '');
-    if (allDay) return { date: dayKey(raw.slice(0, 8).replace(/^(\d{4})(\d{2})(\d{2})$/, '$1-$2-$3')), time: '' };
-    const match = /^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})?(Z)?$/.exec(raw);
-    if (!match) fail('校历包含无法识别的事件时间');
-    const local = match[1] + '-' + match[2] + '-' + match[3] + 'T' + match[4] + ':' + match[5] + ':' + (match[6] || '00');
-    if (!match[7] && !tzid) return { date: dayKey(local.slice(0, 10)), time: timeKey(local.slice(11, 16)) };
-    let instant;
-    if (match[7]) instant = Date.parse(local + 'Z');
-    else {
-      // Interpret a TZID wall time, then convert it to the app's display zone.
-      instant = Date.parse(local + 'Z');
-      for (let i = 0; i < 3; i++) {
-        const p = parts(instant, tzid);
-        const represented = Date.parse(p.year + '-' + p.month + '-' + p.day + 'T' + p.hour + ':' + p.minute + ':00Z');
-        instant += Date.parse(local + 'Z') - represented;
-      }
+  function calendarLocal(value) {
+    const local = str(value, 19);
+    if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$/.test(local) || Number(local.slice(17)) > 59) fail('校历包含无法识别的事件时间');
+    dayKey(local.slice(0, 10)); timeKey(local.slice(11, 16));
+    return local;
+  }
+  function calendarInstant(local, zone) {
+    const wall = Date.parse(calendarLocal(local) + 'Z'), offsets = new Set();
+    // Consider both sides of a DST transition. Ambiguous fall-back wall times
+    // use their first occurrence; nonexistent spring-forward times stay absent.
+    for (const delta of [-86400000, 0, 86400000]) {
+      const sample = Math.floor((wall + delta) / 60000) * 60000, p = parts(sample, zone);
+      offsets.add(Date.parse(p.year + '-' + p.month + '-' + p.day + 'T' + p.hour + ':' + p.minute + ':00Z') - sample);
     }
-    const p = parts(instant, displayTimezone || 'Asia/Shanghai');
+    const matches = [...offsets].map(offset => wall - offset).filter(instant => {
+      const p = parts(instant, zone);
+      return p.year + '-' + p.month + '-' + p.day + 'T' + p.hour + ':' + p.minute === local.slice(0, 16);
+    });
+    return matches.length ? Math.min(...matches) : null;
+  }
+  function calendarSourceTime(value, tzid, displayTimezone) {
+    const match = /^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})?(Z)?$/.exec(String(value || ''));
+    if (!match) fail('校历包含无法识别的事件时间');
+    const local = calendarLocal(match[1] + '-' + match[2] + '-' + match[3] + 'T' + match[4] + ':' + match[5] + ':' + (match[6] || '00'));
+    const zone = timezone(match[7] ? 'UTC' : tzid || displayTimezone || 'Asia/Shanghai');
+    const instant = calendarInstant(local, zone);
+    if (instant === null) fail('校历事件时间在源时区不存在');
+    return { local, timezone: zone, instant };
+  }
+  function calendarDisplayTime(instant, zone) {
+    const p = parts(instant, zone);
     return { date: p.year + '-' + p.month + '-' + p.day, time: p.hour + ':' + p.minute };
+  }
+  function calendarDateTime(value, tzid, displayTimezone, allDay) {
+    if (allDay) return { date: dayKey(String(value || '').replace(/^(\d{4})(\d{2})(\d{2})$/, '$1-$2-$3')), time: '' };
+    return calendarDisplayTime(calendarSourceTime(value, tzid, displayTimezone).instant, displayTimezone || 'Asia/Shanghai');
   }
   function unescapeCalendarText(value) {
     return String(value || '').replace(/\\n/gi, '\n').replace(/\\,/g, ',').replace(/\\;/g, ';').replace(/\\\\/g, '\\');
@@ -180,16 +214,23 @@
     if (Object.keys(fields).some(key => !['FREQ','INTERVAL','COUNT','UNTIL','BYDAY','WKST'].includes(key)) || (fields.WKST && fields.WKST !== 'MO')) fail('校历重复规则包含暂不支持的条件');
     const freq = String(fields.FREQ || '').toUpperCase();
     if (!['DAILY', 'WEEKLY', 'MONTHLY', 'YEARLY'].includes(freq)) fail('暂不支持校历中的重复规则：' + freq);
-    const interval = Math.min(366, Math.max(1, Number(fields.INTERVAL) || 1));
-    const count = fields.COUNT ? Math.min(10000, Math.max(1, Number(fields.COUNT) || 1)) : 10000;
-    let until = '';
+    const interval = fields.INTERVAL === undefined ? 1 : Number(fields.INTERVAL);
+    const count = fields.COUNT === undefined ? 10000 : Number(fields.COUNT);
+    if (!Number.isInteger(interval) || interval < 1 || interval > 366 || !Number.isInteger(count) || count < 1 || count > 10000) fail('校历重复间隔或次数无效');
+    if (fields.COUNT && fields.UNTIL) fail('校历重复规则不能同时包含 COUNT 和 UNTIL');
+    let until = '', untilAt = '', untilLocal = '';
     if (fields.UNTIL) {
       const untilValue = fields.UNTIL;
-      until = /^\d{8}$/.test(untilValue) ? untilValue.replace(/^(\d{4})(\d{2})(\d{2})$/, '$1-$2-$3') : calendarDateTime(untilValue, '', 'Asia/Shanghai', false).date;
+      if (/^\d{8}$/.test(untilValue)) until = dayKey(untilValue.replace(/^(\d{4})(\d{2})(\d{2})$/, '$1-$2-$3'));
+      else {
+        const boundary = calendarSourceTime(untilValue, 'UTC', 'UTC');
+        if (/Z$/.test(untilValue)) untilAt = new Date(boundary.instant).toISOString();
+        else untilLocal = boundary.local;
+      }
     }
     if (fields.BYDAY && fields.BYDAY.split(',').some(item => !/^(MO|TU|WE|TH|FR|SA|SU)$/.test(item))) fail('暂不支持按第几个星期几重复的校历规则');
     const byDay = fields.BYDAY ? fields.BYDAY.split(',').map(item => item.slice(-2)).filter(item => ['MO','TU','WE','TH','FR','SA','SU'].includes(item)) : [];
-    return { freq, interval, count, until, byDay };
+    return { freq, interval, count, unbounded: fields.COUNT === undefined, until, byDay, ...(untilAt ? { untilAt } : {}), ...(untilLocal ? { untilLocal } : {}) };
   }
   function parseSchoolCalendarICS(text, fileName, displayTimezone) {
     if (typeof text !== 'string' || text.length > 5 * 1024 * 1024) fail('校历文件超过 5 MB 或无法读取');
@@ -215,11 +256,19 @@
         const uid = unescapeCalendarText((read('UID') || {}).value || '');
         const recurrence = parseCalendarRule((read('RRULE') || {}).value || '');
         const exdates = props.filter(item => item.name === 'EXDATE').flatMap(item => item.value.split(',').map(value => calendarDateTime(value, item.params.TZID || startProp.params.TZID, displayTimezone, allDay).date));
+        let recurrenceSource;
+        if (!allDay) {
+          const source = calendarSourceTime(startProp.value, startProp.params.TZID, displayTimezone);
+          const endInstant = endProp ? calendarSourceTime(endProp.value, endProp.params.TZID || startProp.params.TZID, displayTimezone).instant : source.instant + 3600000;
+          if (endInstant <= source.instant || endInstant - source.instant > 367 * 86400000) fail('校历事件结束时间无效');
+          recurrenceSource = { start: source.local, timezone: source.timezone, durationMs: endInstant - source.instant,
+            exdates: props.filter(item => item.name === 'EXDATE').flatMap(item => item.value.split(',').map(value => new Date(calendarSourceTime(value, item.params.TZID || startProp.params.TZID, displayTimezone).instant).toISOString())) };
+        } else if (recurrence && (recurrence.untilAt || recurrence.untilLocal)) fail('全天校历的 UNTIL 必须是日期');
         events.push({ id: 'cal-' + hash(uid || start.date + start.time + ((read('SUMMARY') || {}).value || '') + events.length), uid, title: str(unescapeCalendarText((read('SUMMARY') || {}).value || '（无标题）'), 300),
           description: str(unescapeCalendarText((read('DESCRIPTION') || {}).value || ''), 2000), location: str(unescapeCalendarText((read('LOCATION') || {}).value || ''), 300),
           startDate: start.date, endDate: end.date, startTime: start.time, endTime: end.time, allDay,
           durationDays: Math.min(366, Math.max(0, Math.round((Date.parse(end.date + 'T00:00:00Z') - Date.parse(start.date + 'T00:00:00Z')) / 86400000))),
-          recurrence, exdates: [...new Set(exdates)].slice(0, 500) });
+          recurrence, exdates: [...new Set(exdates)].slice(0, 500), ...(recurrenceSource ? { recurrenceSource } : {}) });
         if (events.length > 5000) fail('校历事件超过 5000 条');
         continue;
       }
@@ -314,11 +363,23 @@
         record(row.recurrence, '校历重复规则');
         if (!['DAILY','WEEKLY','MONTHLY','YEARLY'].includes(row.recurrence.freq)) fail('校历重复频率无效');
         recurrence = { freq: row.recurrence.freq, interval: finite(row.recurrence.interval, 1, 366, false), count: finite(row.recurrence.count, 1, 10000, false), until: row.recurrence.until ? dayKey(row.recurrence.until) : '', byDay: array(row.recurrence.byDay, '校历星期', 7).map(strDay) };
+        recurrence.unbounded = bool(row.recurrence.unbounded, recurrence.count === 10000);
+        if (!Number.isInteger(recurrence.interval) || !Number.isInteger(recurrence.count)) fail('校历重复间隔或次数必须为整数');
+        if (row.recurrence.untilAt) recurrence.untilAt = zonedISO(row.recurrence.untilAt, false);
+        if (row.recurrence.untilLocal) recurrence.untilLocal = calendarLocal(row.recurrence.untilLocal);
+      }
+      let recurrenceSource;
+      if (row.recurrenceSource !== undefined) {
+        const source = record(row.recurrenceSource, '校历源时间');
+        if (allDay) fail('全天校历不应包含源时刻');
+        recurrenceSource = { start: calendarLocal(source.start), timezone: timezone(source.timezone),
+          durationMs: finite(source.durationMs, 1, 367 * 86400000, false), exdates: array(source.exdates, '校历排除时刻', 500).map(value => zonedISO(value, false)) };
+        if (calendarInstant(recurrenceSource.start, recurrenceSource.timezone) === null) fail('校历事件时间在源时区不存在');
       }
       return { id: id(row.id), uid: str(row.uid, 512), title: str(row.title, 300, '（无标题）'), description: str(row.description, 2000), location: str(row.location, 300),
         startDate, endDate, startTime: allDay ? '' : timeKey(row.startTime), endTime: allDay ? '' : timeKey(row.endTime), allDay,
         durationDays: finite(row.durationDays === undefined ? Math.round((Date.parse(endDate + 'T00:00:00Z') - Date.parse(startDate + 'T00:00:00Z')) / 86400000) : row.durationDays, 0, 366, false),
-        recurrence, exdates: array(row.exdates, '校历排除日期', 500).map(dayKey) };
+        recurrence, exdates: array(row.exdates, '校历排除日期', 500).map(dayKey), ...(recurrenceSource ? { recurrenceSource } : {}) };
     }) };
   }
   function strDay(value) { const day = str(value, 2); if (!['MO','TU','WE','TH','FR','SA','SU'].includes(day)) fail('校历星期无效'); return day; }
@@ -392,8 +453,8 @@
       seiueURL: configuredSchools.seiue, managebacURL: configuredSchools.managebac, teamsPages: [], teamsNotifications: false,
       teamsBrowser: 'chrome', teamsBrowserAutomation: false, teamsMode: 'browser', teamsAutoDiscover: true, graphIncludeChats: true,
       reminderMinutes: 30, reminderSubjects: [], teamsDueOverrides: {}, dashboardTheme: 'classic', colorTheme: 'sage', gpaCandleColors: 'red-up', language: 'zh-CN', focusSubjects: [], focusTeamsChannels: [], customLessons: [],
-      scheduleHolidays: [], scheduleWeekAnchor: '', scheduleOverrides: [], focusMode: false, planOrder: [], taskMinutes: {}, taskPriority: {}, gradeGoals: {}, gradePlans: {}, gpaTermDates: {}, ecIdentityNames: [] }, snapshots: { seiue: {}, managebac: {}, teams: {} },
-      manualTasks: [], taskChecks: {}, feedbackRead: {}, gradeHistory: [], changeLog: [], schoolCalendar: { fileName: '', importedAt: '', events: [] } };
+      scheduleHolidays: [], scheduleWeekAnchor: '', scheduleOverrides: [], focusMode: false, graphicsMode: 'auto', planOrder: [], taskMinutes: {}, taskPriority: {}, gradeGoals: {}, gradePlans: {}, gpaTermDates: {}, ecIdentityNames: [] }, snapshots: { seiue: {}, managebac: {}, teams: {} },
+      manualTasks: [], personalEvents: [], taskChecks: {}, feedbackRead: {}, gradeHistory: [], changeLog: [], schoolCalendar: { fileName: '', importedAt: '', events: [] } };
     if (themeEdition) Object.assign(state.settings, { aiProvider: 'off', aiModel: '', aiOllamaModel: 'qwen3:8b', aiContextCategories: ['tasks', 'schedule'], setupWizardCompleted: false, setupWizardStep: 0, setupWizardIntroVersion: '' });
     return state;
   }
@@ -495,6 +556,23 @@
     if (row.dueTerm !== undefined) result.dueTerm = str(row.dueTerm, 200);
     if (manual) result.createdAt = dateISO(row.createdAt, true);
     return result;
+  }
+  // Personal calendar dates use inclusive endDate in the editor. Timed events
+  // use an exclusive end instant; an omitted endTime is a single start time.
+  function personalEventRow(row) {
+    record(row, '个人日程');
+    const title = str(row.title, 300);
+    if (!title) fail('日程标题不能为空');
+    const startDate = dayKey(row.startDate), endDate = row.endDate ? dayKey(row.endDate) : startDate;
+    const duration = (Date.parse(endDate + 'T00:00:00Z') - Date.parse(startDate + 'T00:00:00Z')) / 86400000;
+    if (Number(startDate.slice(0, 4)) < 1000 || Number(endDate.slice(0, 4)) > 9998 || duration < 0 || duration > 366) fail('日程结束日期应在开始日期之后且不超过一年');
+    const allDay = bool(row.allDay, true), startTime = allDay ? '' : timeKey(row.startTime);
+    const endTime = allDay || !row.endTime ? '' : timeKey(row.endTime);
+    if (!allDay && !endTime && endDate !== startDate) fail('跨日的定时日程需要结束时间');
+    if (!allDay && endTime && endDate + 'T' + endTime <= startDate + 'T' + startTime) fail('日程结束时间必须晚于开始时间');
+    return { id: id(row.id, 'event-' + hash(title + startDate + startTime)), title, startDate, endDate, startTime, endTime, allDay,
+      location: str(row.location, 300), notes: str(row.notes, 4000),
+      createdAt: dateISO(row.createdAt, true), updatedAt: dateISO(row.updatedAt, true) };
   }
   function teamsID(value, fallback) {
     const key = id(value, fallback);
@@ -744,6 +822,8 @@
     s.settings.reminderSubjects = settings.reminderSubjects === undefined ? [] : [...new Set(array(settings.reminderSubjects, '提醒学科', 100).map(value => str(value, 120)).filter(Boolean))];
     s.settings.dashboardTheme = settings.dashboardTheme === undefined ? 'classic' : settings.dashboardTheme;
     if (!['classic', 'board'].includes(s.settings.dashboardTheme)) fail('面板样式无效');
+    s.settings.graphicsMode = settings.graphicsMode === undefined ? 'auto' : settings.graphicsMode;
+    if (!['auto', 'low-power'].includes(s.settings.graphicsMode)) fail('图形性能设置无效');
     s.settings.colorTheme = settings.colorTheme === undefined ? 'sage' : settings.colorTheme;
     if (!['sage', 'ocean', 'ember', 'midnight'].includes(s.settings.colorTheme)) fail('主题配色无效');
     s.settings.gpaCandleColors = settings.gpaCandleColors === undefined ? 'red-up' : settings.gpaCandleColors;
@@ -849,6 +929,8 @@
       }
     }
     s.manualTasks = array(raw.manualTasks, '个人待办').map(r => taskRow(r, true));
+    s.personalEvents = array(raw.personalEvents, '个人日程', 1000).map(personalEventRow);
+    if (new Set(s.personalEvents.map(event => event.id)).size !== s.personalEvents.length) fail('个人日程 ID 重复');
     s.taskChecks = flagMap(raw.taskChecks, '待办标记');
     s.feedbackRead = flagMap(raw.feedbackRead, '反馈标记');
     s.gradeHistory = array(raw.gradeHistory, '成绩历史', 120).map(historyRow);
@@ -863,13 +945,36 @@
     }
     s.changeLog = array(raw.changeLog, '变化收件箱', 600).map(changeRow);
     s.schoolCalendar = normalizeSchoolCalendar(raw.schoolCalendar);
+    migrateTeamsAccount(s);
     return s;
+  }
+  function exportBackup(state) {
+    const envelope = { app: 'CampusDesk', edition: themeEdition ? 'theme' : 'standard', schemaVersion: 1, data: validateState(state) };
+    checkSize(envelope);
+    return envelope;
+  }
+  function importBackup(input, options = {}) {
+    const raw = inputObject(input);
+    const wrapped = ['app', 'edition', 'schemaVersion', 'data'].some(key => Object.prototype.hasOwnProperty.call(raw, key));
+    if (wrapped) {
+      if (raw.app !== 'CampusDesk' || raw.edition !== (themeEdition ? 'theme' : 'standard')) fail('备份所属应用或版本类型不匹配');
+      if (raw.schemaVersion !== 1) fail('不支持的备份格式版本');
+      return { state: validateState(raw.data), legacy: false };
+    }
+    if (options.allowLegacy !== true) fail('旧格式备份需要明确确认后导入');
+    return { state: validateState(raw), legacy: true };
   }
   function parts(date, tz) {
     const d = date === undefined ? new Date() : new Date(date);
     if (!Number.isFinite(d.valueOf())) fail('查询时间无效');
-    const formatter = new Intl.DateTimeFormat('en-GB', { timeZone: tz || 'Asia/Shanghai', year: 'numeric',
-      month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
+    const zone = tz || 'Asia/Shanghai';
+    let formatter = timeZoneFormatters.get(zone);
+    if (!formatter) {
+      formatter = new Intl.DateTimeFormat('en-GB', { timeZone: zone, year: 'numeric',
+        month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
+      if (timeZoneFormatters.size >= 64) timeZoneFormatters.clear();
+      timeZoneFormatters.set(zone, formatter);
+    }
     const out = {};
     for (const part of formatter.formatToParts(d)) out[part.type] = part.value;
     return out;
@@ -992,26 +1097,14 @@
   }
   function calendarWeekday(date) { return ['SU','MO','TU','WE','TH','FR','SA'][new Date(date + 'T00:00:00Z').getUTCDay()]; }
   function calendarMonday(date) { const day = new Date(date + 'T00:00:00Z').getUTCDay(); return addDays(date, -((day + 6) % 7)); }
-  function calendarOccurrence(rule, startDate, occurrenceDate) {
+  function calendarOccurrence(rule, startDate, occurrenceDate, validOccurrence) {
     if (!rule) return occurrenceDate === startDate;
-    if (occurrenceDate < startDate || (rule.until && occurrenceDate > rule.until)) return false;
-    const start = new Date(startDate + 'T00:00:00Z'), current = new Date(occurrenceDate + 'T00:00:00Z');
-    const dayDiff = Math.round((current - start) / 86400000), interval = rule.interval || 1;
-    let matches = false;
-    if (rule.freq === 'DAILY') matches = dayDiff % interval === 0;
-    else if (rule.freq === 'WEEKLY') {
-      const weeks = Math.round((Date.parse(calendarMonday(occurrenceDate) + 'T00:00:00Z') - Date.parse(calendarMonday(startDate) + 'T00:00:00Z')) / (7 * 86400000)), byDay = rule.byDay && rule.byDay.length ? rule.byDay : [calendarWeekday(startDate)];
-      matches = weeks % interval === 0 && byDay.includes(calendarWeekday(occurrenceDate));
-    } else if (rule.freq === 'MONTHLY') {
-      const months = (current.getUTCFullYear() - start.getUTCFullYear()) * 12 + current.getUTCMonth() - start.getUTCMonth();
-      matches = months >= 0 && months % interval === 0 && current.getUTCDate() === start.getUTCDate();
-    } else if (rule.freq === 'YEARLY') matches = current.getUTCMonth() === start.getUTCMonth() && current.getUTCDate() === start.getUTCDate() && (current.getUTCFullYear() - start.getUTCFullYear()) % interval === 0;
-    if (!matches) return false;
-    if (rule.count && rule.count < 10000) {
+    if (!calendarOccurrenceMatches(rule, startDate, occurrenceDate) || (validOccurrence && !validOccurrence(occurrenceDate))) return false;
+    if (rule.count && !rule.unbounded) {
       let count = 0;
       // Count generated dates through the candidate so COUNT is honored for all supported frequencies.
       for (let cursor = startDate; cursor <= occurrenceDate; cursor = addDays(cursor, 1)) {
-        if (calendarOccurrenceMatches(rule, startDate, cursor)) count++;
+        if (calendarOccurrenceMatches(rule, startDate, cursor) && (!validOccurrence || validOccurrence(cursor))) count++;
         if (count > rule.count) return false;
       }
     }
@@ -1021,20 +1114,49 @@
     if (occurrenceDate < startDate || (rule.until && occurrenceDate > rule.until)) return false;
     const start = new Date(startDate + 'T00:00:00Z'), current = new Date(occurrenceDate + 'T00:00:00Z');
     const dayDiff = Math.round((current - start) / 86400000), interval = rule.interval || 1;
-    if (rule.freq === 'DAILY') return dayDiff % interval === 0;
+    const byDay = rule.byDay || [], weekdayMatches = !byDay.length || byDay.includes(calendarWeekday(occurrenceDate));
+    if (rule.freq === 'DAILY') return dayDiff % interval === 0 && weekdayMatches;
     if (rule.freq === 'WEEKLY') return Math.round((Date.parse(calendarMonday(occurrenceDate) + 'T00:00:00Z') - Date.parse(calendarMonday(startDate) + 'T00:00:00Z')) / (7 * 86400000)) % interval === 0 && (rule.byDay && rule.byDay.length ? rule.byDay : [calendarWeekday(startDate)]).includes(calendarWeekday(occurrenceDate));
-    if (rule.freq === 'MONTHLY') return ((current.getUTCFullYear() - start.getUTCFullYear()) * 12 + current.getUTCMonth() - start.getUTCMonth()) % interval === 0 && current.getUTCDate() === start.getUTCDate();
-    return (current.getUTCFullYear() - start.getUTCFullYear()) % interval === 0 && current.getUTCMonth() === start.getUTCMonth() && current.getUTCDate() === start.getUTCDate();
+    if (rule.freq === 'MONTHLY') return ((current.getUTCFullYear() - start.getUTCFullYear()) * 12 + current.getUTCMonth() - start.getUTCMonth()) % interval === 0 && (byDay.length ? weekdayMatches : current.getUTCDate() === start.getUTCDate());
+    return (current.getUTCFullYear() - start.getUTCFullYear()) % interval === 0 && (byDay.length ? weekdayMatches : current.getUTCMonth() === start.getUTCMonth() && current.getUTCDate() === start.getUTCDate());
+  }
+  function timedCalendarEvents(event, target, displayZone) {
+    const source = event.recurrenceSource, startDate = source.start.slice(0, 10), rule = event.recurrence;
+    const instants = new Map(), instantFor = date => {
+      if (!instants.has(date)) instants.set(date, calendarInstant(date + source.start.slice(10), source.timezone));
+      return instants.get(date);
+    };
+    const valid = date => {
+      const instant = instantFor(date);
+      return instant !== null && (!rule || ((!rule.untilAt || instant <= Date.parse(rule.untilAt)) && (!rule.untilLocal || date + source.start.slice(10) <= rule.untilLocal)));
+    };
+    const excluded = new Set(source.exdates), output = [];
+    // Source/display date can differ by two days across the date line. Include
+    // earlier instances of multi-day events and use exclusive end boundaries.
+    const windowStart = addDays(target, -Math.ceil(source.durationMs / 86400000) - 2), windowEnd = addDays(target, 2);
+    for (let date = windowStart < startDate ? startDate : windowStart; date <= windowEnd; date = addDays(date, 1)) {
+      if (!calendarOccurrence(rule, startDate, date, valid) || !valid(date)) continue;
+      const instant = instantFor(date);
+      if (excluded.has(new Date(instant).toISOString())) continue;
+      const start = calendarDisplayTime(instant, displayZone), end = calendarDisplayTime(instant + source.durationMs, displayZone);
+      const last = calendarDisplayTime(instant + source.durationMs - 1, displayZone);
+      if (target < start.date || target > last.date) continue;
+      output.push(Object.assign({}, event, { date: target, occurrenceDate: start.date,
+        displayStartTime: target === start.date ? start.time : '00:00', displayEndTime: target === end.date ? end.time : '' }));
+    }
+    return output;
   }
   function getSchoolCalendarEvents(state, date) {
     const target = dayKey(date || today(undefined, state.settings.timezone));
+    const displayZone = state.settings.timezone || 'Asia/Shanghai', cacheKey = target + '|' + displayZone;
     const calendarRows = state.schoolCalendar.events;
     let dayCache = schoolCalendarEventsCache.get(calendarRows);
     if (!dayCache) { dayCache = new Map(); schoolCalendarEventsCache.set(calendarRows, dayCache); }
-    const cached = dayCache.get(target);
+    const cached = dayCache.get(cacheKey);
     if (cached) return cached.map(event => Object.assign({}, event));
     const output = [];
     for (const event of calendarRows) {
+      if (event.recurrenceSource) { output.push(...timedCalendarEvents(event, target, displayZone)); continue; }
       const length = event.durationDays || 0, maxOffset = event.allDay ? Math.max(0, length - 1) : length;
       for (let offset = 0; offset <= maxOffset; offset++) {
         const occurrenceDate = addDays(target, -offset);
@@ -1049,7 +1171,7 @@
     }
     const sorted = output.sort((a, b) => Number(a.allDay) !== Number(b.allDay) ? Number(b.allDay) - Number(a.allDay) :
       (a.displayStartTime || '').localeCompare(b.displayStartTime || '') || a.title.localeCompare(b.title));
-    dayCache.set(target, sorted);
+    dayCache.set(cacheKey, sorted);
     return sorted.map(event => Object.assign({}, event));
   }
   function getSchedule(state, date, includeSelfStudy) {
@@ -1220,7 +1342,11 @@
       if (blocks.length !== 1) return { dueAt: null, dueResolution: 'unknown' };
       label = blocks[0];
     }
-    const raw = label.replace(/\s+/g, ' ').replace(/上午/g, ' AM ').replace(/下午/g, ' PM ');
+    // Explicit Chinese day periods are meaningful deadline information. Do not
+    // silently read an unhandled period (for example 中午) as a 24-hour clock.
+    if (/(?:中午|午间|傍晚|凌晨|半夜|午夜|深夜)/.test(label)) return { dueAt: null, dueResolution: 'unknown' };
+    if (/(?:晚上|晚间)\s*12[:：]/.test(label)) return { dueAt: null, dueResolution: 'unknown' };
+    const raw = label.replace(/\s+/g, ' ').replace(/(?:上午|早上|早晨)/g, ' AM ').replace(/(?:下午|晚上|晚间)/g, ' PM ');
     const months = ['jan','feb','mar','apr','may','jun','jul','aug','sep','oct','nov','dec'];
     let year, month, day;
     const dates = [...raw.matchAll(/\b(20\d{2})[-/.年](\d{1,2})[-/.月](\d{1,2})(?!\d)日?/g)];
@@ -1241,7 +1367,9 @@
     const times = [...raw.matchAll(/(?:^|[^\d])([01]?\d|2[0-3])[:：]([0-5]\d)(?::([0-5]\d))?(?![:\d])\s*(AM|PM)?/gi)].filter(match => !/[+-]\s*$/.test(raw.slice(0, match.index + 1)));
     if (times.length !== 1) return { dueAt: null, dueResolution: 'unknown' };
     let hour = +times[0][1], minute = +times[0][2], second = +(times[0][3] || 0);
-    const meridiem = (times[0][4] || (raw.slice(0, times[0].index + 1).match(/\b(AM|PM)\s*$/i) || [])[1] || '').toUpperCase();
+    const prefixMeridiem = ((raw.slice(0, times[0].index + 1).match(/\b(AM|PM)\s*$/i) || [])[1] || '').toUpperCase();
+    if (prefixMeridiem && times[0][4] && prefixMeridiem !== times[0][4].toUpperCase()) return { dueAt: null, dueResolution: 'ambiguous' };
+    const meridiem = (times[0][4] || prefixMeridiem || '').toUpperCase();
     if (meridiem) { if (hour < 1 || hour > 12) return { dueAt: null, dueResolution: 'unknown' }; hour = hour % 12 + (meridiem === 'PM' ? 12 : 0); }
     const term = String(context.term || ''), range = context.range;
     const inferredYear = !year;
@@ -1487,10 +1615,22 @@
   function mergeSnapshot(state, incoming) {
     const result = validateState(state), raw = inputObject(incoming), item = snapshot(raw);
     if (!safeURL(item.url, item.source)) fail('尚未配置此学校地址，或新读取页面不属于当前配置的学校');
-    const key = snapshotKey(item), previous = result.snapshots[item.source][key];
-    if (previous && Date.parse(previous.lastAttemptAt || previous.capturedAt) > Date.parse(item.capturedAt)) return result;
     const hasData = item.source === 'seiue' ? item.schedule.length || item.calendarDates.length : item.source === 'teams' ? item.tasks.length || item.posts.length || item.feedback.length || item.grades.length : item.courses.length || item.tasks.length || item.feedback.length || item.officialGPA;
     const failed = item.loginRequired || item.parseError || item.success === false || !!item.error || (!hasData && item.source !== 'teams' && item.success !== true);
+    if (item.source === 'teams') {
+      const saved = Object.values(result.snapshots.teams), bound = saved.find(row => row.accountId);
+      const mismatched = saved.some(row => (row.accountId || '') !== (item.accountId || ''));
+      if (mismatched) {
+        const latest = Math.max(...saved.map(row => Date.parse(row.lastAttemptAt || row.capturedAt)));
+        if (Date.parse(item.capturedAt) < latest || failed) return result;
+        if (bound && !item.accountId) fail('Teams 新快照缺少账号身份，未合并到已绑定账号的数据');
+        result.snapshots.teams = {};
+        clearTeamsDerived(result);
+        item.warnings = item.warnings.slice(0, 99).concat('已确认 Teams 账号变化；其他账号或身份未确认的本地 Teams 缓存已清理。');
+      }
+    }
+    const key = snapshotKey(item), previous = result.snapshots[item.source][key];
+    if (previous && Date.parse(previous.lastAttemptAt || previous.capturedAt) > Date.parse(item.capturedAt)) return result;
     const changes = !failed && previous ? changeEvents(previous, item, item.source, item.capturedAt) : [];
     // An unreadable/logged-out page records the attempted sync while retaining its last useful data.
     if (failed && previous) result.snapshots[item.source][key] = Object.assign({}, previous, {
@@ -1593,9 +1733,24 @@
   function resetTeamsData(state) {
     const result = validateState(state);
     result.snapshots.teams = {};
+    clearTeamsDerived(result);
+    return result;
+  }
+  function clearTeamsDerived(result) {
     result.settings.teamsDueOverrides = {};
     for (const map of [result.taskChecks, result.feedbackRead]) for (const key of Object.keys(map)) if (key.startsWith('teams:')) delete map[key];
-    return result;
+    result.changeLog = result.changeLog.filter(row => row.source !== 'teams');
+  }
+  function migrateTeamsAccount(state) {
+    const saved = Object.entries(state.snapshots.teams);
+    const confirmed = saved.filter(([, row]) => row.accountId).sort((a, b) => Date.parse(b[1].capturedAt) - Date.parse(a[1].capturedAt));
+    if (!confirmed.length) return; // Pre-identity backups remain readable until a confirmed capture arrives.
+    const account = confirmed[0][1].accountId;
+    if (!saved.some(([, row]) => row.accountId !== account)) return;
+    state.snapshots.teams = Object.fromEntries(saved.filter(([, row]) => row.accountId === account));
+    clearTeamsDerived(state);
+    const warning = '旧缓存包含多个 Teams 账号或未确认身份，现仅保留最新确认账号；其他 Teams 缓存已移除，可从原始备份恢复。';
+    if (!confirmed[0][1].warnings.includes(warning)) confirmed[0][1].warnings = confirmed[0][1].warnings.slice(0, 99).concat(warning);
   }
   function buildView(state, date) {
     const courses = getCourses(state);
@@ -1607,7 +1762,7 @@
       sources: { seiue: getSourceStatus(state, 'seiue', date), managebac: getSourceStatus(state, 'managebac', date), teams: getSourceStatus(state, 'teams', date) },
       changes: state.changeLog.slice().sort((a, b) => Date.parse(b.capturedAt) - Date.parse(a.capturedAt)) };
   }
-  return Object.freeze({ VERSION, configureSchools, schoolHomes, normalizeSchoolHome, emptyState, defaultState: emptyState, validateState, normalizeState: validateState,
-    mergeSnapshot, resetTeamsData, clearTeamsData: resetTeamsData, today, clock, getSchedule, getCourses, getTasks, resolveTaskDeadline, getFeedback, getOfficialGPA, estimateGPA, estimateLinearGPA, semesterGPAForecast,
+  return Object.freeze({ VERSION, configureSchools, schoolHomes, normalizeSchoolHome, emptyState, defaultState: emptyState, validateState, normalizeState: validateState, exportBackup, importBackup,
+    mergeSnapshot, resetTeamsData, clearTeamsData: resetTeamsData, today, clock, getSchedule, getCourses, getTasks, resolveTaskDeadline, parseManualDeadline, normalizePersonalEvent: personalEventRow, getFeedback, getOfficialGPA, estimateGPA, estimateLinearGPA, semesterGPAForecast,
     getNextClass, getClassClock, getSchedulePeriods, getTeamsPosts, getTeamsEC, getTeamsGrades, getSourceStatus, buildView, getSchoolCalendarEvents, schoolCalendarScheduleRule, schoolCalendarScheduleConflict, parseSchoolCalendarICS, parseSchoolCalendarPDFText, safeURL, safeAttachmentURL, gradePoints: points, linearGradePoints: linearPoints });
 });

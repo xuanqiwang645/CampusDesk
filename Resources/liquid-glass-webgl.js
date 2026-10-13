@@ -16,7 +16,7 @@ if (!canvas) {
   failGracefully('missing canvas');
 } else {
   try {
-    const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: false, powerPreference: 'high-performance' });
+    const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: false, powerPreference: 'low-power' });
     if (!renderer.capabilities.isWebGL2) throw new Error('WebGL 2 is required for textureLod');
     // This canvas is a decorative material layer behind sharp DOM content.
     // A 1.25x cap keeps it crisp while avoiding a 4x Retina pixel workload.
@@ -270,6 +270,7 @@ if (!canvas) {
     let lastWidth = 0;
     let lastHeight = 0;
     let lastFrame = -Infinity;
+    let frameID = 0, frameTimer = 0, lastInteraction = performance.now();
     const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
     const glassSelectors = [
       '.sidebar', '.topbar', '.card', '.class-clock', '.connect-banner',
@@ -339,11 +340,14 @@ if (!canvas) {
       shapesDirty = true;
     }
     function renderFrame(milliseconds) {
-      if (!reducedMotion.matches && milliseconds - lastFrame < 40) { requestAnimationFrame(renderFrame); return; }
+      frameID = 0;
+      if (hidden()) return;
       lastFrame = milliseconds;
+      const ratio = Math.min(window.devicePixelRatio || 1, staticMode() ? 1 : 1.25);
+      if (renderer.getPixelRatio() !== ratio) { renderer.setPixelRatio(ratio); lastWidth = 0; }
       resize();
       if (shapesDirty) updateShapes();
-      const seconds = milliseconds * 0.001;
+      const seconds = staticMode() ? 0 : milliseconds * 0.001;
       backgroundMaterial.uniforms.uTime.value = seconds;
       glassUniforms.uTime.value = seconds;
 
@@ -360,22 +364,50 @@ if (!canvas) {
       renderer.render(compositeScene, camera);
       renderer.render(glassScene, camera);
 
-      if (!reducedMotion.matches) requestAnimationFrame(renderFrame);
+      // Keep the last composed frame once idle. A four-Hz full-screen render
+      // loop still costs CPU/GPU even when no pixels need to change.
+      if (!staticMode() && milliseconds - lastInteraction < 2500) scheduleFrame(40);
+    }
+    function hidden() { return document.hidden || root.dataset.windowVisible === 'false'; }
+    function staticMode() { return reducedMotion.matches || root.dataset.graphicsMode === 'low-power'; }
+    function scheduleFrame(delay = 0) {
+      if (hidden() || frameID || frameTimer) return;
+      frameTimer = setTimeout(() => { frameTimer = 0; if (!hidden()) frameID = requestAnimationFrame(renderFrame); }, delay);
     }
     function invalidate() {
       shapesDirty = true;
-      if (reducedMotion.matches) requestAnimationFrame(renderFrame);
+      if (hidden()) {
+        if (frameID) cancelAnimationFrame(frameID);
+        if (frameTimer) clearTimeout(frameTimer);
+        frameID = 0; frameTimer = 0;
+        return;
+      }
+      scheduleFrame(Math.max(0, 40 - (performance.now() - lastFrame)));
     }
-
+    window.CampusGlassInvalidate = invalidate;
+    document.addEventListener('visibilitychange', invalidate);
+    addEventListener('pointerdown', () => { lastInteraction = performance.now(); invalidate(); }, { passive: true });
+    addEventListener('keydown', event => {
+      // Typing and wheel keyboard selection do not animate the glass behind
+      // the editor. Real layout changes still invalidate through observers.
+      if (event.target?.closest?.('input, textarea, select, [contenteditable="true"], [role="listbox"]')) return;
+      lastInteraction = performance.now(); invalidate();
+    }, { passive: true });
     addEventListener('resize', invalidate, { passive: true });
     addEventListener('scroll', invalidate, { passive: true });
-    new MutationObserver(invalidate).observe(document.getElementById('app-shell'), { childList: true, subtree: true, attributes: true, attributeFilter: ['class', 'data-dashboard-theme'] });
+    new MutationObserver(records => {
+      // These fixed-width clock/status text updates do not change glass shapes.
+      // Avoid resampling every card and repainting the full screen each second.
+      const textOnly = new Set(['sidebar-clock', 'class-clock-time', 'global-status']);
+      if (records.some(record => !(record.type === 'childList' && textOnly.has(record.target.id) && [...record.addedNodes, ...record.removedNodes].every(node => node.nodeType === 3)))) invalidate();
+    }).observe(document.getElementById('app-shell'), { childList: true, subtree: true, attributes: true, attributeFilter: ['class', 'data-dashboard-theme'] });
+    new MutationObserver(invalidate).observe(root, { attributes: true, attributeFilter: ['data-graphics-mode', 'data-window-visible'] });
     if ('ResizeObserver' in window) new ResizeObserver(invalidate).observe(document.getElementById('app-shell'));
     reducedMotion.addEventListener?.('change', invalidate);
 
     root.classList.add('webgl-liquid-glass');
     canvas.hidden = false;
-    requestAnimationFrame(renderFrame);
+    scheduleFrame();
   } catch (error) {
     failGracefully(error && error.message ? error.message : String(error));
   }
