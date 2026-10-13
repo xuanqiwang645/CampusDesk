@@ -18,9 +18,13 @@ case "$campus_widget_arch" in arm64|x86_64) ;; *) exit 2;; esac
 campus_widget_output="$campus_widget_app/Contents/PlugIns/CampusDeskWidgets.appex"
 mkdir -p "$campus_widget_output/Contents/MacOS" "$campus_widget_output/Contents/Resources"
 /usr/bin/xcrun swiftc -swift-version 5 -Osize -j 1 -parse-as-library -application-extension \
-  -target "$campus_widget_arch-apple-macosx14.0" -framework SwiftUI -framework WidgetKit \
+  -target "$campus_widget_arch-apple-macosx14.0" -framework Foundation -framework SwiftUI -framework WidgetKit \
+  -Xlinker -e -Xlinker _NSExtensionMain \
   "$campus_widget_root/Widgets/WidgetSnapshot.swift" "$campus_widget_root/Widgets/CampusDeskWidgets.swift" \
   -o "$campus_widget_output/Contents/MacOS/CampusDeskWidgets"
+# WidgetKit's Swift @main is invoked by NSExtensionMain after the extension
+# runtime is initialized. Entering Swift main directly crashes at bootstrap,
+# even though PlugInKit registration and offline SwiftUI previews succeed.
 /bin/cp "$campus_widget_root/Widgets/Info.plist" "$campus_widget_output/Contents/Info.plist"
 for campus_widget_key in CFBundleShortVersionString CFBundleVersion; do
   campus_widget_value="$(/usr/libexec/PlistBuddy -c "Print :$campus_widget_key" "$campus_widget_app/Contents/Info.plist")"

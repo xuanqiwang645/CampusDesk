@@ -85,7 +85,7 @@ CAMPUSDESK_INFO_PLIST="$PWD/Info-ThemeEdition.plist" bash scripts/package-macos.
 shasum -a 256 -c SHA256SUMS.txt
 ```
 
-当前源码包含 **v1.1.0 Build 70 本地更新**，尚未替换上方 Build 55 公开下载。保留个人待办表单的年-月-日输入、今天/明天/不设截止快捷操作及独立小时、分钟数字滚轮；默认不设截止，仅填日期默认 23:59，按北京时间预览与保存。继续保留中文输入法及重复提交保护。
+当前源码包含 **v1.1.0 Build 71 本地更新**，尚未替换上方 Build 55 公开下载。修正小组件的系统扩展启动入口，解决扩展虽已注册、但加载时立即崩溃的问题。保留个人待办表单的年-月-日输入、今天/明天/不设截止快捷操作及独立小时、分钟数字滚轮；默认不设截止，仅填日期默认 23:59，按北京时间预览与保存。继续保留中文输入法及重复提交保护。
 
 Build 69 新增独立**行事历**：月视图与每日清单统一显示课程、明确截止时间的待办、校历和个人日程，支持分类筛选、全天/跨日事件的新增、编辑、删除。继续采用北京时间和已有假期、调休规则，不猜测缺失的截止日期；个人日程仅保存在本机，并纳入备份。
 
@@ -172,6 +172,15 @@ macOS 原生附件和事件协议测试使用合成数据，不读取真实账�
 ```sh
 bash test-native.sh
 ```
+
+主题版小组件构建后，额外检查实际 Mach-O 启动入口（不仅检查编译参数或签名）：
+
+```bash
+CAMPUSDESK_WIDGET_BINARY="$PWD/build/CampusDesk Theme Edition.app/Contents/PlugIns/CampusDeskWidgets.appex/Contents/MacOS/CampusDeskWidgets" \
+  node --test Tests/widget-packaging.test.cjs
+```
+
+扩展必须先进入系统的 `_NSExtensionMain`，再由系统调用 Swift `@main`。`-application-extension` 本身不会设置该入口。离线 SwiftUI 渲染、签名通过和 PlugInKit 注册均不能替代小组件图库添加、桌面显示和点击跳转验收。
 
 源码构建与单元测试通过不等于真实账号、全部浏览器版本或全部学校验收通过。提交前请阅读 [CONTRIBUTING.md](CONTRIBUTING.md)，安全报告见 [SECURITY.md](SECURITY.md)。
 
