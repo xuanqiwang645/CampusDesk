@@ -171,7 +171,9 @@ test('widget snapshot caps history and fields while retaining today and emitting
   assert.equal(snapshot.items.find(item => item.kind === 'personal').location.length, 160);
   const allowed = ['id', 'title', 'kind', 'source', 'date', 'startAt', 'endAt', 'allDay', 'completed', 'location'].sort();
   assert.ok(snapshot.items.every(item => JSON.stringify(Object.keys(item).sort()) === JSON.stringify(allowed)));
-  assert.doesNotMatch(JSON.stringify(snapshot), /PRIVATE DESCRIPTION|outside|"title":"complete"/);
+  assert.ok(snapshot.items.some(item => item.title === 'outside'), 'known future homework remains visible beyond the calendar window');
+  assert.equal(snapshot.counts.homework, 132);
+  assert.doesNotMatch(JSON.stringify(snapshot), /PRIVATE DESCRIPTION|"title":"complete"/);
 });
 
 test('widget prioritizes today and enforces its 100-row limit under a dense calendar', () => {
@@ -181,6 +183,39 @@ test('widget prioritizes today and enforces its 100-row limit under a dense cale
   assert.equal(snapshot.items.length, 100);
   assert.equal(snapshot.counts.today, 120);
   assert.equal(new Set(snapshot.items.map(item => item.id)).size, 100);
+});
+
+test('dense courses cannot crowd out school events, personal events or homework', () => {
+  let state = Core.emptyState();
+  state.settings.customLessons = Array.from({ length: 120 }, (_, index) => ({ id: 'class-' + index, title: 'Class ' + index,
+    date: '2026-10-10', weekdays: [], weekPattern: 'all', start: '12:00', end: '12:40', room: 'E101' }));
+  state.manualTasks = [task('late', '2026-10-09T14:00:00Z'), task('far-future', '2026-12-10T14:00:00Z'), task('no-date', null)];
+  state = calendar(state, ['BEGIN:VEVENT', 'UID:school', 'DTSTART;VALUE=DATE:20261010', 'DTEND;VALUE=DATE:20261011', 'SUMMARY:School event', 'END:VEVENT']);
+  state = Agenda.upsertPersonalEvent(state, event({ title: 'Personal event' }), { now });
+  const snapshot = Agenda.widgetSnapshot(state, now);
+  assert.equal(snapshot.items.length, 100);
+  assert.deepEqual(new Set(snapshot.items.map(item => item.kind)), new Set(['course', 'school', 'personal', 'task']));
+  assert.ok(['late', 'far-future', 'no-date'].every(title => snapshot.items.some(item => item.title === title)));
+  assert.equal(snapshot.counts.courses, 120);
+  assert.equal(snapshot.counts.calendar, 2);
+  assert.equal(snapshot.counts.homework, 3);
+  assert.ok(Buffer.byteLength(JSON.stringify(snapshot)) < 262144);
+});
+
+test('undated homework keeps an explicit unknown deadline and excludes every source completion', () => {
+  const state = Core.emptyState();
+  state.manualTasks = [task('personal-undated', null), task('personal-done', null, { status: 'completed' })];
+  state.snapshots.managebac.test = { capturedAt: now, tasks: [task('mb-undated', null), task('mb-done', null)] };
+  state.taskChecks['mb-done'] = true;
+  state.snapshots.teams.test = { capturedAt: now, tasks: [task('teams:undated', null), task('teams:done', null, { status: 'completed' })] };
+  const snapshot = Agenda.widgetSnapshot(state, now);
+  assert.equal(snapshot.items.length, 3);
+  assert.equal(snapshot.counts.homework, 3);
+  assert.deepEqual(new Set(snapshot.items.map(item => item.source)), new Set(['manual', 'managebac', 'teams']));
+  assert.ok(snapshot.items.every(item => item.kind === 'task' && item.startAt === null && item.endAt === null && item.date === snapshot.day && !item.allDay));
+  assert.equal(snapshot.counts.today, 0, 'unknown deadlines do not count as due today');
+  assert.equal(snapshot.counts.overdue, 0);
+  assert.equal(range(state).length, 0, 'undated homework does not acquire an in-app calendar deadline');
 });
 
 test('widget IDs conceal source identity and remain stable while Unicode truncation preserves emoji', () => {

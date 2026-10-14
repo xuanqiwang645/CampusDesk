@@ -7,8 +7,8 @@ import Foundation
         defer { try? FileManager.default.removeItem(at: directory) }
         let url = directory.appendingPathComponent("agenda.json")
         let now = CampusWidgetSnapshot.timestamp("2026-10-10T02:00:00Z")!
-        func item(_ id: String, _ kind: String, _ start: String?, _ end: String? = nil, completed: Bool = false) -> [String: Any] {
-            ["id": id, "title": id, "kind": kind, "source": "personal", "date": "2026-10-10", "startAt": start as Any? ?? NSNull(), "endAt": end as Any? ?? NSNull(), "allDay": false, "completed": completed]
+        func item(_ id: String, _ kind: String, _ start: String?, _ end: String? = nil, completed: Bool = false, date: String = "2026-10-10", allDay: Bool = false) -> [String: Any] {
+            ["id": id, "title": id, "kind": kind, "source": "personal", "date": date, "startAt": start as Any? ?? NSNull(), "endAt": end as Any? ?? NSNull(), "allDay": allDay, "completed": completed]
         }
         var document: [String: Any] = ["schemaVersion": 1, "generatedAt": "2026-10-10T01:00:00.000Z", "day": "2026-10-10", "timezone": "Asia/Shanghai", "counts": ["today": 5, "upcoming": 5, "overdue": 1], "items": [
             item("expired-course", "course", "2026-10-10T00:00:00Z", "2026-10-10T01:00:00Z"),
@@ -48,6 +48,40 @@ import Foundation
         check(CampusWidgetSnapshot.dayString(CampusWidgetSnapshot.timestamp("2026-10-09T17:00:00Z")!) == "2026-10-10", "Beijing midnight independent of host zone")
         check(!CampusWidgetSnapshot.validDay("2026-02-30") && CampusWidgetSnapshot.validDay("2028-02-29"), "strict calendar day validation")
         check(CampusWidgetSnapshot.link(day: "2026-10-10").absoluteString == "campusdesk-theme://calendar?date=2026-10-10", "bounded calendar deep link")
+        document["items"] = [
+            item("finished-course", "course", "2026-10-10T00:00:00Z", "2026-10-10T01:00:00Z"),
+            item("current-course", "course", "2026-10-10T01:30:00Z", "2026-10-10T02:30:00Z"),
+            item("tomorrow-course", "course", "2026-10-11T00:00:00Z", "2026-10-11T01:00:00Z", date: "2026-10-11"),
+            item("done-course", "course", "2026-10-10T03:00:00Z", "2026-10-10T04:00:00Z", completed: true),
+            item("school-all-day", "school", "2026-10-09T16:00:00Z", "2026-10-10T16:00:00Z", allDay: true),
+            item("current-personal-event", "personal", "2026-10-10T01:00:00Z", "2026-10-10T03:00:00Z"),
+            item("finished-school-event", "school", "2026-10-10T00:00:00Z", "2026-10-10T01:00:00Z"),
+            item("finished-personal-event", "personal", "2026-10-10T00:00:00Z", "2026-10-10T01:00:00Z"),
+            item("past-single-event", "personal", "2026-10-10T01:00:00Z"),
+            item("yesterday-school-event", "school", "2026-10-08T16:00:00Z", "2026-10-09T16:00:00Z", date: "2026-10-09", allDay: true),
+            item("tomorrow-school-event", "school", "2026-10-11T02:00:00Z", "2026-10-11T03:00:00Z", date: "2026-10-11"),
+            item("done-personal-event", "personal", "2026-10-10T04:00:00Z", completed: true),
+            item("older-overdue", "task", "2026-10-09T08:00:00Z", date: "2026-10-09"),
+            item("recent-overdue", "task", "2026-10-10T01:00:00Z"),
+            item("nearest-homework", "task", "2026-10-10T03:00:00Z"),
+            item("later-homework", "task", "2026-10-11T03:00:00Z", date: "2026-10-11"),
+            item("undated-homework", "task", nil),
+            item("done-homework", "task", "2026-10-10T00:00:00Z", completed: true)
+        ]
+        try save()
+        guard let overview = CampusWidgetSnapshot.read(from: url) else { fatalError("mixed overview projection rejected") }
+        check(overview.courses(now: now).map(\.id) == ["current-course", "tomorrow-course"], "course section retains tomorrow and excludes finished or completed lessons")
+        check(overview.courses(now: now.addingTimeInterval(1800)).map(\.id) == ["tomorrow-course"], "after today's last class ends the next day's class remains available")
+        check(overview.calendarEvents(now: now).map(\.id) == ["school-all-day", "current-personal-event", "tomorrow-school-event"], "calendar section contains active or future school and personal events only")
+        check(overview.calendarEvents(now: now.addingTimeInterval(3600)).map(\.id) == ["school-all-day", "tomorrow-school-event"], "calendar event disappears at its exact ending time")
+        check(overview.calendarEvents(now: CampusWidgetSnapshot.timestamp("2026-10-10T16:00:00Z")!).map(\.id) == ["tomorrow-school-event"], "all-day calendar event disappears at Beijing midnight")
+        let homework = overview.homework(now: now)
+        check(homework.map(\.id) == ["recent-overdue", "older-overdue", "nearest-homework", "later-homework", "undated-homework"], "homework prioritizes recent overdue work, then nearest deadlines, then undated tasks")
+        check(homework.allSatisfy { $0.kind == "task" && !$0.completed }, "homework section excludes courses, calendar events and completed work")
+        check(homework.last?.start == nil && homework.last?.deadlineStatus(at: now) == nil, "missing deadline stays missing without a fabricated date or countdown")
+        check(overview.visibleItems(deadlines: true, now: now).map(\.id) == homework.map(\.id), "dedicated deadline widget uses the same complete homework selection")
+        let expired = now.addingTimeInterval(86400 * 9)
+        check(overview.courses(now: expired).isEmpty && overview.calendarEvents(now: expired).isEmpty && overview.homework(now: expired).isEmpty, "all three sections reject an expired projection")
         let symlink = directory.appendingPathComponent("link.json")
         try FileManager.default.createSymbolicLink(at: symlink, withDestinationURL: url)
         check(CampusWidgetSnapshot.read(from: symlink) == nil, "reject symlink snapshot")

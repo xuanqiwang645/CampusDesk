@@ -53,6 +53,13 @@ enum CampusAgendaSnapshotError: LocalizedError {
 }
 
 enum CampusAgendaLink {
+    static func isTasks(_ url: URL) -> Bool {
+        guard let parts = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return false }
+        return parts.scheme == "campusdesk-theme" && parts.host == "tasks" &&
+            parts.user == nil && parts.password == nil && parts.port == nil &&
+            (parts.path.isEmpty || parts.path == "/") && parts.query == nil && parts.fragment == nil
+    }
+
     static func day(from url: URL) -> String? {
         guard let parts = URLComponents(url: url, resolvingAgainstBaseURL: false),
               parts.scheme == "campusdesk-theme", parts.host == "calendar",

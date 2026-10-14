@@ -452,6 +452,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
     var stateBridge = CampusStateBridgeBoundary()
     var resumeAfterImportAcknowledgement = false
     var pendingAgendaDay: String?
+    var pendingWidgetTasks = false
     var widgetTimer: Timer?
     var pendingWidgetWrite: UInt64?
     var widgetForceRefresh = false
@@ -668,12 +669,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
     @objc func showDashboard() { window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true) }
     func application(_ application: NSApplication, open urls: [URL]) {
         guard campusDeskBundleIdentifier == "local.campusdesk.mac.themeedition",
-              let day = urls.compactMap({ CampusAgendaLink.day(from: $0) }).first else { return }
-        pendingAgendaDay = day
+              let url = urls.first(where: { CampusAgendaLink.day(from: $0) != nil || CampusAgendaLink.isTasks($0) }) else { return }
+        pendingAgendaDay = CampusAgendaLink.day(from: url)
+        pendingWidgetTasks = CampusAgendaLink.isTasks(url)
         if window != nil { showDashboard() }
         deliverAgendaNavigation()
     }
     func deliverAgendaNavigation() {
+        if ready && pendingWidgetTasks {
+            pendingWidgetTasks = false
+            emit(["type": "navigate", "page": "tasks"])
+            return
+        }
         guard ready, let day = pendingAgendaDay else { return }
         pendingAgendaDay = nil
         emit(["type": "navigate", "page": "calendar", "date": day])

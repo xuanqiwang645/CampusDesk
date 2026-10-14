@@ -44,6 +44,10 @@ struct AgendaNativeSmoke {
         check(!(try publisher.publish(state: state, now: now.addingTimeInterval(240))), "Duplicate cleared state is coalesced")
         check(try publisher.publish(state: state, now: now.addingTimeInterval(3600)), "Active app refreshes stale projection timestamp")
         check(CampusAgendaLink.day(from: URL(string: "campusdesk-theme://calendar?date=2026-10-10")!) == "2026-10-10", "Widget link routes a valid day")
+        check(CampusAgendaLink.isTasks(URL(string: "campusdesk-theme://tasks")!), "Widget homework opens tasks without a fabricated date")
+        for invalid in ["https://tasks", "campusdesk-theme://user@tasks", "campusdesk-theme://tasks:80", "campusdesk-theme://tasks/open", "campusdesk-theme://tasks?url=https://example.com", "campusdesk-theme://tasks#x"] {
+            check(!CampusAgendaLink.isTasks(URL(string: invalid)!), "Reject unsupported task links")
+        }
         for invalid in ["https://calendar?date=2026-10-10", "campusdesk-theme://calendar?date=2026-02-30", "campusdesk-theme://calendar?date=2026-10-10&date=2026-10-11", "campusdesk-theme://calendar?date=2026-10-10&url=https://example.com", "campusdesk-theme://calendar/open?date=2026-10-10", "campusdesk-theme://user@calendar?date=2026-10-10", "campusdesk-theme://calendar?date=2026-10-10#x"] {
             check(CampusAgendaLink.day(from: URL(string: invalid)!) == nil, "Unsupported deep link is ignored")
         }

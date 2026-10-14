@@ -4,7 +4,7 @@ import WidgetKit
 enum CampusWidgetMode {
     case today, deadlines, nextClass
     var title: String {
-        switch self { case .today: return "今日行事历"; case .deadlines: return "截止提醒"; case .nextClass: return "下一节课" }
+        switch self { case .today: return "校园总览"; case .deadlines: return "作业与待办"; case .nextClass: return "课程提醒" }
     }
     var symbol: String {
         switch self { case .today: return "calendar"; case .deadlines: return "checklist"; case .nextClass: return "graduationcap" }
@@ -66,13 +66,22 @@ struct CampusWidgetView: View {
         return entry.snapshot?.visibleItems(deadlines: mode == .deadlines, now: entry.date) ?? []
     }
     private var limit: Int { mode == .deadlines ? (large ? 4 : small ? 1 : 2) : (large ? 5 : small ? 2 : 3) }
+    private var courseItems: [CampusWidgetItem] {
+        entry.preview ? sampleItems.filter { $0.kind == "course" } : entry.snapshot?.courses(now: entry.date) ?? []
+    }
+    private var calendarItems: [CampusWidgetItem] {
+        entry.preview ? sampleItems.filter { ["school", "personal"].contains($0.kind) } : entry.snapshot?.calendarEvents(now: entry.date) ?? []
+    }
+    private var homeworkItems: [CampusWidgetItem] {
+        entry.preview ? sampleItems.filter(\.isTask) : entry.snapshot?.homework(now: entry.date) ?? []
+    }
 
     var body: some View {
         #if WIDGET_RENDER
         content.padding(16).background(background)
         #else
         content
-            .widgetURL(CampusWidgetSnapshot.link(day: mode == .today ? day : (items.first?.date ?? day)))
+            .widgetURL(mode == .deadlines ? URL(string: "campusdesk-theme://tasks")! : CampusWidgetSnapshot.link(day: mode == .today ? day : (items.first?.date ?? day)))
             .containerBackground(for: .widget) { background }
             .environment(\.timeZone, CampusWidgetSnapshot.beijing.timeZone)
         #endif
@@ -85,6 +94,8 @@ struct CampusWidgetView: View {
                 emptyContent(icon: "arrow.triangle.2.circlepath", title: entry.issue?.title ?? "打开 CampusDesk", detail: entry.issue?.detail ?? "同步后显示课程与待办")
             } else if !entry.preview && expired {
                 emptyContent(icon: "calendar.badge.exclamationmark", title: "日程需要更新", detail: "打开 CampusDesk 同步最新安排")
+            } else if mode == .today {
+                overviewContent
             } else if items.isEmpty {
                 emptyContent(icon: "checkmark.circle", title: stale ? "请先刷新日程" : mode == .deadlines ? "暂无截止待办" : mode == .nextClass ? "今天暂无后续课程" : "今天暂无安排", detail: stale ? "缓存较旧，点击打开应用" : "点击查看行事历")
             } else if mode == .nextClass, let course = items.first {
@@ -112,7 +123,7 @@ struct CampusWidgetView: View {
     private var header: some View {
         HStack(spacing: 5) {
             Image(systemName: mode.symbol).font(.system(size: 11, weight: .semibold)).foregroundStyle(accent)
-            Text(small && mode == .today ? "今日安排" : small && mode == .nextClass && items.first?.isOngoing(at: entry.date) == true ? "正在上课" : mode.title)
+            Text(small && mode == .nextClass && items.first?.isOngoing(at: entry.date) == true ? "正在上课" : mode.title)
                 .font(.system(size: 11, weight: .semibold)).lineLimit(1).layoutPriority(1)
             Spacer(minLength: 3)
             Text(String(day.suffix(5)).replacingOccurrences(of: "-", with: "/"))
@@ -127,6 +138,7 @@ struct CampusWidgetView: View {
             Spacer(minLength: 0)
             if entry.preview { Text("示例").font(.system(size: 9)) }
             else if stale { Text("缓存待更新").font(.system(size: 9)) }
+            else if mode == .today { Text("点按查看全部").font(.system(size: 9)) }
             else if mode != .nextClass && items.count > limit { Text("还有 \(items.count - limit) 项").font(.system(size: 9)) }
             else if let generated = entry.snapshot.flatMap({ CampusWidgetSnapshot.timestamp($0.generatedAt) }) {
                 Text("更新 " + timeString(generated)).font(.system(size: 9)).accessibilityLabel("数据更新于 " + timeString(generated))
@@ -154,10 +166,74 @@ struct CampusWidgetView: View {
         #else
         if small { content() }
         else {
-            Link(destination: CampusWidgetSnapshot.link(day: item.date), label: content)
+            Link(destination: item.isTask ? URL(string: "campusdesk-theme://tasks")! : CampusWidgetSnapshot.link(day: item.date), label: content)
                 .buttonStyle(.plain)
         }
         #endif
+    }
+
+    // Each category owns its space: a full timetable must not push homework
+    // or calendar events out of the overview's visible rows.
+    @ViewBuilder private var overviewContent: some View {
+        if !small && !large {
+            HStack(alignment: .top, spacing: 9) {
+                overviewSection("课程提醒", symbol: "graduationcap", rows: courseItems, empty: "暂无后续课程")
+                Divider().opacity(0.35)
+                overviewSection("行事历", symbol: "calendar", rows: calendarItems, empty: "暂无日历事件")
+                Divider().opacity(0.35)
+                overviewSection("作业提示", symbol: "checklist", rows: homeworkItems, empty: "暂无未完成作业")
+            }.frame(maxHeight: .infinity, alignment: .top)
+        } else {
+            VStack(alignment: .leading, spacing: small ? 4 : 10) {
+                overviewSection("课程提醒", symbol: "graduationcap", rows: courseItems, empty: "暂无后续课程")
+                Divider().opacity(0.35)
+                overviewSection("行事历", symbol: "calendar", rows: calendarItems, empty: "暂无日历事件")
+                Divider().opacity(0.35)
+                overviewSection("作业提示", symbol: "checklist", rows: homeworkItems, empty: "暂无未完成作业")
+            }.frame(maxHeight: .infinity, alignment: .top)
+        }
+    }
+
+    private func overviewSection(_ title: String, symbol: String, rows: [CampusWidgetItem], empty: String) -> some View {
+        VStack(alignment: .leading, spacing: small ? 1 : 5) {
+            HStack(spacing: 3) {
+                Image(systemName: symbol)
+                Text(title).lineLimit(1)
+                Spacer(minLength: 0)
+                if rows.count > (large ? 2 : 1) { Text("+\(rows.count - (large ? 2 : 1))").monospacedDigit() }
+            }.font(.system(size: small ? 8 : 10, weight: .semibold)).foregroundStyle(accent)
+            if rows.isEmpty {
+                Text(empty).font(.system(size: small ? 10 : 11)).foregroundStyle(.secondary).lineLimit(2)
+            } else {
+                ForEach(Array(rows.prefix(large ? 2 : 1))) { item in
+                    itemLink(item) {
+                        VStack(alignment: .leading, spacing: small ? 0 : 3) {
+                            Text(item.title).font(.system(size: small ? 11 : 12, weight: .semibold))
+                                .foregroundStyle(.primary).lineLimit(small || large ? 1 : 2).privacySensitive()
+                            Text(overviewDetail(item)).font(.system(size: small ? 9 : 10, weight: item.isTask ? .medium : .regular))
+                                .foregroundStyle(item.isTask ? urgencyColor(item) : .secondary)
+                                .lineLimit(small || large ? 1 : 3).monospacedDigit()
+                            if large, item.isTask, let status = item.deadlineStatus(at: entry.date) {
+                                pressureBar(status, color: urgencyColor(item))
+                            }
+                        }.frame(maxWidth: .infinity, alignment: .leading)
+                            .accessibilityElement(children: .combine)
+                    }
+                }
+            }
+        }.frame(maxWidth: .infinity, alignment: .topLeading)
+    }
+
+    private func overviewDetail(_ item: CampusWidgetItem) -> String {
+        if item.isTask {
+            guard let status = item.deadlineStatus(at: entry.date) else { return "截止待确认" }
+            return status.remainingText + (large ? " · " + deadlineDate(item) : "")
+        }
+        let datePrefix = item.date == day ? "" : String(item.date.suffix(5)).replacingOccurrences(of: "-", with: "/") + " "
+        let time = item.allDay ? "全天" : item.start.map(timeString) ?? "时间待确认"
+        let ongoing = item.isOngoing(at: entry.date) ? "进行中 · " : ""
+        let place = (item.location ?? "").isEmpty ? "" : " · " + (item.location ?? "")
+        return ongoing + datePrefix + time + place
     }
 
     private func category(_ item: CampusWidgetItem) -> String {
@@ -238,6 +314,7 @@ struct CampusWidgetView: View {
     }
 
     private func deadlineDate(_ item: CampusWidgetItem) -> String {
+        guard item.start != nil else { return "待确认" }
         let date = String(item.date.suffix(5)).replacingOccurrences(of: "-", with: "/")
         return date + (item.start.map { " " + timeString($0) } ?? "")
     }
@@ -276,6 +353,10 @@ struct CampusWidgetView: View {
                     .lineLimit(2).fixedSize(horizontal: false, vertical: true).privacySensitive()
                 Text((course.start.map(timeString) ?? "") + (course.end.map { " – " + timeString($0) } ?? ""))
                     .font(.system(size: 10)).foregroundStyle(.secondary).monospacedDigit().lineLimit(1).fixedSize()
+                if course.date != day {
+                    Text(String(course.date.suffix(5)).replacingOccurrences(of: "-", with: "/"))
+                        .font(.system(size: 10, weight: .medium)).foregroundStyle(accent)
+                }
                 if let location = course.location, !location.isEmpty {
                     Label(location, systemImage: "mappin").font(.system(size: small ? 9 : 10)).foregroundStyle(.secondary).lineLimit(1).privacySensitive()
                 }
@@ -349,8 +430,8 @@ struct CampusTodayWidget: Widget {
     let kind = "CampusDesk.Today"
     var body: some WidgetConfiguration {
         StaticConfiguration(kind: kind, provider: CampusWidgetProvider()) { CampusWidgetView(entry: $0, mode: .today) }
-            .configurationDisplayName("今日行事历")
-            .description("查看当天课程、待办和校历事件，点击返回对应日期。")
+            .configurationDisplayName("校园总览 · 课程、行事历与作业")
+            .description("固定显示课程提醒、行事历事件和作业提示；大号显示更多内容，未注明截止日期的作业也会保留。")
             .supportedFamilies([.systemSmall, .systemMedium, .systemLarge])
     }
 }
@@ -359,8 +440,8 @@ struct CampusDeadlinesWidget: Widget {
     let kind = "CampusDesk.Deadlines"
     var body: some WidgetConfiguration {
         StaticConfiguration(kind: kind, provider: CampusWidgetProvider()) { CampusWidgetView(entry: $0, mode: .deadlines) }
-            .configurationDisplayName("截止提醒")
-            .description("查看未完成待办、剩余时间和紧迫度；进度条表示临近截止程度。")
+            .configurationDisplayName("作业与待办提示")
+            .description("显示未完成作业、个人待办、剩余时间与截止待确认的任务。点击打开待办事项。")
             .supportedFamilies([.systemSmall, .systemMedium, .systemLarge])
     }
 }

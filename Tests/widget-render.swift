@@ -18,6 +18,7 @@ import WidgetKit
                     "allDay": false, "completed": false, "location": location as Any? ?? NSNull()]
         }
         let items = [
+            item("calendar-1", "English Corner · 口语交流", "personal", 1800, duration: 2400, location: "图书馆"),
             item("class-1", "AP Physics · 力学实验", "course", -600, duration: 3000, location: "E103 实验教室"),
             item("class-2", "English Language Arts I", "course", 3600, duration: 3000, location: "E101"),
             item("task-1", "完成化学实验报告并检查计算结果", "task", -3600),
@@ -78,6 +79,14 @@ import WidgetKit
                 from: JSONSerialization.data(withJSONObject: copy)), preview: false)
         }
         let stressEntry = try fixture(stressItems)
+        let undated: [String: Any] = ["id": "undated", "title": "阅读与课堂准备：截止时间待老师确认", "kind": "task", "source": "managebac", "date": day,
+            "startAt": NSNull(), "endAt": NSNull(), "allDay": false, "completed": false, "location": NSNull()]
+        let undatedEntry = try fixture([undated])
+        for (family, size, width, height) in [(WidgetFamily.systemSmall, "small", CGFloat(170), CGFloat(170)),
+                                             (.systemMedium, "medium", 360, 170), (.systemLarge, "large", 360, 376)] {
+            try render(CampusWidgetView(entry: undatedEntry, mode: .today, previewFamily: family), name: "undated-overview-" + size, width: width, height: height)
+            try render(CampusWidgetView(entry: undatedEntry, mode: .deadlines, previewFamily: family), name: "undated-tasks-" + size, width: width, height: height)
+        }
         for dark in [false, true] {
             let scheme: ColorScheme = dark ? .dark : .light
             let suffix = dark ? "dark" : "light"

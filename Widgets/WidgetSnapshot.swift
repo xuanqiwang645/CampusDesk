@@ -176,9 +176,8 @@ struct CampusWidgetSnapshot: Decodable {
 
     func courses(now: Date) -> [CampusWidgetItem] {
         guard !isExpired(at: now) else { return [] }
-        let today = Self.dayString(now)
         return items.filter { item in
-            guard item.kind == "course", !item.completed, item.date == today, let start = item.start else { return false }
+            guard item.kind == "course", !item.completed, let start = item.start else { return false }
             return item.end.map { $0 > now } ?? (start >= now)
         }.sorted {
             if $0.isOngoing(at: now) != $1.isOngoing(at: now) { return $0.isOngoing(at: now) }
@@ -187,12 +186,43 @@ struct CampusWidgetSnapshot: Decodable {
         }
     }
 
-    func visibleItems(deadlines: Bool, now: Date) -> [CampusWidgetItem] {
+    func calendarEvents(now: Date) -> [CampusWidgetItem] {
         guard !isExpired(at: now) else { return [] }
         let today = Self.dayString(now)
         return items.filter { item in
+            guard ["school", "personal"].contains(item.kind), !item.completed, item.date >= today else { return false }
+            if let end = item.end { return end > now }
+            return item.allDay || item.start.map { $0 >= now } != false
+        }.sorted {
+            if $0.date != $1.date { return $0.date < $1.date }
+            if $0.allDay != $1.allDay { return $0.allDay }
+            if $0.start != $1.start { return ($0.start ?? .distantPast) < ($1.start ?? .distantPast) }
+            return $0.id < $1.id
+        }
+    }
+
+    func homework(now: Date) -> [CampusWidgetItem] {
+        guard !isExpired(at: now) else { return [] }
+        return items.filter { $0.isTask && !$0.completed }.sorted { lhs, rhs in
+            // Show recently missed deadlines first, then the nearest upcoming
+            // deadline, then tasks whose deadline is unknown. Never invent one.
+            let left = lhs.start, right = rhs.start
+            if (left == nil) != (right == nil) { return left != nil }
+            if let left, let right, left != right {
+                let leftOverdue = left < now, rightOverdue = right < now
+                if leftOverdue != rightOverdue { return leftOverdue }
+                return leftOverdue ? left > right : left < right
+            }
+            return lhs.id < rhs.id
+        }
+    }
+
+    func visibleItems(deadlines: Bool, now: Date) -> [CampusWidgetItem] {
+        guard !isExpired(at: now) else { return [] }
+        if deadlines { return homework(now: now) }
+        let today = Self.dayString(now)
+        return items.filter { item in
             guard !item.completed else { return false }
-            if deadlines { return item.isTask && item.start != nil }
             guard item.date == today else { return false }
             if !item.allDay, ["course", "personal"].contains(item.kind), let end = item.end { return end > now }
             return true

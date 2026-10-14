@@ -129,21 +129,45 @@
   function removePersonalEvent(state, id) {
     return Core.validateState(Object.assign({}, state, { personalEvents: (state.personalEvents || []).filter(row => row.id !== id) }));
   }
-  /** Widget contract v1: today through +7 days, plus 20 most recent overdue tasks.
+  /** Widget contract v1: courses/calendar cover today through +7 days; homework
+   * includes future and undated work, plus 20 most recent prior-day deadlines.
    * Only display titles, source enums, times and locations cross into the widget.
-   * Counts describe the complete bounded date window, before the 100-item cap.
+   * Legacy date counts describe the bounded date window. Category counts include
+   * all useful candidates before the 100-item cap (including unresolved work).
    */
   function widgetSnapshot(state, now) {
     const current = instant(now), day = today(current), tasks = Core.getTasks(state);
     const inRange = collect(state, { start: day, end: addDays(day, 7) }, tasks).filter(item => !item.completed);
-    const overdue = tasks.map(taskItem).filter(item => item && !item.completed && Date.parse(item.startAt) < current.valueOf());
+    const homework = tasks.filter(task => !task.completed).map(task => taskItem(task) || {
+      id: 'task:' + task.source + ':' + task.id, title: task.title, kind: 'task', source: task.source,
+      // This date only anchors the snapshot. A null startAt explicitly means
+      // there is no known deadline; it must never become a fabricated due date.
+      date: day, startAt: null, endAt: null, allDay: false, completed: false, location: ''
+    });
+    const overdue = homework.filter(item => item.startAt && Date.parse(item.startAt) < current.valueOf());
     const prior = overdue.filter(item => item.date < day).sort((a, b) => b.startAt.localeCompare(a.startAt)).slice(0, 20);
-    // Keep today's agenda visible even when older unfinished work is plentiful.
-    const selected = inRange.filter(item => item.date === day).concat(prior, inRange.filter(item => item.date > day)).slice(0, 100);
+    const useful = inRange.filter(item => item.kind !== 'task' && (item.endAt ? Date.parse(item.endAt) > current.valueOf() : item.allDay || Date.parse(item.startAt) >= current.valueOf()));
+    const courses = useful.filter(item => item.kind === 'course');
+    const calendar = useful.filter(item => item.kind === 'school' || item.kind === 'personal');
+    // Reserve representation for every kind instead of letting a full school
+    // week exhaust the cap before calendar events or homework are reached.
+    const groups = [courses, calendar.filter(item => item.kind === 'school'), calendar.filter(item => item.kind === 'personal'),
+      overdue.filter(item => item.date === day).concat(prior).sort((a, b) => b.startAt.localeCompare(a.startAt)),
+      homework.filter(item => item.startAt && Date.parse(item.startAt) >= current.valueOf()).sort(order),
+      homework.filter(item => !item.startAt)];
+    const selected = [];
+    for (let index = 0; selected.length < 100; index += 1) {
+      let added = false;
+      for (const group of groups) {
+        if (selected.length < 100 && index < group.length) { selected.push(group[index]); added = true; }
+      }
+      if (!added) break;
+    }
     const items = selected.sort(order).map(item => ({ id: widgetID(item.id), title: displayText(item.title, 180), kind: item.kind, source: item.source,
       date: item.date, startAt: item.startAt, endAt: item.endAt, allDay: Boolean(item.allDay), completed: Boolean(item.completed), location: displayText(item.location, 160) }));
     return { schemaVersion: 1, generatedAt: current.toISOString(), day, timezone: ZONE, items,
-      counts: { today: inRange.filter(item => item.date === day).length, upcoming: inRange.filter(item => item.date > day).length, overdue: overdue.length } };
+      counts: { today: inRange.filter(item => item.date === day).length, upcoming: inRange.filter(item => item.date > day).length, overdue: overdue.length,
+        courses: courses.length, calendar: calendar.length, homework: homework.length } };
   }
   return Object.freeze({ today, addDays, monthRange, buildRange, eventForDate, normalizePersonalEvent, upsertPersonalEvent, removePersonalEvent, widgetSnapshot });
 });
