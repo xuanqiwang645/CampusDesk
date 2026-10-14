@@ -32,6 +32,8 @@ DeepSeek API 密钥通过原生组件保存在 macOS 钥匙串中。安装包不
 
 ## 版本记录
 
+本地 Build 71 的提交链、GPT 托管工作树和实机验收范围见[开发历史与工作树交接](docs/development-history.md)。下列公开版本记录保持原样，不等同于已发布最新本地构建。
+
 - [v1.1.0 Super Orion · 主题版 · 构建 55](releases/v1.1.0.md) — 更新设置向导版本记录、可重复触发的向导重启，以及更具体的学校平台读取失败诊断；同步发布可复现主题版源码。
 - [v1.0.0 Orion · 主题版 · 构建 54](https://github.com/xuanqiwang645/CampusDesk/releases/tag/v1.0.0) — 学习助手、对话页接入方式切换、配置向导与教程、密钥保存修复，以及任务卡片倒计时和紧迫度显示。
 - [v0.5.13](releases/v0.5.13.md) — 双 GPA 算法与双 K 线；整合校历导入、连接体验及同步修正。
