@@ -5,6 +5,7 @@ import Foundation
 /// these checks keep malformed IPC and disk input away from privileged code.
 enum CampusSecurity {
     static let maximumStateBytes = 26_214_400
+    static let maximumAssistantHistoryBytes = 8 * 1024 * 1024
     private static let secretQueryNames: Set<String> = [
         "access_token", "refresh_token", "id_token", "token", "client_secret",
         "password", "passwd", "assertion", "code", "code_verifier", "authorization",
@@ -93,6 +94,18 @@ enum CampusSecurity {
         }
         if let read = state["gradeUpdateRead"] {
             guard let flags = read as? [String: Any], flags.count <= 200 else { return false }
+        }
+        if let history = state["assistantConversations"] {
+            guard let rows = history as? [[String: Any]], rows.count <= 200,
+                  let data = try? JSONSerialization.data(withJSONObject: rows, options: [.withoutEscapingSlashes]), data.count <= maximumAssistantHistoryBytes,
+                  rows.allSatisfy({ row in
+                      guard let messages = row["messages"] as? [Any] else { return false }
+                      return messages.count <= 500
+                  }) else { return false }
+        }
+        if let active = state["assistantActiveConversationId"] {
+            guard let identifier = active as? String, identifier.utf8.count <= 100,
+                  identifier.isEmpty || identifier.range(of: "^[A-Za-z0-9-]{1,100}$", options: .regularExpression) != nil else { return false }
         }
 
         if let provider = settings["aiProvider"] as? String,

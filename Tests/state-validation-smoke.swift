@@ -26,6 +26,13 @@ struct StateValidationSmokeTests {
         check((valid["gradeUpdateRead"] as? [String: Any])?.isEmpty == true, "Old states start without unread bookkeeping")
         check((valid["gradeUpdateBaselines"] as? [Any])?.isEmpty == true && (valid["gradeUpdateCaptures"] as? [Any])?.isEmpty == true,
               "Old snapshots are not fabricated into new grade notifications")
+        check((valid["assistantConversations"] as? [Any])?.isEmpty == true && valid["assistantActiveConversationId"] as? String == "",
+              "Legacy Theme states receive an empty assistant history without fabricated chats")
+        var oversizedChatLibrary = valid
+        oversizedChatLibrary["assistantConversations"] = Array(repeating: ["messages": [Any]()], count: 201)
+        check(!CampusSecurity.validStateEnvelope(oversizedChatLibrary), "Native envelope bounds assistant conversations before shared validation")
+        oversizedChatLibrary["assistantConversations"] = [["messages": Array(repeating: [String: Any](), count: 501)]]
+        check(!CampusSecurity.validStateEnvelope(oversizedChatLibrary), "Native envelope bounds messages in each conversation")
         var oversizedInbox = valid
         oversizedInbox["gradeUpdates"] = Array(repeating: [String: Any](), count: 201)
         check(!CampusSecurity.validStateEnvelope(oversizedInbox), "Native envelope bounds grade notifications before full validation")
@@ -57,6 +64,45 @@ struct StateValidationSmokeTests {
         try FileManager.default.createDirectory(at: temporary, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: temporary) }
         let current = temporary.appendingPathComponent("state.json"), previous = temporary.appendingPathComponent("state.previous.json")
+        var withAssistantHistory = valid
+        withAssistantHistory["assistantConversations"] = [["id": "chat-followup", "title": "Saved follow-up", "createdAt": "2026-10-15T12:00:00Z",
+            "updatedAt": "2026-10-15T12:01:00Z", "draft": "  unfinished question\n", "provider": "hybrid", "contextCategories": ["tasks", "schedule"],
+            "apiKey": "synthetic-must-be-discarded", "messages": [
+                ["role": "user", "content": "First question", "contextKey": "deepseek|tasks"],
+                ["role": "assistant", "content": "First answer", "display": "First answer\nDeepSeek", "contextKey": "deepseek|tasks", "providerUsed": "deepseek"]]]]
+        withAssistantHistory["assistantActiveConversationId"] = "chat-followup"
+        let assistantFile = temporary.appendingPathComponent("assistant-history.json")
+        _ = try validator.write(withAssistantHistory, to: assistantFile, previous: nil, schools: schools)
+        let assistantRoundTrip = try validator.read(assistantFile, schools: schools)
+        let savedConversation = (assistantRoundTrip["assistantConversations"] as? [[String: Any]])?.first
+        check(savedConversation?["draft"] as? String == "  unfinished question\n" && (savedConversation?["messages"] as? [Any])?.count == 2,
+              "Native disk restart preserves assistant messages and the exact unfinished draft")
+        check(assistantRoundTrip["assistantActiveConversationId"] as? String == "chat-followup" && savedConversation?["provider"] as? String == "hybrid",
+              "Native disk restart restores the selected conversation and its provider")
+        check(savedConversation?["apiKey"] == nil, "History schema never saves an additional credential field")
+        let assistantBackup = try validator.exportBackup(assistantRoundTrip, schools: schools)
+        check((try validator.importBackup(assistantBackup, schools: schools).state["assistantConversations"] as? [Any])?.count == 1,
+              "Assistant conversations survive identified export and import")
+        var malformedHistory = withAssistantHistory
+        malformedHistory["assistantConversations"] = [["id": "chat-followup", "title": "Invalid role", "createdAt": "2026-10-15T12:00:00Z",
+            "updatedAt": "2026-10-15T12:01:00Z", "messages": [["role": "system", "content": "Forbidden archive role"]]]]
+        let assistantBytes = try Data(contentsOf: assistantFile)
+        rejects("Invalid archive messages cannot replace saved conversations") { _ = try validator.write(malformedHistory, to: assistantFile, previous: nil, schools: schools) }
+        check(try Data(contentsOf: assistantFile) == assistantBytes, "Rejected history writes leave the last saved conversation intact")
+        var maximumDisplayHistory = withAssistantHistory
+        var maximumDisplayRow = (withAssistantHistory["assistantConversations"] as! [[String: Any]])[0]
+        maximumDisplayRow["messages"] = [["role": "assistant", "content": String(repeating: "x", count: 100000), "display": String(repeating: "x", count: 102000)]]
+        maximumDisplayHistory["assistantConversations"] = [maximumDisplayRow]
+        check((try validator.validate(maximumDisplayHistory, schools: schools)["assistantConversations"] as? [Any])?.count == 1,
+              "Native shared validation accepts the full answer plus display attribution without truncation")
+        var slashHeavyHistory = withAssistantHistory
+        var slashHeavyRow = (withAssistantHistory["assistantConversations"] as! [[String: Any]])[0]
+        slashHeavyRow["messages"] = Array(repeating: ["role": "assistant", "content": String(repeating: "/", count: 100000)], count: 43)
+        slashHeavyHistory["assistantConversations"] = [slashHeavyRow]
+        check(CampusSecurity.validStateEnvelope(slashHeavyHistory), "Native history byte limit matches JavaScript JSON rather than double-counting escaped slashes")
+        slashHeavyRow["messages"] = Array(repeating: ["role": "assistant", "content": String(repeating: "学", count: 100000)], count: 30)
+        slashHeavyHistory["assistantConversations"] = [slashHeavyRow]
+        check(!CampusSecurity.validStateEnvelope(slashHeavyHistory), "Native history budget rejects more than 8 MiB of UTF-8 even below the character limit")
         let mark: [String: Any] = ["score": 0, "maxScore": 20, "percentage": 0, "gradeLabel": ""]
         let impact: [String: Any] = ["comparable": false, "courseBefore": NSNull(), "courseAfter": NSNull(),
             "bandedBefore": NSNull(), "bandedAfter": NSNull(), "linearBefore": NSNull(), "linearAfter": NSNull()]

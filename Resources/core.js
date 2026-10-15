@@ -8,6 +8,7 @@
   'use strict';
   const VERSION = 1;
   const MAX_BYTES = 25 * 1024 * 1024;
+  const MAX_ASSISTANT_HISTORY_BYTES = 8 * 1024 * 1024;
   const MAX_ROWS = 3000;
   const BAD_KEYS = new Set(['__proto__', 'prototype', 'constructor']);
   const SOURCES = ['seiue', 'managebac', 'teams'];
@@ -77,7 +78,7 @@
     if (depth > 16) fail('嵌套层数过多');
     count.n += 1;
     if (count.n > 2000000) fail('内容过多');
-    if (typeof value === 'string' && value.length > 100000) fail('文本过长');
+    if (typeof value === 'string' && value.length > 102000) fail('文本过长');
     if (typeof value === 'number' && !Number.isFinite(value)) fail('数字无效');
     if (value === null || typeof value !== 'object') {
       if (!['undefined', 'string', 'number', 'boolean', 'object'].includes(typeof value)) fail('不支持的数据类型');
@@ -470,7 +471,11 @@
       reminderMinutes: 30, reminderSubjects: [], teamsDueOverrides: {}, dashboardTheme: 'classic', colorTheme: 'sage', gpaCandleColors: 'red-up', language: 'zh-CN', focusSubjects: [], focusTeamsChannels: [], customLessons: [],
       scheduleHolidays: [], scheduleWeekAnchor: '', scheduleOverrides: [], focusMode: false, graphicsMode: 'auto', planOrder: [], taskMinutes: {}, taskPriority: {}, gradeGoals: {}, gradePlans: {}, gpaTermDates: {}, ecIdentityNames: [] }, snapshots: { seiue: {}, managebac: {}, teams: {} },
       manualTasks: [], personalEvents: [], taskChecks: {}, feedbackRead: {}, gradeHistory: [], gradeUpdates: [], gradeUpdateRead: {}, gradeUpdateBaselines: [], gradeUpdateCaptures: [], changeLog: [], schoolCalendar: { fileName: '', importedAt: '', events: [] } };
-    if (themeEdition) Object.assign(state.settings, { aiProvider: 'off', aiModel: '', aiOllamaModel: 'qwen3:8b', aiContextCategories: ['tasks', 'schedule'], setupWizardCompleted: false, setupWizardStep: 0, setupWizardIntroVersion: '' });
+    if (themeEdition) {
+      Object.assign(state.settings, { aiProvider: 'off', aiModel: '', aiOllamaModel: 'qwen3:8b', aiContextCategories: ['tasks', 'schedule'], setupWizardCompleted: false, setupWizardStep: 0, setupWizardIntroVersion: '' });
+      state.assistantConversations = [];
+      state.assistantActiveConversationId = '';
+    }
     return state;
   }
   function scheduleRow(row) {
@@ -860,6 +865,72 @@
       title: str(value.title, 500), course: str(value.course, 300), detail: str(value.detail, 500),
       capturedAt: dateISO(value.capturedAt, false), url: checkedURL(value.url, source, true) };
   }
+  function assistantText(value, maximum, optional) {
+    if (value === undefined && optional) return '';
+    if (typeof value !== 'string' || value.length > maximum) fail('学习助手历史文本类型或长度无效');
+    // Drafts, code blocks and model answers retain their exact whitespace.
+    return value;
+  }
+  function assistantConversationID(value) {
+    if (typeof value !== 'string' || !/^[A-Za-z0-9-]{1,100}$/.test(value) || BAD_KEYS.has(value)) fail('学习助手对话 ID 无效');
+    return value;
+  }
+  function assistantHistoryHasCapacity(value, reserveBytes = 0) {
+    if (!Number.isSafeInteger(reserveBytes) || reserveBytes < 0 || reserveBytes > MAX_ASSISTANT_HISTORY_BYTES) return false;
+    try {
+      const serialized = JSON.stringify(value);
+      return typeof serialized === 'string' && utf8Length(serialized) + reserveBytes <= MAX_ASSISTANT_HISTORY_BYTES;
+    } catch (_) { return false; }
+  }
+  function assistantHistorySize(value) {
+    if (!assistantHistoryHasCapacity(value)) fail('学习助手历史超过 8 MB，请先导出备份并删除部分历史对话');
+  }
+  function normalizeAssistantConversations(value) {
+    const rows = array(value, '学习助手对话', 200);
+    assistantHistorySize(rows);
+    const seen = new Set();
+    const result = rows.map(row => {
+      record(row, '学习助手对话');
+      const conversationID = assistantConversationID(row.id);
+      if (seen.has(conversationID)) fail('学习助手对话 ID 重复');
+      seen.add(conversationID);
+      const createdAt = zonedISO(row.createdAt, false), updatedAt = zonedISO(row.updatedAt, false);
+      if (Date.parse(updatedAt) < Date.parse(createdAt)) fail('学习助手对话更新时间早于创建时间');
+      const conversation = { id: conversationID, title: assistantText(row.title, 160), createdAt, updatedAt,
+        draft: assistantText(row.draft, 6000, true), messages: array(row.messages, '学习助手对话消息', 500).map(message => {
+          record(message, '学习助手对话消息');
+          if (!['user', 'assistant'].includes(message.role)) fail('学习助手历史消息角色无效');
+          const clean = { role: message.role, content: assistantText(message.content, message.role === 'user' ? 6000 : 100000),
+            contextKey: assistantText(message.contextKey, 1000, true) };
+          if (message.display !== undefined) clean.display = assistantText(message.display, 102000);
+          if (message.failed !== undefined) clean.failed = bool(message.failed);
+          if (message.providerUsed !== undefined) {
+            if (!['deepseek', 'ollama'].includes(message.providerUsed)) fail('学习助手历史模型来源无效');
+            clean.providerUsed = message.providerUsed;
+          }
+          if (message.createdAt !== undefined) clean.createdAt = zonedISO(message.createdAt, false);
+          return clean;
+        }) };
+      if (row.provider !== undefined) {
+        if (!['off', 'ollama', 'deepseek', 'hybrid'].includes(row.provider)) fail('学习助手历史接入方式无效');
+        conversation.provider = row.provider;
+      }
+      if (row.contextCategories !== undefined) {
+        const categories = array(row.contextCategories, '学习助手历史资料范围', 7);
+        if (categories.some(value => !['tasks', 'grades', 'schedule', 'feedback', 'teams', 'calendar', 'attachments'].includes(value)) || new Set(categories).size !== categories.length) fail('学习助手历史资料范围无效');
+        conversation.contextCategories = categories.slice();
+      }
+      return conversation;
+    });
+    assistantHistorySize(result);
+    return result;
+  }
+  function validateAssistantConversations(value) {
+    // This standalone entry point is also used to preflight a UI edit before it
+    // replaces the last saved history. State validation already inspects all input.
+    inspect(value, 0, { n: 0 });
+    return normalizeAssistantConversations(value);
+  }
   function validateState(input) {
     const raw = inputObject(input);
     if (raw.version !== VERSION) fail('不支持的数据版本');
@@ -909,6 +980,9 @@
       const allowedAIContexts = new Set(['tasks', 'grades', 'schedule', 'feedback', 'teams', 'calendar', 'attachments']);
       s.settings.aiContextCategories = settings.aiContextCategories === undefined ? ['tasks', 'schedule'] : [...new Set(array(settings.aiContextCategories, '学习助手资料范围', 7).map(value => str(value, 30)))];
       if (s.settings.aiContextCategories.some(value => !allowedAIContexts.has(value))) fail('学习助手资料范围无效');
+      s.assistantConversations = normalizeAssistantConversations(raw.assistantConversations);
+      s.assistantActiveConversationId = raw.assistantActiveConversationId === undefined || raw.assistantActiveConversationId === '' ? '' : assistantConversationID(raw.assistantActiveConversationId);
+      if (s.assistantActiveConversationId && !s.assistantConversations.some(row => row.id === s.assistantActiveConversationId)) fail('学习助手当前对话不存在');
     }
     s.settings.planOrder = settings.planOrder === undefined ? [] : array(settings.planOrder, '今日计划顺序', 3000).map(value => str(value, 512));
     for (const key of ['taskMinutes', 'taskPriority', 'gradeGoals']) {
@@ -1961,7 +2035,7 @@
       sources: { seiue: getSourceStatus(state, 'seiue', date), managebac: getSourceStatus(state, 'managebac', date), teams: getSourceStatus(state, 'teams', date) },
       changes: state.changeLog.slice().sort((a, b) => Date.parse(b.capturedAt) - Date.parse(a.capturedAt)) };
   }
-  return Object.freeze({ VERSION, GPA_BANDS, GPA_BANDED_METHOD: METHOD, configureSchools, schoolHomes, normalizeSchoolHome, emptyState, defaultState: emptyState, validateState, normalizeState: validateState, exportBackup, importBackup,
+  return Object.freeze({ VERSION, GPA_BANDS, GPA_BANDED_METHOD: METHOD, configureSchools, schoolHomes, normalizeSchoolHome, emptyState, defaultState: emptyState, validateState, normalizeState: validateState, validateAssistantConversations, assistantHistoryHasCapacity, exportBackup, importBackup,
     mergeSnapshot, resetTeamsData, clearTeamsData: resetTeamsData, today, clock, getSchedule, getCourses, getTasks, resolveTaskDeadline, parseManualDeadline, normalizePersonalEvent: personalEventRow, getFeedback, getGradeUpdates, markGradeUpdatesRead, getOfficialGPA, estimateGPA, estimateLinearGPA, semesterGPAForecast,
     getNextClass, getClassClock, getSchedulePeriods, getTeamsPosts, getTeamsEC, getTeamsGrades, getSourceStatus, buildView, getSchoolCalendarEvents, schoolCalendarScheduleRule, schoolCalendarScheduleConflict, parseSchoolCalendarICS, parseSchoolCalendarPDFText, safeURL, safeAttachmentURL, gradePoints: points, linearGradePoints: linearPoints });
 });

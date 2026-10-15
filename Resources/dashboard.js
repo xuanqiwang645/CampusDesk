@@ -75,6 +75,11 @@
   let assistantTranscript = [];
   let assistantReferences = [];
   let assistantQuestionDraft = '';
+  let assistantConversationID = '', assistantConversationSequence = 0;
+  let assistantHistoryOpen = false, assistantHistoryQuery = '', assistantHistorySaveTimer = 0;
+  let assistantHistoryHydrated = false, assistantDeletedConversation = null;
+  const assistantDeletedConversationIDs = new Set();
+  let assistantVisibleMessageLimit = 40;
   let assistantRenderDeferred = false;
   let assistantPointerTarget = null;
   let assistantQuestionComposing = false;
@@ -1989,7 +1994,7 @@
         : provider === 'hybrid'
           ? '<div class="assistant-local-note">' + assistantCopy('联网时优先使用 DeepSeek；离线时使用本机 Ollama。若 DeepSeek 请求因网络不可达而失败，会将同一份内容改发给 Ollama；此时请求可能已到达 DeepSeek。', 'Uses DeepSeek while online and local Ollama while offline. If a DeepSeek request fails because the network is unreachable, the same submitted content is sent to Ollama; DeepSeek may already have received it.') + '</div>'
         : '';
-    return '<section class="card settings-section assistant-settings"><div class="assistant-section-heading"><div><p class="setup-eyebrow">CAMPUSDESK · THEME EDITION</p><h2>' + assistantCopy('学习助手', 'Learning assistant') + '</h2><p>' + assistantCopy('明确选择关闭、仅本机 Ollama、仅联网 DeepSeek，或联网 DeepSeek／离线 Ollama。点击发送即可提问，也可按需查看发送内容。', 'Choose Off, Ollama only, DeepSeek online only, or DeepSeek online with Ollama offline. Send questions directly, or optionally view the request details.') + '</p></div><span class="assistant-state-pill">' + assistantCopy(stateLabel[0], stateLabel[1]) + '</span></div><div class="assistant-settings-grid"><label>' + assistantCopy('AI 接入方式', 'AI provider') + '<select id="assistant-provider" aria-label="' + assistantCopy('AI 接入方式', 'AI provider') + '">' + providerOptions.map(item => '<option value="' + item[0] + '"' + (provider === item[0] ? ' selected' : '') + '>' + assistantCopy(item[1], item[2]) + '</option>').join('') + '</select></label>' + modelFields + '</div>' + renderAssistantSetupGuides() + keyBox + modeNote + '<div class="assistant-context-picker"><div><h3>' + assistantCopy('允许本次提问使用哪些资料', 'Data available to questions') + '</h3><p>' + assistantCopy('点击发送时会附带勾选的资料。你可以随时调整范围，或取消全部勾选。', 'Checked data is included when you send. Adjust the scope or uncheck all sources at any time.') + '</p></div><div class="assistant-context-options">' + assistantContextOptions.map(item => '<label><input type="checkbox" data-ai-context="' + item[0] + '"' + (selected.has(item[0]) ? ' checked' : '') + '><span>' + assistantCopy(item[1], item[2]) + '</span></label>').join('') + '</div></div><div class="assistant-privacy-note"><strong>' + assistantCopy('可随时停用与清除', 'You stay in control') + '</strong><p>' + assistantCopy('对话只保留在当前打开窗口的内存中；关闭或刷新窗口即清除。不会接收学校密码、登录 Cookie 或浏览器会话。', 'Conversation stays only in this open window’s memory and is cleared when it closes or reloads. School passwords, cookies, and browser sessions are never included.') + '</p></div></section>';
+    return '<section class="card settings-section assistant-settings"><div class="assistant-section-heading"><div><p class="setup-eyebrow">CAMPUSDESK · THEME EDITION</p><h2>' + assistantCopy('学习助手', 'Learning assistant') + '</h2><p>' + assistantCopy('明确选择关闭、仅本机 Ollama、仅联网 DeepSeek，或联网 DeepSeek／离线 Ollama。点击发送即可提问，也可按需查看发送内容。', 'Choose Off, Ollama only, DeepSeek online only, or DeepSeek online with Ollama offline. Send questions directly, or optionally view the request details.') + '</p></div><span class="assistant-state-pill">' + assistantCopy(stateLabel[0], stateLabel[1]) + '</span></div><div class="assistant-settings-grid"><label>' + assistantCopy('AI 接入方式', 'AI provider') + '<select id="assistant-provider" aria-label="' + assistantCopy('AI 接入方式', 'AI provider') + '">' + providerOptions.map(item => '<option value="' + item[0] + '"' + (provider === item[0] ? ' selected' : '') + '>' + assistantCopy(item[1], item[2]) + '</option>').join('') + '</select></label>' + modelFields + '</div>' + renderAssistantSetupGuides() + keyBox + modeNote + '<div class="assistant-context-picker"><div><h3>' + assistantCopy('允许本次提问使用哪些资料', 'Data available to questions') + '</h3><p>' + assistantCopy('点击发送时会附带勾选的资料。你可以随时调整范围，或取消全部勾选。', 'Checked data is included when you send. Adjust the scope or uncheck all sources at any time.') + '</p></div><div class="assistant-context-options">' + assistantContextOptions.map(item => '<label><input type="checkbox" data-ai-context="' + item[0] + '"' + (selected.has(item[0]) ? ' checked' : '') + '><span>' + assistantCopy(item[1], item[2]) + '</span></label>').join('') + '</div></div><div class="assistant-privacy-note"><strong>' + assistantCopy('可随时停用与清除', 'You stay in control') + '</strong><p>' + assistantCopy('问题、回答和草稿保存在这台 Mac，可在历史对话中查询和续问，并随数据备份保存。设置中的 API 密钥、学校密码、登录 Cookie 和浏览器会话不会写入聊天记录。', 'Questions, replies, and drafts are stored on this Mac for history and follow-ups, and included in data backups. API keys from Settings, school passwords, cookies, and browser sessions are not included in chat history.') + '</p></div></section>';
   }
   function assistantPushReference(refs, source, rawURL, label) {
     if (!['seiue', 'managebac', 'teams'].includes(source)) return;
@@ -2045,6 +2050,127 @@
   function assistantSystemMessage() {
     return assistantCopy('你是 CampusDesk 的学习助手。只根据用户提供的资料回答；资料不足时明确说明，不猜测学校规则、成绩或截止日期。不要把模拟结果说成学校官方记录。用简洁、可执行的语言回答。', 'You are CampusDesk’s study assistant. Answer only from the supplied data; say when information is missing and do not guess school rules, grades, or deadlines. Never present an estimate as an official school record. Be concise and actionable.');
   }
+  function assistantConversationRows() { return Array.isArray(state.assistantConversations) ? state.assistantConversations : []; }
+  function assistantCurrentConversation() { return assistantConversationRows().find(item => item.id === assistantConversationID); }
+  function assistantConversationTitle(messages = assistantTranscript, draft = assistantQuestionDraft) {
+    const first = messages.find(item => item.role === 'user');
+    return String(first ? first.content : draft || '').replace(/\s+/g, ' ').trim().slice(0, 100) || assistantCopy('新对话', 'New conversation');
+  }
+  function assistantConversationRoute() {
+    const last = [...assistantTranscript].reverse().find(item => item.role === 'user');
+    try {
+      const route = JSON.parse(last?.contextKey || 'null');
+      if (Array.isArray(route) && ['off', 'ollama', 'deepseek', 'hybrid'].includes(route[0]) && Array.isArray(route[2]) && route[2].every(key => assistantContextOptions.some(item => item[0] === key))) return { provider: route[0], contextCategories: [...new Set(route[2])] };
+    } catch (_) {}
+    return { provider: assistantProvider(), contextCategories: [...assistantSelectedContext()] };
+  }
+  function saveAssistantConversation() {
+    if (!themeEdition || pendingImportRequestID) return false;
+    if (assistantHistorySaveTimer) { clearTimeout(assistantHistorySaveTimer); assistantHistorySaveTimer = 0; }
+    if (!assistantConversationID && !assistantTranscript.length && !assistantQuestionDraft.trim()) return true;
+    const rows = assistantConversationRows(), previous = assistantCurrentConversation();
+    const now = new Date(Math.max(Date.now(), previous ? Date.parse(previous.updatedAt) : 0)).toISOString();
+    const id = assistantConversationID || 'chat-' + Date.now().toString(36) + '-' + (++assistantConversationSequence) + '-' + Math.random().toString(36).slice(2, 10);
+    const conversation = { id, title: assistantConversationTitle(), createdAt: previous ? previous.createdAt : now, updatedAt: now,
+      draft: assistantQuestionDraft.slice(0, 6000), ...assistantConversationRoute(),
+      messages: assistantTranscript.map(item => ({ role: item.role, content: item.content || '', ...(item.display ? { display: item.display } : {}),
+        contextKey: item.contextKey || '', ...(item.failed ? { failed: true } : {}), ...(item.providerUsed ? { providerUsed: item.providerUsed } : {}), ...(item.createdAt ? { createdAt: item.createdAt } : {}) })) };
+    try {
+      const candidate = rows.filter(item => item.id !== id).concat(conversation);
+      state.assistantConversations = Core.validateAssistantConversations(candidate);
+    } catch (_) { toast(assistantCopy('聊天历史未能保存，当前内容仍在窗口中。请保留当前窗口，复制未保存的内容后重试。', 'Chat history could not be saved. Keep this window open and copy any unsaved content before retrying.')); return false; }
+    assistantConversationID = id; state.assistantActiveConversationId = id;
+    return persist();
+  }
+  function scheduleAssistantConversationSave() {
+    if (!themeEdition) return;
+    if (assistantHistorySaveTimer) clearTimeout(assistantHistorySaveTimer);
+    assistantHistorySaveTimer = setTimeout(() => { assistantHistorySaveTimer = 0; saveAssistantConversation(); }, 1400);
+  }
+  function hydrateAssistantConversation() {
+    if (assistantHistorySaveTimer) { clearTimeout(assistantHistorySaveTimer); assistantHistorySaveTimer = 0; }
+    assistantConversationID = state.assistantActiveConversationId || '';
+    assistantHistoryHydrated = true;
+    const conversation = assistantCurrentConversation();
+    assistantTranscript = conversation ? conversation.messages.map(item => Object.assign({}, item)) : [];
+    assistantQuestionDraft = conversation ? conversation.draft || '' : '';
+    assistantReferences = []; assistantVisibleMessageLimit = 40;
+    // A saved user turn may outlive an interrupted native request. Keep the
+    // question visible, but never present an incomplete answer as model history.
+    const last = assistantTranscript[assistantTranscript.length - 1];
+    if (last && last.role === 'user') {
+      assistantTranscript.push({ role: 'assistant', content: '', display: assistantCopy('上次回复未完成，可重新发送这个问题。', 'The previous reply was interrupted. You can send that question again.'), failed: true, contextKey: last.contextKey });
+      if (!assistantQuestionDraft.trim()) assistantQuestionDraft = last.content;
+    }
+    const editor = document.getElementById('assistant-question');
+    if (editor) { editor.value = assistantQuestionDraft; resizeAssistantQuestionField(editor); }
+  }
+  function resetAssistantConversationRuntime() {
+    stopAssistantGeneration(true); assistantPendingRequest = null;
+    assistantDeletedConversation = null; assistantDeletedConversationIDs.clear();
+    assistantHistoryOpen = false; assistantHistoryQuery = '';
+    closeDialog('assistant-confirm-dialog');
+  }
+  function renderAssistantHistoryResults() {
+    const query = assistantHistoryQuery.trim().toLocaleLowerCase();
+    const rows = assistantConversationRows().filter(item => !query || item.title.toLocaleLowerCase().includes(query) || item.messages.some(message => (message.content + '\n' + (message.display || '')).toLocaleLowerCase().includes(query)))
+      .slice().sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+    if (!rows.length) return '<p class="assistant-history-empty">' + assistantCopy(query ? '没有找到匹配的对话。' : '还没有历史对话。发送问题后会自动保存在本机。', query ? 'No conversations match your search.' : 'No conversations yet. Questions and replies are saved locally when you chat.') + '</p>';
+    return rows.map(item => {
+      const match = query && item.messages.find(message => (message.content + '\n' + (message.display || '')).toLocaleLowerCase().includes(query));
+      const preview = String(match ? match.content || match.display : item.messages.filter(message => message.role === 'user').at(-1)?.content || item.draft || '').replace(/\s+/g, ' ').slice(0, 140);
+      const date = new Intl.DateTimeFormat(isEnglish() ? 'en-US' : 'zh-CN', { timeZone: 'Asia/Shanghai', month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date(item.updatedAt));
+      return '<article class="assistant-history-item" data-active="' + (item.id === assistantConversationID) + '"><button type="button" class="assistant-history-open" data-action="assistant-open-conversation" data-id="' + esc(item.id) + '"' + (assistantBusy ? ' disabled' : '') + '><strong>' + esc(item.title) + '</strong><span class="assistant-history-meta">' + esc(date) + ' · ' + item.messages.filter(message => message.role === 'user').length + assistantCopy(' 个问题', ' questions') + '</span><small>' + esc(preview) + '</small></button><button type="button" class="assistant-history-delete" data-action="assistant-delete-conversation" data-id="' + esc(item.id) + '" aria-label="' + esc(assistantCopy('删除对话：', 'Delete conversation: ') + item.title) + '"' + (assistantBusy ? ' disabled' : '') + '>' + assistantCopy('删除', 'Delete') + '</button></article>';
+    }).join('');
+  }
+  function renderAssistantHistoryPanel() {
+    return '<div id="assistant-history-panel" class="assistant-history-panel"' + (!assistantHistoryOpen ? ' hidden' : '') + '><div class="assistant-history-heading"><h3>' + assistantCopy('历史对话', 'Conversation history') + '</h3><button type="button" class="button button-plain" data-action="assistant-history-toggle">' + assistantCopy('收起', 'Close') + '</button></div><label for="assistant-history-search">' + assistantCopy('搜索标题或对话内容', 'Search titles or messages') + '</label><input id="assistant-history-search" type="search" maxlength="160" value="' + esc(assistantHistoryQuery) + '" placeholder="' + assistantCopy('查找以前聊过的内容', 'Find something you discussed') + '"><div id="assistant-history-results">' + renderAssistantHistoryResults() + '</div><div id="assistant-history-undo">' + renderAssistantHistoryUndo() + '</div><p class="subtle">' + assistantCopy(assistantBusy ? '正在回复，停止或完成后可切换对话。' : '选择一段对话即可查看记录并继续提问。记录仅保存在这台 Mac，并纳入数据备份。', assistantBusy ? 'A reply is in progress. Stop it or wait before switching conversations.' : 'Select a conversation to read it and ask a follow-up. History is stored on this Mac and included in data backups.') + '</p></div>';
+  }
+  function renderAssistantHistoryUndo() { return assistantDeletedConversation ? '<span>' + assistantCopy('已删除一段对话。', 'Conversation deleted.') + '</span> <button type="button" class="button button-plain" data-action="assistant-undo-delete">' + assistantCopy('撤销删除', 'Undo delete') + '</button>' : ''; }
+  function deleteAssistantConversation(id) {
+    const row = assistantConversationRows().find(item => item.id === id);
+    if (!row || assistantBusy || !window.confirm(assistantCopy('删除这段历史对话？本次打开期间可以撤销最近一次删除。', 'Delete this conversation? You can undo the latest deletion while this window remains open.'))) return;
+    assistantDeletedConversation = row;
+    assistantDeletedConversationIDs.add(id);
+    state.assistantConversations = assistantConversationRows().filter(item => item.id !== id);
+    if (id === assistantConversationID) {
+      state.assistantActiveConversationId = ''; hydrateAssistantConversation();
+      const editor = document.getElementById('assistant-question'); if (editor) editor.value = '';
+    }
+    persist(); updateAssistantWorkspace();
+  }
+  function undoAssistantConversationDelete() {
+    if (!assistantDeletedConversation || assistantBusy) return;
+    try { state.assistantConversations = Core.validateAssistantConversations(assistantConversationRows().concat(assistantDeletedConversation)); }
+    catch (_) { toast(assistantCopy('暂时无法恢复，请先减少历史记录后重试。', 'Unable to restore. Reduce saved history and retry.')); return; }
+    assistantDeletedConversationIDs.delete(assistantDeletedConversation.id);
+    assistantDeletedConversation = null; persist(); updateAssistantWorkspace();
+  }
+  function renderAssistantConversationHeading() {
+    const conversation = assistantCurrentConversation();
+    const last = [...assistantTranscript].reverse().find(item => item.role === 'user');
+    const changed = Boolean(last && last.contextKey !== assistantContextKey());
+    return '<strong>' + esc(conversation ? conversation.title : assistantCopy('新对话', 'New conversation')) + '</strong><small>' + assistantCopy('自动保存到本机 · 可在历史对话中继续提问', 'Saved on this Mac · Continue from conversation history') + '</small>'
+      + (changed ? '<p>' + assistantCopy('当前回答方式或资料范围与这段聊天不同。旧范围的内容仍可查看，续问不会发送该范围的历史。', 'The provider or data scope differs from this conversation. Older messages remain visible, but history from that scope is excluded from new requests.') + (conversation?.provider ? ' <button type="button" class="button button-plain" data-action="assistant-restore-conversation-settings">' + assistantCopy('恢复此对话设置', 'Restore this conversation’s settings') + '</button>' : '') + '</p>' : '');
+  }
+  function startAssistantConversation() {
+    if (assistantBusy) stopAssistantGeneration();
+    if (!saveAssistantConversation()) return;
+    assistantConversationID = ''; state.assistantActiveConversationId = '';
+    assistantTranscript = []; assistantReferences = []; assistantQuestionDraft = ''; assistantVisibleMessageLimit = 40;
+    assistantHistoryOpen = false; assistantHistoryQuery = '';
+    const editor = document.getElementById('assistant-question'); if (editor) { editor.value = ''; resizeAssistantQuestionField(editor); }
+    persist(); render();
+  }
+  function openAssistantConversation(id) {
+    if (assistantBusy) { toast(assistantCopy('请先停止或等待当前回复，再切换对话。', 'Stop the current reply or wait for it before switching conversations.')); return; }
+    if (!assistantConversationRows().some(item => item.id === id) || !saveAssistantConversation()) return;
+    state.assistantActiveConversationId = id; hydrateAssistantConversation();
+    if (assistantHistoryQuery.trim()) assistantVisibleMessageLimit = Math.max(40, assistantTranscript.length);
+    assistantHistoryOpen = false;
+    const editor = document.getElementById('assistant-question'); if (editor) { editor.value = assistantQuestionDraft; resizeAssistantQuestionField(editor); }
+    persist(); render();
+  }
   function assistantErrorText(code) {
     const errors = {
       invalidKey: ['API 密钥格式无效，请检查后重试。', 'The API key format is invalid. Check it and try again.'],
@@ -2071,7 +2197,8 @@
   }
   function renderAssistantConversation() {
     if (!assistantTranscript.length && !assistantBusy) return '<div class="assistant-empty"><span>' + icon('search') + '</span><strong>' + assistantCopy('问一个关于今天学习的问题', 'Ask a question about your learning') + '</strong><p>' + assistantCopy('例如：今天最先该完成哪项作业？我还缺少哪些评分组成？', 'For example: Which assignment should I start first? Which grading components are still missing?') + '</p></div>';
-    return assistantTranscript.map(item => '<article class="assistant-message ' + item.role + '"><strong>' + (item.role === 'assistant' ? 'CampusDesk AI' : assistantCopy('你', 'You')) + '</strong><pre>' + esc(item.display || item.content) + '</pre></article>').join('') + (assistantBusy ? '<article class="assistant-message assistant"><strong>CampusDesk AI</strong><pre>' + esc(assistantPartialAnswer) + '</pre><span class="assistant-typing" role="status">' + assistantCopy(assistantPartialAnswer ? '正在生成…' : '正在等待模型回答…', assistantPartialAnswer ? 'Generating…' : 'Waiting for the model…') + '</span></article>' : '');
+    const earlier = assistantTranscript.length > assistantVisibleMessageLimit ? '<button type="button" class="button button-light" data-action="assistant-load-earlier">' + assistantCopy('加载更早的消息', 'Load earlier messages') + ' · ' + (assistantTranscript.length - assistantVisibleMessageLimit) + '</button>' : '';
+    return earlier + assistantTranscript.slice(-assistantVisibleMessageLimit).map(item => '<article class="assistant-message ' + item.role + '"><strong>' + (item.role === 'assistant' ? 'CampusDesk AI' : assistantCopy('你', 'You')) + '</strong><pre>' + esc(item.display || item.content) + '</pre></article>').join('') + (assistantBusy ? '<article class="assistant-message assistant"><strong>CampusDesk AI</strong><pre>' + esc(assistantPartialAnswer) + '</pre><span class="assistant-typing" role="status">' + assistantCopy(assistantPartialAnswer ? '正在生成…' : '正在等待模型回答…', assistantPartialAnswer ? 'Generating…' : 'Waiting for the model…') + '</span></article>' : '');
   }
   function renderAssistantReferences() {
     if (!assistantReferences.length) return '';
@@ -2141,12 +2268,21 @@
     if (questionInput) { questionInput.disabled = view.strictOffline; questionInput.placeholder = view.placeholder; }
     updateHTML('assistant-recovery', renderAssistantRecovery(view));
     updateHTML('assistant-context-summary', esc(assistantScopeSummary()));
+    updateHTML('assistant-conversation-heading', renderAssistantConversationHeading());
+    const historyPanel = document.getElementById('assistant-history-panel');
+    if (historyPanel) historyPanel.hidden = !assistantHistoryOpen;
+    const searchInput = document.getElementById('assistant-history-search');
+    if (searchInput && searchInput.value !== assistantHistoryQuery) searchInput.value = assistantHistoryQuery;
+    if (assistantHistoryOpen) updateHTML('assistant-history-results', renderAssistantHistoryResults());
+    updateHTML('assistant-history-undo', renderAssistantHistoryUndo());
+    const historyButton = document.getElementById('assistant-history-button');
+    if (historyButton) historyButton.setAttribute('aria-expanded', String(assistantHistoryOpen));
     const badge = document.getElementById('assistant-provider-badge');
     if (badge) { badge.textContent = view.providerLabel; badge.className = 'assistant-provider-badge ' + view.provider; }
     const modelLabel = document.getElementById('assistant-model-label');
     if (modelLabel) modelLabel.textContent = assistantCopy('模型：', 'Model: ') + view.activeModel;
     const clearButton = document.getElementById('assistant-clear');
-    if (clearButton) clearButton.disabled = !assistantTranscript.length;
+    if (clearButton) clearButton.disabled = !assistantTranscript.length && !assistantQuestionDraft.trim();
     updateAssistantSendControls(view);
   }
   function updateAssistantSendControls(view = assistantPresentation()) {
@@ -2163,7 +2299,11 @@
     if (!themeEdition) return renderOverview();
     const view = assistantPresentation();
     const disabled = view.sendDisabled || !assistantQuestionDraft.trim() ? ' disabled' : '';
-    return heading('学习助手', '选择资料范围后即可发送问题。') + '<section class="card assistant-workspace"><div class="assistant-workspace-top"><div><span id="assistant-provider-badge" class="assistant-provider-badge ' + view.provider + '">' + esc(view.providerLabel) + '</span><span id="assistant-model-label" class="assistant-model-label">' + assistantCopy('模型：', 'Model: ') + esc(view.activeModel) + '</span></div><button id="assistant-clear" type="button" class="button button-light" data-action="assistant-clear"' + (!assistantTranscript.length ? ' disabled' : '') + '>' + assistantCopy('清除本次对话', 'Clear this conversation') + '</button></div><div id="assistant-provider-switch">' + renderAssistantProviderSwitch(view) + '</div><div id="assistant-disclosure" class="assistant-disclosure">' + esc(view.disclosure) + '</div><div id="assistant-recovery" class="assistant-recovery" role="status">' + renderAssistantRecovery(view) + '</div><div id="assistant-chat-log" class="assistant-chat-log" aria-live="polite">' + renderAssistantConversation() + '</div><div id="assistant-source-references">' + renderAssistantReferences() + '</div><div class="assistant-compose"><label for="assistant-question">' + assistantCopy('你的问题', 'Your question') + '</label><textarea id="assistant-question" maxlength="6000"' + (view.strictOffline ? ' disabled' : '') + ' placeholder="' + view.placeholder + '">' + esc(assistantQuestionDraft) + '</textarea><div id="assistant-context-summary" class="assistant-context-summary">' + esc(assistantScopeSummary()) + '</div><div class="assistant-compose-footer"><span>' + assistantCopy('⌘ / Ctrl + Enter 发送 · Enter 换行', '⌘ / Ctrl + Enter to send · Enter for a new line') + '</span><div class="assistant-compose-actions"><button id="assistant-review-button" type="button" class="button button-plain" data-action="assistant-review"' + disabled + '>' + assistantCopy('查看发送内容', 'View request') + '</button><button id="assistant-send" type="button" class="button button-primary" data-action="assistant-send"' + disabled + '>' + (assistantBusy ? assistantCopy('回复中…', 'Replying…') : assistantCopy('发送', 'Send')) + '</button></div></div></div></section>';
+    return heading('学习助手', '选择资料范围后即可发送问题。') + '<section class="card assistant-workspace">'
+      + '<div class="assistant-workspace-top"><div><span id="assistant-provider-badge" class="assistant-provider-badge ' + view.provider + '">' + esc(view.providerLabel) + '</span><span id="assistant-model-label" class="assistant-model-label">' + assistantCopy('模型：', 'Model: ') + esc(view.activeModel) + '</span></div>'
+      + '<div class="assistant-top-actions"><button id="assistant-history-button" type="button" class="button button-light" data-action="assistant-history-toggle" aria-controls="assistant-history-panel" aria-expanded="' + assistantHistoryOpen + '">' + assistantCopy('历史对话', 'History') + '</button><button id="assistant-clear" type="button" class="button button-light" data-action="assistant-clear">' + assistantCopy('新对话', 'New conversation') + '</button></div></div>'
+      + renderAssistantHistoryPanel() + '<div id="assistant-conversation-heading" class="assistant-conversation-heading">' + renderAssistantConversationHeading() + '</div>'
+      + '<div id="assistant-provider-switch">' + renderAssistantProviderSwitch(view) + '</div><div id="assistant-disclosure" class="assistant-disclosure">' + esc(view.disclosure) + '</div><div id="assistant-recovery" class="assistant-recovery" role="status">' + renderAssistantRecovery(view) + '</div><div id="assistant-chat-log" class="assistant-chat-log" aria-live="polite">' + renderAssistantConversation() + '</div><div id="assistant-source-references">' + renderAssistantReferences() + '</div><div class="assistant-compose"><label for="assistant-question">' + assistantCopy('你的问题', 'Your question') + '</label><textarea id="assistant-question" maxlength="6000"' + (view.strictOffline ? ' disabled' : '') + ' placeholder="' + view.placeholder + '">' + esc(assistantQuestionDraft) + '</textarea><div id="assistant-context-summary" class="assistant-context-summary">' + esc(assistantScopeSummary()) + '</div><div class="assistant-compose-footer"><span>' + assistantCopy('⌘ / Ctrl + Enter 发送 · Enter 换行', '⌘ / Ctrl + Enter to send · Enter for a new line') + '</span><div class="assistant-compose-actions"><button id="assistant-review-button" type="button" class="button button-plain" data-action="assistant-review"' + disabled + '>' + assistantCopy('查看发送内容', 'View request') + '</button><button id="assistant-send" type="button" class="button button-primary" data-action="assistant-send"' + disabled + '>' + (assistantBusy ? assistantCopy('回复中…', 'Replying…') : assistantCopy('发送', 'Send')) + '</button></div></div></div></section>';
   }
   function assistantBuildPendingRequest() {
     const provider = assistantProvider(), model = provider === 'ollama' ? assistantOllamaModel() : assistantModel(), question = String(assistantQuestionDraft || '').trim().slice(0, 6000);
@@ -2171,6 +2311,17 @@
     if (provider === 'off') { toast(assistantCopy('请先选择一个 AI 接入方式。', 'Choose an AI provider first.')); return null; }
     if (provider === 'deepseek' && !assistantNetworkAvailable()) { toast(assistantCopy('当前离线；此模式只使用 DeepSeek，已停用且不会回退到 Ollama。', 'You are offline. DeepSeek-only mode is disabled and will not fall back to Ollama.')); return null; }
     if (!question) { toast(assistantCopy('请先输入问题。', 'Enter a question first.')); return null; }
+    if (assistantTranscript.length > 498) { toast(assistantCopy('这段对话已达到保存上限，请开始新对话；现有消息仍可在历史中查看。', 'This conversation has reached its saved-message limit. Start a new conversation; all existing messages remain in history.')); return null; }
+    const previousConversation = assistantCurrentConversation(), historyNow = new Date().toISOString();
+    const futureConversation = { ...(previousConversation || {}), id: assistantConversationID || 'chat-capacity-check',
+      title: assistantConversationTitle(assistantTranscript, question), createdAt: previousConversation?.createdAt || historyNow, updatedAt: historyNow, draft: '',
+      messages: assistantTranscript.concat({ role: 'user', content: question, contextKey: assistantContextKey() }) };
+    const futureHistory = assistantConversationRows().filter(item => item.id !== assistantConversationID).concat(futureConversation);
+    // Reserve the maximum serialized answer plus any next-question draft before
+    // calling a model, so a received answer cannot overflow the history budget.
+    if (futureHistory.length > 200 || !Core.assistantHistoryHasCapacity(futureHistory, 1_300_000)) {
+      toast(assistantCopy('聊天历史空间不足以保存下一次回答。请先导出备份，并在历史对话中删除部分旧记录。问题草稿已保留。', 'There is not enough history space for another reply. Export a backup and delete some older conversations first. Your question draft is retained.')); return null;
+    }
     const view = assistantPresentation();
     if (view.keyBlocked) { toast(assistantErrorText('keyAccess')); return null; }
     if (view.remoteModelUnverified) { requestAssistantModels('deepseek'); updateAssistantWorkspace(); toast(assistantCatalogs.deepseek.error ? assistantErrorText(assistantCatalogs.deepseek.error) : assistantCopy('正在确认 DeepSeek 可用模型，请稍候再发送。', 'Checking available DeepSeek models. Send your question once the check finishes.')); return null; }
@@ -2187,7 +2338,7 @@
       if (user.role !== 'user' || answer.role !== 'assistant' || user.contextKey !== contextKey || answer.contextKey !== contextKey) break;
       // A failed attempt contributes no model context, but earlier successful
       // turns in the same recipient/data scope still belong to the conversation.
-      if (answer.failed) continue;
+      if (answer.failed || !user.content.trim() || !answer.content.trim()) continue;
       history.unshift({ role: 'user', content: user.content }, { role: 'assistant', content: answer.content });
     }
     const first = { role: 'system', content: assistantSystemMessage() }, last = { role: 'user', content: userContent };
@@ -2226,6 +2377,7 @@
     if (assistantActiveRequestID) send('assistantCancelRequest', { requestId: assistantActiveRequestID });
     if (assistantBusy && !clear) assistantTranscript.push({ role: 'assistant', content: assistantPartialAnswer, display: (assistantPartialAnswer ? assistantPartialAnswer + '\n\n' : '') + assistantErrorText('cancelled'), contextKey: assistantActiveContextKey, failed: true });
     assistantBusy = false; assistantActiveRequestID = ''; assistantSentQuestion = ''; assistantPartialAnswer = '';
+    if (!clear) saveAssistantConversation();
   }
   function dispatchAssistantRequest(request) {
     if (!request || assistantBusy) return;
@@ -2249,8 +2401,13 @@
     const editor = document.getElementById('assistant-question');
     if (editor) { editor.value = ''; resizeAssistantQuestionField(editor); }
     assistantReferences = request.refs;
-    assistantTranscript.push({ role: 'user', content: request.question, display: request.question, contextKey: request.contextKey });
-    if (assistantTranscript.length > 12) assistantTranscript = assistantTranscript.slice(-12);
+    if (assistantVisibleMessageLimit >= assistantTranscript.length) assistantVisibleMessageLimit += 2;
+    assistantTranscript.push({ role: 'user', content: request.question, display: request.question, contextKey: request.contextKey, createdAt: new Date().toISOString() });
+    if (!saveAssistantConversation()) {
+      assistantTranscript.pop(); assistantQuestionDraft = request.question;
+      if (editor) editor.value = request.question;
+      render(); return;
+    }
     const requestID = window.crypto && window.crypto.randomUUID ? window.crypto.randomUUID() : 'ai-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10);
     assistantBusy = true; assistantActiveRequestID = requestID; assistantSentQuestion = request.question;
     assistantActiveContextKey = request.contextKey; assistantPartialAnswer = ''; render(); updateAssistantSendControls();
@@ -2259,6 +2416,7 @@
       assistantQuestionDraft = request.question;
       const currentEditor = document.getElementById('assistant-question');
       if (currentEditor) { currentEditor.value = assistantQuestionDraft; resizeAssistantQuestionField(currentEditor); }
+      saveAssistantConversation();
       render();
       toast(assistantCopy('无法启动 AI 请求，请确认这是已安装的主题版应用。', 'Could not start the AI request. Make sure this is the installed Theme Edition app.'));
     }
@@ -2805,8 +2963,9 @@
         localStorage.setItem('campusdesk.preimport.' + new Date().toISOString() + '-' + Math.random().toString(36).slice(2, 10), JSON.stringify(Core.exportBackup(state)));
         localStorage.setItem(storageKey, JSON.stringify(candidate));
       }
-      stopAssistantGeneration(true); assistantTranscript = []; assistantReferences = [];
+      resetAssistantConversationRuntime(); assistantTranscript = []; assistantReferences = [];
       state = candidate;
+      hydrateAssistantConversation();
       if (native) persist({ imported: true }); else { invalidateDerivedCaches(); syncReminders(); }
       render(); toast('已恢复备份。Teams 重新同步时会按当前账号重建缓存，其他学校账号需要在这台 Mac 上重新登录。');
     } catch (err) {
@@ -2844,7 +3003,8 @@
     // is applied, so its generation cannot race a save of the preceding state.
     send('importResultApplied', { requestId: event.requestId });
     if (event.success === true) {
-      stopAssistantGeneration(true); assistantTranscript = []; assistantReferences = [];
+      resetAssistantConversationRuntime(); assistantTranscript = []; assistantReferences = [];
+      hydrateAssistantConversation();
     }
     render(); lastReminderSignature = ''; syncReminders();
     for (const pending of queued) {
@@ -2987,10 +3147,20 @@
       send('assistantDeleteDeepSeekKey');
     }
     else if (action === 'assistant-stop') { stopAssistantGeneration(); render(); }
-    else if (action === 'assistant-clear') {
-      stopAssistantGeneration(true);
-      assistantTranscript = []; assistantReferences = []; assistantQuestionDraft = ''; assistantBusy = false; assistantActiveRequestID = '';
-      render(); toast(assistantCopy('当前窗口中的对话和来源引用已清除。', 'Conversation and source references in this window were cleared.'));
+    else if (action === 'assistant-clear') startAssistantConversation();
+    else if (action === 'assistant-history-toggle') {
+      saveAssistantConversation(); assistantHistoryOpen = !assistantHistoryOpen; updateAssistantWorkspace();
+    }
+    else if (action === 'assistant-open-conversation') openAssistantConversation(target.dataset.id);
+    else if (action === 'assistant-delete-conversation') deleteAssistantConversation(target.dataset.id);
+    else if (action === 'assistant-undo-delete') undoAssistantConversationDelete();
+    else if (action === 'assistant-load-earlier') { assistantVisibleMessageLimit += 40; updateAssistantWorkspace(); }
+    else if (action === 'assistant-restore-conversation-settings') {
+      const conversation = assistantCurrentConversation();
+      if (!conversation || assistantBusy || !conversation.provider) return;
+      state.settings.aiProvider = conversation.provider;
+      if (Array.isArray(conversation.contextCategories)) state.settings.aiContextCategories = [...conversation.contextCategories];
+      persist(); ensureAssistantModels(); updateAssistantWorkspace();
     }
     else if (action === 'assistant-reference') {
       const ref = assistantReferences[Number(target.dataset.index)];
@@ -3351,10 +3521,11 @@
     assistantQuestionDraft = String(event.target.value || '').slice(0, 6000);
     resizeAssistantQuestionField(event.target);
     updateAssistantSendControls();
+    scheduleAssistantConversationSave();
   });
   document.addEventListener('focusout', event => {
     if (!assistantWorkspaceContains(event.target)) return;
-    if (event.target.id === 'assistant-question') assistantQuestionDraft = String(event.target.value || '').slice(0, 6000);
+    if (event.target.id === 'assistant-question') { assistantQuestionDraft = String(event.target.value || '').slice(0, 6000); saveAssistantConversation(); }
     if (assistantWorkspaceContains(event.relatedTarget)) { updateAssistantWorkspace(); return; }
     // A pointer guard also covers WebKit buttons that do not receive focus:
     // mousedown may blur the editor long before mouseup dispatches the click.
@@ -3385,6 +3556,13 @@
       assistantQuestionDraft = String(event.target.value || '').slice(0, 6000);
       resizeAssistantQuestionField(event.target);
       updateAssistantSendControls();
+      if (!event.isComposing && !assistantQuestionComposing) scheduleAssistantConversationSave();
+      return;
+    }
+    if (event.target.id === 'assistant-history-search') {
+      assistantHistoryQuery = String(event.target.value || '').slice(0, 160);
+      const results = document.getElementById('assistant-history-results');
+      if (results) results.innerHTML = renderAssistantHistoryResults();
       return;
     }
     if (event.target.id === 'seiue-url' || event.target.id === 'managebac-url') {
@@ -3750,11 +3928,11 @@
             const providerName = event.providerUsed === 'ollama' ? 'Ollama' : 'DeepSeek';
             const reason = event.fallbackReason === 'offline' ? assistantCopy('（当前离线）', ' (offline)') : event.fallbackReason === 'deepseekUnavailable' ? assistantCopy('（DeepSeek 网络不可达，已改用本机）', ' (DeepSeek unreachable; used local model)') : '';
             const attribution = assistantCopy('\n\n— 本次由 ' + providerName + ' 回复' + reason, '\n\n— Answered by ' + providerName + reason);
-            assistantTranscript.push({ role: 'assistant', content: event.answer.slice(0, 100_000), display: event.answer.slice(0, 100_000) + attribution, contextKey: assistantActiveContextKey });
+            assistantTranscript.push({ role: 'assistant', content: event.answer.slice(0, 100_000), display: event.answer.slice(0, 100_000) + attribution, contextKey: assistantActiveContextKey, providerUsed: event.providerUsed === 'ollama' ? 'ollama' : 'deepseek', createdAt: new Date().toISOString() });
           }
           else assistantTranscript.push({ role: 'assistant', content: assistantPartialAnswer, display: (assistantPartialAnswer ? assistantPartialAnswer + '\n\n' : '') + assistantErrorText(event.errorCode), contextKey: assistantActiveContextKey, failed: true });
           assistantPartialAnswer = '';
-          if (assistantTranscript.length > 12) assistantTranscript = assistantTranscript.slice(-12);
+          saveAssistantConversation();
           if (page === 'assistant') render();
           if (event.errorCode) toast(assistantErrorText(event.errorCode));
         }
@@ -3768,8 +3946,23 @@
           toast(t('学校网址未能保存，请检查网址及本机磁盘写入权限后重试。'));
         }
         else if (event.type === 'state') {
-          state = event.state && Object.keys(event.state).length ? Core.validateState(event.state) : Core.emptyState();
+          const incoming = event.state && Object.keys(event.state).length ? Core.validateState(event.state) : Core.emptyState();
+          if (event.replaceState === true) resetAssistantConversationRuntime();
+          const retainConversation = themeEdition && assistantHistoryHydrated && event.replaceState !== true;
+          if (retainConversation) {
+            // Routine native state broadcasts may precede our last chat save.
+            // Only an explicit replacement/import may discard a live conversation.
+            const byID = new Map((incoming.assistantConversations || []).filter(item => !assistantDeletedConversationIDs.has(item.id)).map(item => [item.id, item]));
+            for (const item of assistantConversationRows()) {
+              const prior = byID.get(item.id);
+              if (!prior || Date.parse(item.updatedAt) >= Date.parse(prior.updatedAt)) byID.set(item.id, item);
+            }
+            incoming.assistantConversations = Core.validateAssistantConversations([...byID.values()]);
+            incoming.assistantActiveConversationId = assistantConversationID;
+          }
+          state = incoming;
           if (Number.isSafeInteger(event.stateGeneration) && event.stateGeneration >= 0) nativeStateGeneration = event.stateGeneration;
+          if (!assistantBusy && !retainConversation) hydrateAssistantConversation();
           invalidateDerivedCaches(); render(); syncReminders(); maybeOpenSetupWizard();
         }
         else if (event.type === 'teamsAutoStatus') {
@@ -3907,7 +4100,7 @@
     }
   };
   function restoreBrowserState() {
-    try { const schools = localStorage.getItem('campusdesk.school-config.v1'); if (schools) Core.configureSchools(JSON.parse(schools)); const saved = localStorage.getItem(storageKey); if (saved) state = Core.validateState(JSON.parse(saved)); }
+    try { const schools = localStorage.getItem('campusdesk.school-config.v1'); if (schools) Core.configureSchools(JSON.parse(schools)); const saved = localStorage.getItem(storageKey); if (saved) state = Core.validateState(JSON.parse(saved)); hydrateAssistantConversation(); }
     catch (_) { toast('浏览器中的旧数据无法读取，可以从备份恢复。'); }
   }
   if (!native) {

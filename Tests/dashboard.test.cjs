@@ -2557,3 +2557,56 @@ test('authoritative account reset advances generation and late old Teams batches
   assert.equal(app.last('graphBatchProcessed').batchId, 'new-after-reset');
   assert.equal(app.last('graphBatchProcessed').stateGeneration, 1);
 });
+
+test('authoritative state replacement cancels a live assistant request and cannot resurrect its history', () => {
+  const app = assistantAuditHarness();
+  const oldRequest = sendAuditQuestion(app, 'OLD_REPLACED_QUESTION');
+  app.input('assistant-question', 'OLD_REPLACED_DRAFT');
+  const fresh = app.ctx.CampusCore.emptyState();
+  Object.assign(fresh.settings, { setupWizardCompleted: true, aiProvider: 'ollama', aiContextCategories: [] });
+  app.receive({ type: 'state', state: fresh, replaceState: true, stateGeneration: 1 });
+  assert.equal(app.last('assistantCancelRequest').requestId, oldRequest.requestId);
+  assert.equal(app.node('assistant-question').value, '');
+  replyAuditQuestion(app, oldRequest, 'LATE_REPLACED_ANSWER');
+  const next = sendAuditQuestion(app, 'NEW_CURRENT_QUESTION');
+  assert.doesNotMatch(JSON.stringify(next.messages), /OLD_REPLACED|LATE_REPLACED/);
+  assert.doesNotMatch(JSON.stringify(app.last('saveState').state.assistantConversations), /OLD_REPLACED|LATE_REPLACED/);
+});
+
+test('deleted history stays deleted across stale broadcasts and replacement clears the old undo object', () => {
+  const app = assistantAuditHarness();
+  replyAuditQuestion(app, sendAuditQuestion(app, 'ALPHA_HISTORY'), 'ALPHA_ANSWER');
+  const alpha = app.last('saveState').state.assistantActiveConversationId;
+  app.click({ action: 'assistant-clear' });
+  replyAuditQuestion(app, sendAuditQuestion(app, 'BETA_HISTORY'), 'BETA_ANSWER');
+  const stale = app.last('saveState').state;
+  app.click({ action: 'assistant-delete-conversation', id: alpha });
+  app.receive({ type: 'state', state: stale });
+  app.click({ action: 'assistant-history-toggle' });
+  assert.ok(!app.last('saveState').state.assistantConversations.some(row => row.id === alpha));
+  app.click({ action: 'assistant-undo-delete' });
+  assert.ok(app.last('saveState').state.assistantConversations.some(row => row.id === alpha));
+  app.click({ action: 'assistant-delete-conversation', id: alpha });
+  const fresh = app.ctx.CampusCore.emptyState();
+  Object.assign(fresh.settings, { setupWizardCompleted: true, aiProvider: 'ollama', aiContextCategories: [] });
+  app.receive({ type: 'state', state: fresh, replaceState: true, stateGeneration: 1 });
+  app.click({ action: 'assistant-undo-delete' });
+  const next = sendAuditQuestion(app, 'ONLY_NEW_ARCHIVE');
+  assert.doesNotMatch(JSON.stringify(next.messages), /ALPHA_|BETA_/);
+  assert.equal(app.last('saveState').state.assistantConversations.length, 1);
+});
+
+test('history reserves space for a complete reply before sending and keeps the question when full', () => {
+  const app = assistantAuditHarness(), initial = app.ctx.CampusCore.emptyState();
+  Object.assign(initial.settings, { setupWizardCompleted: true, aiProvider: 'ollama', aiContextCategories: [] });
+  const contextKey = JSON.stringify(['ollama', false, []]);
+  initial.assistantConversations = [{ id: 'large-history', title: 'Full local archive', draft: '', createdAt: '2026-09-18T00:00:00Z', updatedAt: '2026-09-18T00:00:00Z',
+    messages: Array.from({ length: 80 }, (_, index) => [{ role: 'user', content: 'Question ' + index, contextKey }, { role: 'assistant', content: 'A'.repeat(90_000), contextKey }]).flat() }];
+  initial.assistantActiveConversationId = 'large-history';
+  app.receive({ type: 'state', state: initial, replaceState: true });
+  app.input('assistant-question', 'KEEP_UNSENT_CAPACITY_QUESTION');
+  app.click({ action: 'assistant-send' });
+  assert.equal(app.sent.filter(row => row.action === 'assistantRequest').length, 0);
+  assert.equal(app.node('assistant-question').value, 'KEEP_UNSENT_CAPACITY_QUESTION');
+  assert.match(app.node('toast').textContent, /聊天历史空间不足|not enough history space/i);
+});
