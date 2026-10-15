@@ -116,7 +116,7 @@ test('real GPA hover coalesces pointer bursts and cancels pending work on leave,
     const state = CampusCore.emptyState();
     state.settings.graphicsMode = 'low-power';
     state.gradeHistory = [3.2, 3.5, 3.4, 3.7].map((value, index) => ({
-      value, linearValue: value, date: '2026-10-0' + (index + 1),
+      value, method: CampusCore.GPA_BANDED_METHOD, linearValue: value, date: '2026-10-0' + (index + 1),
       capturedAt: '2026-10-0' + (index + 1) + 'T08:00:00Z', count: 7
     }));
     CampusDesk.receive({ type: 'state', state });

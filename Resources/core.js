@@ -49,7 +49,22 @@
   configureSchools(initialSchoolConfig);
   const MAX_TEAMS_ROWS = 500;
   const MAX_GRAPH_ROWS = 3000;
-  const METHOD = '课程等权；90/80/70/60 分对应 4/3/2/1，低于 60 分为 0；非学校官方 GPA';
+  const LEGACY_GPA_METHOD = '课程等权；90/80/70/60 分对应 4/3/2/1，低于 60 分为 0；非学校官方 GPA';
+  const GPA_BANDS = Object.freeze([
+    { minimum: 93, letter: 'A', points: 4.0 },
+    { minimum: 90, letter: 'A−', points: 3.7 },
+    { minimum: 87, letter: 'B+', points: 3.3 },
+    { minimum: 83, letter: 'B', points: 3.0 },
+    { minimum: 80, letter: 'B−', points: 2.7 },
+    { minimum: 77, letter: 'C+', points: 2.3 },
+    { minimum: 73, letter: 'C', points: 2.0 },
+    { minimum: 70, letter: 'C−', points: 1.7 },
+    { minimum: 67, letter: 'D+', points: 1.3 },
+    { minimum: 63, letter: 'D', points: 1.0 },
+    { minimum: 60, letter: 'D−', points: 0.7 },
+    { minimum: 0, letter: 'F', points: 0.0 }
+  ].map(Object.freeze));
+  const METHOD = '课程等权；93/90/87/83/80/77/73/70/67/63/60 分对应 4.0/3.7/3.3/3.0/2.7/2.3/2.0/1.7/1.3/1.0/0.7，低于 60 分为 0.0；百分比不先取整；非学校官方 GPA';
 
   function fail(message) { throw new Error('数据格式无效：' + message); }
   function record(value, label) {
@@ -786,9 +801,25 @@
   }
   function historyRow(value) {
     record(value, '成绩历史');
-    return { capturedAt: dateISO(value.capturedAt, false), date: dayKey(value.date),
+    const row = { capturedAt: dateISO(value.capturedAt, false), date: dayKey(value.date),
       value: finite(value.value, 0, 4, false), linearValue: finite(value.linearValue, 0, 4, true), count: finite(value.count, 1, 1000, false), scale: 4,
-      term: str(value.term, 300), method: str(value.method, 500, METHOD), signature: str(value.signature, 100000) };
+      term: str(value.term, 300), method: str(value.method, 500, LEGACY_GPA_METHOD), signature: str(value.signature, 100000) };
+    // Older signatures contain the exact per-course percentages at capture time.
+    // Recalculate only when that evidence is complete; never infer new bands
+    // from an aggregate GPA or alter the independent linear history.
+    if (row.method !== METHOD && row.signature) {
+      try {
+        const courses = JSON.parse(row.signature);
+        if (Array.isArray(courses) && courses.length === row.count && courses.every(course =>
+          Array.isArray(course) && course.length === 3 && typeof course[0] === 'string' && course[0] &&
+          typeof course[1] === 'string' && termKey(course[1]) === termKey(row.term) && points(course[2]) !== null) &&
+          new Set(courses.map(course => course[0])).size === courses.length) {
+          row.value = estimateGPA(courses.map(course => ({ percentage: course[2] }))).value;
+          row.method = METHOD;
+        }
+      } catch (_) { /* Keep unconvertible legacy records intact for backup/export. */ }
+    }
+    return row;
   }
   function changeRow(value) {
     record(value, '变化记录');
@@ -1253,7 +1284,7 @@
   }
   function points(percentage) {
     if (typeof percentage !== 'number' || !Number.isFinite(percentage) || percentage < 0 || percentage > 100) return null;
-    return percentage >= 90 ? 4 : percentage >= 80 ? 3 : percentage >= 70 ? 2 : percentage >= 60 ? 1 : 0;
+    return GPA_BANDS.find(band => percentage >= band.minimum).points;
   }
   function linearPoints(percentage) {
     if (typeof percentage !== 'number' || !Number.isFinite(percentage) || percentage < 0 || percentage > 100) return null;
@@ -1716,7 +1747,7 @@
         const relevant = courses.filter(c => c.gpaEligible && points(c.percentage) !== null);
         const signature = JSON.stringify(relevant.map(c => [c.id, c.term, c.percentage]).sort((a, b) => a[0].localeCompare(b[0])));
         const last = result.gradeHistory[result.gradeHistory.length - 1];
-        if (!last || last.signature !== signature || last.linearValue == null) {
+        if (!last || last.signature !== signature || last.linearValue == null || last.method !== METHOD) {
           const entry = { capturedAt: item.capturedAt, date: today(item.capturedAt, result.settings.timezone),
             value: estimate.value, linearValue: linear.value, count: estimate.count, scale: 4, term: relevant[0].term, method: METHOD, signature };
           const sameDay = result.gradeHistory.findIndex(h => h.date === entry.date && termKey(h.term) === termKey(entry.term));
@@ -1762,7 +1793,7 @@
       sources: { seiue: getSourceStatus(state, 'seiue', date), managebac: getSourceStatus(state, 'managebac', date), teams: getSourceStatus(state, 'teams', date) },
       changes: state.changeLog.slice().sort((a, b) => Date.parse(b.capturedAt) - Date.parse(a.capturedAt)) };
   }
-  return Object.freeze({ VERSION, configureSchools, schoolHomes, normalizeSchoolHome, emptyState, defaultState: emptyState, validateState, normalizeState: validateState, exportBackup, importBackup,
+  return Object.freeze({ VERSION, GPA_BANDS, GPA_BANDED_METHOD: METHOD, configureSchools, schoolHomes, normalizeSchoolHome, emptyState, defaultState: emptyState, validateState, normalizeState: validateState, exportBackup, importBackup,
     mergeSnapshot, resetTeamsData, clearTeamsData: resetTeamsData, today, clock, getSchedule, getCourses, getTasks, resolveTaskDeadline, parseManualDeadline, normalizePersonalEvent: personalEventRow, getFeedback, getOfficialGPA, estimateGPA, estimateLinearGPA, semesterGPAForecast,
     getNextClass, getClassClock, getSchedulePeriods, getTeamsPosts, getTeamsEC, getTeamsGrades, getSourceStatus, buildView, getSchoolCalendarEvents, schoolCalendarScheduleRule, schoolCalendarScheduleConflict, parseSchoolCalendarICS, parseSchoolCalendarPDFText, safeURL, safeAttachmentURL, gradePoints: points, linearGradePoints: linearPoints });
 });

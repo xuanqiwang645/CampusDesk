@@ -63,7 +63,7 @@ test('local plans round-trip through state validation and are isolated by course
 
 test('weighted boundaries and tolerated displayed weights remain consistent with rendered GPA', () => {
   for (const weights of [[21,52,27], [33.33,33.33,33.33], [33.335,33.335,33.335]]) {
-    for (const score of [0,60,70,80,90,100]) {
+    for (const score of [0,60,63,67,70,73,77,80,83,87,90,93,100]) {
       const c = {...course(), gradeComponents: weights.map((weight,i) => ({name:'Category '+i,weight,percentage:score}))};
       const result = P.evaluate(c);
       assert.equal(result.reason, null);
@@ -75,9 +75,35 @@ test('weighted boundaries and tolerated displayed weights remain consistent with
     }
   }
   const nearBoundary = {...course(),gradeComponents:[{name:'A',weight:100,percentage:89.999}]};
-  assert.equal(P.aggregate([nearBoundary], {}, Core.gradePoints).gpa, 3, 'a real sub-boundary mark is not rounded into the higher band');
+  assert.equal(P.aggregate([nearBoundary], {}, Core.gradePoints).gpa, 3.3, 'a real sub-boundary mark is not rounded into the higher band');
   const c = {...course(),gradeComponents:[{name:'A',weight:50.0025,percentage:80},{name:'B',weight:50.0025,percentage:null}]};
   const result = P.evaluate(c, {target:90});
   near(result.heldPoints,40); near(result.adjustableWeight,50); near(result.required,100);
   assert.equal(P.evaluate({...c,gradeComponents:[{name:'A',weight:100,percentage:90},{name:'B',weight:0.02,percentage:90}]}).reason,'weight-total');
+});
+
+test('scenario GPA uses all 12 requested bands while linear projection stays exact', () => {
+  const bands = [[93,4], [90,3.7], [87,3.3], [83,3], [80,2.7], [77,2.3], [73,2], [70,1.7], [67,1.3], [63,1], [60,0.7], [0,0]];
+  const inputs = bands.flatMap(([minimum, points], index) => {
+    const maximum = index ? bands[index - 1][0] - 0.001 : 100;
+    return [[minimum, points], [maximum, points]];
+  });
+  for (const [percentage, expected] of inputs) {
+    const item = {...course(), percentage, gradeComponents:[{name:'Overall category',weight:100,percentage}]};
+    const result = P.aggregate([item], {}, Core.gradePoints);
+    assert.equal(result.gpa, expected, String(percentage));
+    near(result.linearGPA, percentage / 100 * 4);
+  }
+  const courses = [92.99, 87.5, 63.25].map((percentage, index) => ({...course(), id:String(index), percentage,
+    gradeComponents:[{name:'A',weight:20,percentage},{name:'B',weight:35,percentage},{name:'C',weight:45,percentage}]}));
+  const result = P.aggregate(courses, {}, Core.gradePoints);
+  near(result.gpa, (3.7 + 3.3 + 1) / 3);
+  near(result.linearGPA, (92.99 + 87.5 + 63.25) / 3 / 100 * 4);
+  for (const english of [false, true]) {
+    const planner = P.create({Core,getState:()=>Core.emptyState(),isEnglish:()=>english,esc:String,persist:()=>{},render:()=>{},openCourse:()=>{}});
+    const summary = planner.summary(courses);
+    assert.doesNotMatch(summary, /90\/80\/70\/60/);
+    assert.match(summary, english ? /12 grades from A to F/ : /A 至 F 的 12 档标准/);
+    assert.match(summary, /2\.67 \/ 4\.00/);
+  }
 });

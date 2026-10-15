@@ -33,6 +33,8 @@ test('category plans support typing, background refresh, save, reload, import, E
     assert.match(await page.locator('#gp-live-results').innerText(),/91.13%/);
     await page.locator('#grade-plan-form [type="submit"]').click();
     assert.match(await page.locator('.gpa-forecast-card').innerText(),/91.13%/);
+    assert.match(await page.locator('.gpa-forecast-card').innerText(),/3.70 \/ 4.00/);
+    assert.match(await page.locator('.gpa-forecast-card').innerText(),/3.65 \/ 4.00/);
     const saved=await page.evaluate(()=>JSON.parse(localStorage.getItem('campusdesk.browser.v1')));
     assert.equal(saved.settings.gradePlans[P.key(c)].overrides[0].score,95);
     // Reload without the seeding init script so saved state is what gets tested.

@@ -17,7 +17,7 @@ test('GPA MA legends match the real chart indicator across intervals and missing
     const state = Core.emptyState();
     state.gradeHistory = [3.67, 3.33, 3.71, 3.71, 3.71, 3.71, 3.25, 3.25, 3.25, 3.75].map((value, i) => ({
       capturedAt: new Date(Date.UTC(2026, 8, 1 + i * 2)).toISOString(), date: new Date(Date.UTC(2026, 8, 1 + i * 2)).toISOString().slice(0, 10), value,
-      linearValue: i < 5 ? null : 3.4 + (i - 5) / 10, count: 7
+      linearValue: i < 5 ? null : 3.4 + (i - 5) / 10, count: 7, method: Core.GPA_BANDED_METHOD
     }));
     await page.addInitScript(state => localStorage.setItem('campusdesk.browser.v1', JSON.stringify(state)), state);
     await page.goto(pathToFileURL(path.resolve(__dirname, '../Resources/index.html')).href + '#grades');
@@ -70,7 +70,7 @@ test('GPA chart stays readable under repeated zoom, pan, aggregation and refresh
     const errors = [];
     page.on('pageerror', error => errors.push(error.message));
     const state = Core.emptyState();
-    state.gradeHistory = [3.67, 3.33, 3.71, 3.71].map((value, i) => ({ value, linearValue: [3.52, 3.49, 3.73, 3.74][i], date: '2026-09-' + (18 + i), capturedAt: `2026-09-${18 + i}T08:00:00Z`, count: 7, scale: 4 }));
+    state.gradeHistory = [3.67, 3.33, 3.71, 3.71].map((value, i) => ({ value, method: Core.GPA_BANDED_METHOD, linearValue: [3.52, 3.49, 3.73, 3.74][i], date: '2026-09-' + (18 + i), capturedAt: `2026-09-${18 + i}T08:00:00Z`, count: 7, scale: 4 }));
     await page.addInitScript(state => localStorage.setItem('campusdesk.browser.v1', JSON.stringify(state)), state);
     await page.goto(pathToFileURL(path.resolve(__dirname, '../Resources/index.html')).href + '#grades');
     const plot = page.locator('#gpa-kline-chart');
@@ -205,7 +205,7 @@ test('GPA chart stays readable under repeated zoom, pan, aggregation and refresh
     // Many real periods remain pan-able; no fabricated filler candles.
     state.gradeHistory = Array.from({ length: 120 }, (_, i) => {
       const capturedAt = new Date(Date.UTC(2026, 8, 1) + i * 4 * 3600000).toISOString();
-      return { capturedAt, date: capturedAt.slice(0, 10), value: 3 + (i % 20) / 20, linearValue: 2.9 + (i % 20) / 20, count: 7, scale: 4 };
+      return { capturedAt, date: capturedAt.slice(0, 10), value: 3 + (i % 20) / 20, method: Core.GPA_BANDED_METHOD, linearValue: 2.9 + (i % 20) / 20, count: 7, scale: 4 };
     });
     await page.evaluate(state => CampusDesk.receive({ type: 'state', state }), state);
     await page.waitForFunction(() => klinecharts.init('gpa-kline-linear-chart').getDataList().length === 120);

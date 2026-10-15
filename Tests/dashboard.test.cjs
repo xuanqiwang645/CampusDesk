@@ -108,7 +108,7 @@ test('GPA legends identify every moving average and keep the two methods indepen
     state.settings.language = language;
     // Deliberate calendar gaps: MA5 must average recorded periods, not fill days.
     state.gradeHistory = [3.71, 3.25, 3.25, 3.25, 3.75].map((value, i) => ({
-      value, linearValue: 3.5 + i / 10, date: new Date(Date.UTC(2026, 8, 1 + i * 3)).toISOString().slice(0, 10), capturedAt: new Date(Date.UTC(2026, 8, 1 + i * 3)).toISOString(), count: 7
+      value, method: app.ctx.CampusCore.GPA_BANDED_METHOD, linearValue: 3.5 + i / 10, date: new Date(Date.UTC(2026, 8, 1 + i * 3)).toISOString().slice(0, 10), capturedAt: new Date(Date.UTC(2026, 8, 1 + i * 3)).toISOString(), count: 7
     }));
     app.receive({ type: 'state', state });
     const html = app.node('content').innerHTML;
@@ -125,6 +125,23 @@ function assistantModelOptions(app, id) {
   assert.ok(select, 'Missing model dropdown: ' + id);
   return [...select[1].matchAll(/<option value="([^"]+)"/g)].map(match => match[1]);
 }
+
+test('unverifiable legacy GPA history is excluded only from the banded chart', () => {
+  const app = harness({ hash: '#grades' });
+  const state = app.ctx.CampusCore.emptyState();
+  state.gradeHistory = [
+    { date: '2026-09-16', capturedAt: '2026-09-16T08:00:00Z', value: 1.21, linearValue: 1.23, count: 2 },
+    { date: '2026-09-17', capturedAt: '2026-09-17T08:00:00Z', value: 3.2, linearValue: 3.4, count: 2, method: app.ctx.CampusCore.GPA_BANDED_METHOD },
+    { date: '2026-09-18', capturedAt: '2026-09-18T08:00:00Z', value: 3.7, linearValue: 3.6, count: 2, method: app.ctx.CampusCore.GPA_BANDED_METHOD }
+  ];
+  app.receive({ type: 'state', state });
+  const charts = app.node('content').innerHTML.split('<section class="card gpa-kline-card"').slice(1);
+  assert.equal(charts.length, 2);
+  assert.match(charts[0], /2 个周期/);
+  assert.match(charts[0], /1 条旧分档记录/);
+  assert.match(charts[1], /3 个周期/);
+  assert.doesNotMatch(charts[1], /gpa-history-migration/);
+});
 
 test('learning assistant and setup wizard are isolated to CampusDesk Theme Edition', () => {
   const original = harness({ hash: '#assistant' });
@@ -999,10 +1016,10 @@ test('estimated GPA is always presented with two decimal places', () => {
     { id: 'english', name: 'English', percentage: 80, term: 'Current', isCurrentTerm: true, isCourseGrade: true }
   ], tasks: [], feedback: [], officialGPA: null } });
   app.click({ page: 'settings' }); app.click({ action: 'dashboard-theme', theme: 'board' }); app.click({ page: 'overview' });
-  assert.match(app.node('content').innerHTML, /<strong>3\.50<\/strong>/);
+  assert.match(app.node('content').innerHTML, /<strong>3\.20<\/strong>/);
   app.click({ page: 'grades' });
-  assert.match(app.node('content').innerHTML, />3\.50</);
-  assert.match(app.node('content').innerHTML, />4\.00</);
+  assert.match(app.node('content').innerHTML, />3\.20</);
+  assert.match(app.node('content').innerHTML, />3\.70</);
   assert.match(app.node('content').innerHTML, /线性折算 GPA/);
   assert.match(app.node('content').innerHTML, />3\.40</);
   assert.match(app.node('content').innerHTML, /<th>线性绩点<\/th>/);

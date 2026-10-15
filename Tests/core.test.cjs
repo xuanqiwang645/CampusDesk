@@ -223,9 +223,9 @@ test('zero is a real grade; null, empty text, NaN and missing grades are exclude
 });
 
 test('GPA bands include each exact boundary and exclude assignment grades', () => {
-  assert.deepEqual([0, 59.99, 60, 69.99, 70, 79.99, 80, 89.99, 90, 100].map(Core.gradePoints), [0, 0, 1, 1, 2, 2, 3, 3, 4, 4]);
+  assert.deepEqual([0, 59.99, 60, 69.99, 70, 79.99, 80, 89.99, 90, 100].map(Core.gradePoints), [0, 0, 0.7, 1.3, 1.7, 2.3, 2.7, 3.3, 3.7, 4]);
   const result = Core.estimateGPA([{ percentage: 90 }, { percentage: 60 }, { percentage: 0, isCourseGrade: false }]);
-  assert.equal(result.value, 2.5);
+  assert.equal(result.value, 2.2);
   assert.equal(result.count, 2);
 });
 
@@ -311,12 +311,12 @@ test('historical terms and unconfirmed grades do not enter current GPA', () => {
     { id: 'math', name: 'Math', percentage: 90, term: 'First Semester', isCurrentTerm: true, isCourseGrade: true },
     { id: 'other', name: 'Other', percentage: 10, term: 'First Semester' }
   ] }));
-  assert.equal(Core.estimateGPA(Core.getCourses(state)).value, 4);
+  assert.equal(Core.estimateGPA(Core.getCourses(state)).value, 3.7);
   assert.equal(Core.estimateGPA(Core.getCourses(state)).count, 1);
   state = Core.mergeSnapshot(state, managebac({ url: 'https://example-school.managebac.cn/new-term', capturedAt: '2027-02-01T00:00:00Z',
     courses: [{ id: 'english', name: 'English', percentage: 80, term: 'Second Semester', isCurrentTerm: true, isCourseGrade: true }] }));
   assert.deepEqual(Core.getCourses(state).map(c => c.name), ['English']);
-  assert.equal(Core.estimateGPA(Core.getCourses(state)).value, 3);
+  assert.equal(Core.estimateGPA(Core.getCourses(state)).value, 2.7);
 });
 
 test('failed parsing and expired login retain useful data and mark it stale', () => {
@@ -370,7 +370,7 @@ test('GPA history adds only eligible course changes; official remains separate',
   assert.equal(state.gradeHistory.length, 1);
   assert.equal(state.gradeHistory[0].capturedAt, '2026-09-18T00:30:00.000Z');
   assert.equal(state.gradeHistory[0].linearValue, 3.64);
-  assert.equal(Core.estimateGPA(Core.getCourses(state)).value, 4);
+  assert.equal(Core.estimateGPA(Core.getCourses(state)).value, 3.7);
   assert.equal(Core.getOfficialGPA(state).value, 4.3);
   assert.equal(Core.getOfficialGPA(state).scale, 5);
   const unknown = Core.mergeSnapshot(Core.emptyState(), managebac({ courses: [{ id: 'x', name: 'Unknown term', percentage: 95 }] }));
@@ -410,7 +410,7 @@ test('late arrival cannot overwrite a newer snapshot; GPA history has one value 
   state = Core.mergeSnapshot(state, managebac({ capturedAt: '2026-09-18T01:00:00Z',
     courses: [{ id: 'math', name: 'Math', percentage: 80, term: 'First Semester (current)', isCurrentTerm: true, isCourseGrade: true }] }));
   assert.equal(state.gradeHistory.length, 1);
-  assert.equal(state.gradeHistory[0].value, 3);
+  assert.equal(state.gradeHistory[0].value, 2.7);
   state = Core.mergeSnapshot(state, managebac({ capturedAt: '2026-09-18T16:00:00Z',
     courses: [{ id: 'math', name: 'Math', percentage: 70, term: 'First Semester (current)', isCurrentTerm: true, isCourseGrade: true }] }));
   assert.equal(state.gradeHistory.length, 2);
@@ -451,7 +451,7 @@ test('export/import round trip preserves data but returns an independent object'
   assert.equal(Core.getTasks(restored)[0].title, 'Bring notebook');
   restored.settings.selfStudy = false;
   assert.equal(state.settings.selfStudy, true);
-  assert.equal(restored.gradeHistory[0].value, 4);
+  assert.equal(restored.gradeHistory[0].value, 3.7);
 });
 
 function teams(overrides = {}) {
