@@ -2,14 +2,17 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('node:path');
+const fs = require('node:fs');
 const { pathToFileURL } = require('node:url');
 global.CampusDeskThemeEdition = true;
 const Core = require('../Resources/core.js');
 const Agenda = require('../Resources/agenda.js');
 const optional = { skip: !process.env.PLAYWRIGHT_MODULE };
+const themeVersion = fs.readFileSync(path.resolve(__dirname, '../Info-ThemeEdition.plist'), 'utf8')
+  .match(/<key>CFBundleShortVersionString<\/key>\s*<string>([^<]+)<\/string>/)[1];
 function fixtureState() {
   let state = Core.emptyState();
-  Object.assign(state.settings, { setupWizardCompleted: true, setupWizardIntroVersion: '1.1.0', dashboardTheme: 'board' });
+  Object.assign(state.settings, { setupWizardCompleted: true, setupWizardIntroVersion: themeVersion, dashboardTheme: 'board' });
   state.manualTasks = [{ id: 'midnight-due', title: 'Midnight deadline', dueAt: '2030-01-31T16:15:00.000Z', status: 'open', course: 'Personal' }];
   state = Agenda.upsertPersonalEvent(state, { title: 'Overnight observation', startDate: '2030-01-31', endDate: '2030-02-01', allDay: false, startTime: '23:30', endTime: '00:30' });
   return Core.validateState(state);
@@ -21,13 +24,14 @@ async function fixture(run, native = false) {
     const page = await browser.newPage({ viewport: { width: 1440, height: 1050 } });
     const errors = [];
     page.on('pageerror', error => errors.push(error.message));
-    await page.addInitScript(({ state, native }) => {
+    await page.addInitScript(({ state, native, themeVersion }) => {
       // Seed only the isolated browser's first load. Re-seeding on reload would
       // erase the event just saved and invalidate the persistence regression.
       if (!localStorage.getItem('campusdesk.browser.v1')) localStorage.setItem('campusdesk.browser.v1', JSON.stringify(state));
       window.CampusDeskThemeEdition = true;
+      window.CampusDeskAppVersion = { version: themeVersion, name: 'Synthetic test' };
       if (native) { window.testMessages = []; window.webkit = { messageHandlers: { campus: { postMessage: message => window.testMessages.push(message) } } }; }
-    }, { state: fixtureState(), native });
+    }, { state: fixtureState(), native, themeVersion });
     await page.goto(pathToFileURL(path.resolve(__dirname, '../Resources/index.html')).href + '#calendar');
     if (native) await page.evaluate(state => CampusDesk.receive({ type: 'state', state }), fixtureState());
     await page.locator('.agenda-month-grid').waitFor();

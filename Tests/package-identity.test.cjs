@@ -25,3 +25,22 @@ test('package script creates portable hashes and never silently overwrites exist
   assert.match(source, /产物已存在，未覆盖/);
   assert.match(source, /keepParent "\$campus_app"/);
 });
+test('Theme release metadata agrees across the host, widget and browser fallback', () => {
+  const field = (file, key) => {
+    const source = fs.readFileSync(path.join(root, file), 'utf8');
+    return new RegExp('<key>' + key + '</key>\\s*<string>([^<]+)</string>').exec(source)?.[1];
+  };
+  const version = field('Info-ThemeEdition.plist', 'CFBundleShortVersionString');
+  const name = field('Info-ThemeEdition.plist', 'CampusDeskReleaseName');
+  const build = field('Info-ThemeEdition.plist', 'CFBundleVersion');
+  assert.match(version, /^\d+\.\d+\.\d+$/);
+  assert.ok(name);
+  assert.match(build, /^\d+$/);
+  for (const key of ['CFBundleShortVersionString', 'CFBundleVersion']) {
+    assert.equal(field('Widgets/Info.plist', key), field('Info-ThemeEdition.plist', key));
+  }
+  assert.equal(field('Info-ThemeEdition.plist', 'CFBundleGetInfoString'), 'CampusDesk Theme Edition v' + version + ' ' + name);
+  const dashboard = fs.readFileSync(path.join(root, 'Resources/dashboard.js'), 'utf8');
+  assert.ok(dashboard.includes("version: themeEdition ? '" + version + "'"));
+  assert.ok(dashboard.includes("name: themeEdition ? '" + name + "'"));
+});

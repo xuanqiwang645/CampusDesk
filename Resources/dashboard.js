@@ -7,7 +7,7 @@
   }
   const native = Boolean(window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.campus);
   const themeEdition = window.CampusDeskThemeEdition === true;
-  const appVersionInfo = window.CampusDeskAppVersion || { version: themeEdition ? '1.1.0' : '0.5.13', name: themeEdition ? 'Super Orion' : '' };
+  const appVersionInfo = window.CampusDeskAppVersion || { version: themeEdition ? '1.2.0' : '0.5.13', name: themeEdition ? 'Lagoon' : '' };
   const setupWizardReleaseVersion = String(appVersionInfo.version || 'unversioned').slice(0, 40);
   const appVersionLabel = 'CampusDesk v' + String(appVersionInfo.version || '').slice(0, 40) + (appVersionInfo.name ? ' ' + String(appVersionInfo.name).slice(0, 60) : '');
   const storageKey = 'campusdesk.browser.v1';

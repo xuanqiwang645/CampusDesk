@@ -17,13 +17,13 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>1.1.0</string>
+	<string>1.2.0</string>
 	<key>CFBundleVersion</key>
-    <string>77</string>
+    <string>78</string>
 	<key>CampusDeskReleaseName</key>
-	<string>Super Orion</string>
+	<string>Lagoon</string>
 	<key>CFBundleGetInfoString</key>
-	<string>CampusDesk Theme Edition v1.1.0 Super Orion</string>
+	<string>CampusDesk Theme Edition v1.2.0 Lagoon</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>12.0</string>
 	<key>NSHighResolutionCapable</key>
