@@ -63,7 +63,15 @@ struct AssistantModelSmokeTests {
         expect(.badResponse, "Model lists above 100 entries are rejected") { _ = try CampusAssistantModels.parse(json(["data": Array(repeating: ["id": "safe-model"], count: 101)]), provider: "deepseek") }
         check(try CampusAssistantModels.parse(json(["data": (0..<100).map { ["id": "model-\($0)"] }]), provider: "deepseek").count == 100, "The documented model count boundary is accepted")
         check(CampusAssistantModels.responseError(provider: "deepseek", statusCode: 401) == .unauthorized, "Rejected credentials have a distinct error")
-        check(CampusAssistantModels.responseError(provider: "deepseek", statusCode: 429) == .network, "Unavailable cloud discovery has a recoverable error")
+        let cloudErrors: [(Int, AssistantModelError)] = [
+            (400, .remoteInvalidRequest), (422, .remoteInvalidRequest), (401, .unauthorized), (403, .unauthorized),
+            (402, .insufficientBalance), (404, .modelUnavailable), (429, .rateLimited),
+            (500, .serviceUnavailable), (503, .serviceUnavailable), (599, .serviceUnavailable), (418, .serviceRejected)
+        ]
+        for (status, expected) in cloudErrors {
+            check(CampusAssistantModels.responseError(provider: "deepseek", statusCode: status) == expected,
+                  "Cloud discovery HTTP \(status) reports its specific cause instead of a network failure")
+        }
         check(CampusAssistantModels.responseError(provider: "ollama", statusCode: 503) == .localUnavailable, "Unavailable local discovery is distinguished")
         check(CampusAssistantModels.responseError(provider: "deepseek", statusCode: 302) == .badResponse, "Redirect responses are refused")
         var failureCount = 0

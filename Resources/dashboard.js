@@ -76,6 +76,7 @@
   let assistantReferences = [];
   let assistantQuestionDraft = '';
   let assistantRenderDeferred = false;
+  let assistantPointerTarget = null;
   let assistantQuestionComposing = false;
   let assistantPendingRequest = null;
   let assistantBusy = false;
@@ -1954,8 +1955,8 @@
       : local ? assistantCopy('仅列出本机 Ollama 已安装的模型。', 'Only models installed in local Ollama are listed.')
       : catalog.loaded ? assistantCopy('来自 DeepSeek 的可用模型列表。', 'Available models returned by DeepSeek.')
       : assistantCopy('预置官方模型；保存密钥后可刷新可用列表。', 'Official model presets; save a key to refresh availability.');
-    if (catalog.error) note = ['keyAccess', 'missingKey', 'unauthorized', 'keyStore'].includes(catalog.error) ? assistantErrorText(catalog.error)
-      : assistantCopy(local ? '未能读取本机模型。请启动 Ollama 并安装模型后刷新。' : '模型列表暂不可用，可稍后刷新。', local ? 'Could not read local models. Start Ollama, install a model, then refresh.' : 'The model list is unavailable. Try refreshing later.');
+    if (catalog.error) note = !local || ['keyAccess', 'missingKey', 'unauthorized', 'keyStore'].includes(catalog.error) ? assistantErrorText(catalog.error)
+      : assistantCopy('未能读取本机模型。请启动 Ollama 并安装模型后刷新。', 'Could not read local models. Start Ollama, install a model, then refresh.');
     else if (local && catalog.loaded && !catalog.models.length) note = assistantCopy('Ollama 中还没有模型。请先在 Ollama 安装模型，再点击刷新。', 'No models are installed in Ollama. Install one in Ollama, then refresh.');
     return '<div class="assistant-model-picker"><label for="' + id + '">' + label + '</label><div class="assistant-model-picker-row"><select id="' + id + '" aria-label="' + label + '"' + (!catalog.models.length ? ' disabled' : '') + '>' + placeholder + options + '</select><button type="button" class="button button-light" data-action="assistant-refresh-models" data-provider="' + provider + '"' + (catalog.loading || (provider === 'deepseek' && (!assistantKeyReady() || !assistantNetworkAvailable())) ? ' disabled' : '') + '>' + assistantCopy('刷新', 'Refresh') + '</button></div><small role="status">' + esc(note) + '</small></div>';
   }
@@ -2057,6 +2058,11 @@
       cancelled: ['已停止生成。', 'Generation stopped.'],
       network: ['无法连接 DeepSeek，请检查网络后重试。', 'Could not reach DeepSeek. Check your connection and try again.'],
       unauthorized: ['DeepSeek API 密钥无效或已失效。', 'The DeepSeek API key is invalid or expired.'],
+      remoteInvalidRequest: ['DeepSeek 无法处理本次请求，请减少资料范围后重试；无需重新保存 API 密钥。', 'DeepSeek could not process this request. Reduce the data scope and try again; you do not need to save the API key again.'],
+      insufficientBalance: ['DeepSeek API 余额不足，请在 DeepSeek 开放平台检查余额；充值后可直接重试，无需重新保存密钥。', 'Your DeepSeek API balance is insufficient. Check your balance on the DeepSeek Platform, then retry after topping up; your saved key can still be used.'],
+      modelUnavailable: ['所选 DeepSeek 模型当前不可用，请刷新模型列表并重新选择；无需重新保存 API 密钥。', 'The selected DeepSeek model is unavailable. Refresh the model list and choose an available model; you do not need to save the API key again.'],
+      rateLimited: ['DeepSeek 请求过于频繁，请稍等后重试；无需重新保存 API 密钥。', 'DeepSeek is limiting requests. Wait a moment and try again; you do not need to save the API key again.'],
+      serviceUnavailable: ['DeepSeek 服务暂时不可用，请稍后重试；已保存的 API 密钥会保留。', 'DeepSeek is temporarily unavailable. Try again later; your saved API key is retained.'],
       serviceRejected: ['AI 服务拒绝了请求；请检查模型设置或稍后重试。', 'The AI service rejected the request. Check the model setting or try again later.'],
       badResponse: ['AI 服务返回的内容无法识别，请稍后重试。', 'The AI service returned an unreadable response. Try again later.']
     };
@@ -2079,8 +2085,9 @@
     const localActive = provider === 'ollama' || (provider === 'hybrid' && offline);
     const catalog = assistantCatalogs[localActive ? 'ollama' : 'deepseek'];
     const missingModel = provider !== 'off' && catalog.loaded && !catalog.models.includes(localActive ? assistantOllamaModel() : model);
+    const remoteModelUnverified = needsKey && assistantKeyReady() && !assistantCatalogs.deepseek.loaded;
     const keyBlocked = needsKey && assistantKeyBlocked();
-    const sendDisabled = !native || provider === 'off' || assistantBusy || (needsKey && !assistantKeyReady()) || strictOffline || missingModel;
+    const sendDisabled = !native || provider === 'off' || assistantBusy || (needsKey && !assistantKeyReady()) || strictOffline || missingModel || remoteModelUnverified;
     const providerLabel = provider === 'ollama' ? assistantCopy('仅本机 Ollama', 'Ollama only · Local') : provider === 'deepseek' ? assistantCopy('仅联网 DeepSeek', 'DeepSeek online only') : provider === 'hybrid' ? assistantCopy('联网 DeepSeek · 离线 Ollama', 'DeepSeek online · Ollama offline') : assistantCopy('已关闭', 'Off');
     const disclosure = provider === 'deepseek'
       ? strictOffline
@@ -2093,13 +2100,19 @@
           : assistantCopy('AI 已关闭。到连接与设置的“学习助手”卡片选择接入方式后即可使用。', 'AI is off. Choose a provider in the Learning Assistant section of Settings to enable it.');
     const activeModel = provider === 'ollama' || (provider === 'hybrid' && offline) ? assistantOllamaModel() : model;
     const placeholder = strictOffline ? assistantCopy('联网后才能使用 DeepSeek', 'DeepSeek is unavailable offline') : assistantCopy('例如：根据当前截止时间，帮我安排今晚的学习顺序。', 'For example: Based on the due dates, help me plan tonight’s study order.');
-    return { provider, strictOffline, sendDisabled, providerLabel, disclosure, activeModel, placeholder, keyBlocked, missingModel };
+    return { provider, strictOffline, sendDisabled, providerLabel, disclosure, activeModel, placeholder, keyBlocked, missingModel, remoteModelUnverified };
   }
   function renderAssistantProviderSwitch(view) {
     return '<div class="assistant-provider-switch" role="group" aria-label="' + assistantCopy('选择回答方式', 'Choose response provider') + '"><span>' + assistantCopy('回答方式', 'Answer with') + '</span>' + [['ollama', '本机 Ollama', 'Local Ollama'], ['deepseek', '联网 DeepSeek', 'Online DeepSeek'], ['hybrid', '自动切换', 'Automatic']].map(item => '<button type="button" class="button button-light" data-action="assistant-switch-provider" data-provider="' + item[0] + '" aria-pressed="' + (view.provider === item[0]) + '"' + (assistantBusy ? ' disabled' : '') + '>' + assistantCopy(item[1], item[2]) + '</button>').join('') + '</div>';
   }
   function renderAssistantRecovery(view) {
     if (view.keyBlocked) return '<p>' + esc(assistantErrorText(assistantStatus.deepSeekKeyState === 'unavailable' ? 'keyStore' : 'keyAccess')) + '</p>' + assistantKeyRecoveryButton();
+    if (view.remoteModelUnverified && !view.strictOffline) {
+      const catalog = assistantCatalogs.deepseek;
+      const note = catalog.loading ? assistantCopy('正在确认 DeepSeek 可用模型，请稍候。问题草稿会保留。', 'Checking available DeepSeek models. Your question draft is retained.')
+        : catalog.error ? assistantErrorText(catalog.error) : assistantCopy('请先确认 DeepSeek 可用模型，再发送问题。', 'Check the available DeepSeek models before sending a question.');
+      return '<p>' + esc(note) + '</p>' + (catalog.loading ? '' : '<button type="button" class="button button-light" data-action="assistant-refresh-models" data-provider="deepseek">' + assistantCopy('重试模型检测', 'Check models again') + '</button>');
+    }
     if (view.missingModel) return '<p>' + assistantCopy('请先选择可用模型；本机模型需先在 Ollama 安装。', 'Choose an available model first. Local models must be installed in Ollama.') + '</p><button type="button" class="button button-light" data-action="assistant-open-key-settings">' + assistantCopy('选择模型', 'Choose model') + '</button>';
     return '';
   }
@@ -2117,6 +2130,7 @@
     const view = assistantPresentation();
     const updateHTML = (id, html) => {
       const element = document.getElementById(id);
+      if (element && assistantPointerTarget && element.contains(assistantPointerTarget)) return;
       if (element && element.innerHTML !== html) element.innerHTML = html;
     };
     updateHTML('assistant-chat-log', renderAssistantConversation());
@@ -2159,6 +2173,7 @@
     if (!question) { toast(assistantCopy('请先输入问题。', 'Enter a question first.')); return null; }
     const view = assistantPresentation();
     if (view.keyBlocked) { toast(assistantErrorText('keyAccess')); return null; }
+    if (view.remoteModelUnverified) { requestAssistantModels('deepseek'); updateAssistantWorkspace(); toast(assistantCatalogs.deepseek.error ? assistantErrorText(assistantCatalogs.deepseek.error) : assistantCopy('正在确认 DeepSeek 可用模型，请稍候再发送。', 'Checking available DeepSeek models. Send your question once the check finishes.')); return null; }
     if (view.missingModel) { toast(assistantCopy('请先在设置中选择可用模型。', 'Choose an available model in Settings first.')); return null; }
     if ((provider === 'deepseek' || (provider === 'hybrid' && assistantNetworkAvailable())) && !assistantKeyReady()) { navigate('settings'); toast(assistantCopy('联网使用 DeepSeek 前，请先在设置中安全保存 API 密钥。', 'Save a DeepSeek API key securely in Settings before using DeepSeek online.')); return null; }
     const built = assistantBuildContext(assistantSelectedContext());
@@ -2169,7 +2184,10 @@
     const history = [];
     for (let i = assistantTranscript.length - 2; i >= 0 && history.length < 8; i -= 2) {
       const user = assistantTranscript[i], answer = assistantTranscript[i + 1];
-      if (user.role !== 'user' || answer.role !== 'assistant' || user.contextKey !== contextKey || answer.contextKey !== contextKey || answer.failed) break;
+      if (user.role !== 'user' || answer.role !== 'assistant' || user.contextKey !== contextKey || answer.contextKey !== contextKey) break;
+      // A failed attempt contributes no model context, but earlier successful
+      // turns in the same recipient/data scope still belong to the conversation.
+      if (answer.failed) continue;
       history.unshift({ role: 'user', content: user.content }, { role: 'assistant', content: answer.content });
     }
     const first = { role: 'system', content: assistantSystemMessage() }, last = { role: 'user', content: userContent };
@@ -2529,9 +2547,19 @@
   }
   function flushDeferredAssistantRender() {
     if (!assistantRenderDeferred || page !== 'assistant') return;
-    if (document.activeElement && document.activeElement.id === 'assistant-question') return;
+    if (assistantWorkspaceInteracting()) { updateAssistantWorkspace(); return; }
     assistantRenderDeferred = false;
     render();
+  }
+  function assistantWorkspaceContains(node) {
+    return Boolean(node && (node.id === 'assistant-question' || document.querySelector('.assistant-workspace')?.contains(node)));
+  }
+  function assistantWorkspaceInteracting() {
+    return assistantWorkspaceContains(document.activeElement) || assistantWorkspaceContains(assistantPointerTarget);
+  }
+  function releaseAssistantPointer() {
+    assistantPointerTarget = null;
+    if (page === 'assistant') { updateAssistantWorkspace(); flushDeferredAssistantRender(); }
   }
   function restoreReading(saved) {
     if (!saved) return;
@@ -2557,13 +2585,13 @@
     // Replacing the page DOM while WebKit's textarea is focused interrupts
     // marked-text composition (notably Chinese Pinyin). Keep the live editor
     // mounted until blur, and render the newest state immediately afterwards.
-    const assistantEditor = page === 'assistant' && document.activeElement && document.activeElement.id === 'assistant-question'
-      ? document.activeElement : null;
-    if (assistantEditor) {
+    const assistantEditor = page === 'assistant' ? document.getElementById('assistant-question') : null;
+    if (assistantEditor && !state.settings.focusMode && assistantWorkspaceInteracting()) {
       assistantQuestionDraft = String(assistantEditor.value || '').slice(0, 6000);
       assistantRenderDeferred = true;
       updateStatus();
       updateGradeNotifications();
+      ensureAssistantModels();
       updateAssistantWorkspace();
       return;
     }
@@ -2915,6 +2943,7 @@
       state.settings.aiProvider = provider;
       assistantPendingRequest = null;
       persist();
+      ensureAssistantModels();
       updateAssistantWorkspace();
     }
     else if (action === 'assistant-send') sendAssistantQuestion();
@@ -3311,7 +3340,7 @@
       captureSchoolConfigurationDraft();
     }
   });
-  window.addEventListener('online', () => { if (themeEdition && page === 'assistant' && ['deepseek', 'hybrid'].includes(assistantProvider())) render(); });
+  window.addEventListener('online', () => { if (themeEdition && page === 'assistant' && ['deepseek', 'hybrid'].includes(assistantProvider())) { ensureAssistantModels(); render(); } });
   window.addEventListener('offline', () => { if (themeEdition && page === 'assistant' && ['deepseek', 'hybrid'].includes(assistantProvider())) render(); });
   document.addEventListener('compositionstart', event => {
     if (event.target && event.target.id === 'assistant-question') assistantQuestionComposing = true;
@@ -3324,12 +3353,24 @@
     updateAssistantSendControls();
   });
   document.addEventListener('focusout', event => {
-    if (!event.target || event.target.id !== 'assistant-question') return;
-    assistantQuestionDraft = String(event.target.value || '').slice(0, 6000);
-    // Let the same pointer/keyboard event finish (for example, clicking
-    // “Send”) before refreshing the page after the editor blurs.
+    if (!assistantWorkspaceContains(event.target)) return;
+    if (event.target.id === 'assistant-question') assistantQuestionDraft = String(event.target.value || '').slice(0, 6000);
+    if (assistantWorkspaceContains(event.relatedTarget)) { updateAssistantWorkspace(); return; }
+    // A pointer guard also covers WebKit buttons that do not receive focus:
+    // mousedown may blur the editor long before mouseup dispatches the click.
     window.setTimeout(flushDeferredAssistantRender, 0);
   });
+  document.addEventListener('pointerdown', event => {
+    assistantPointerTarget = assistantWorkspaceContains(event.target) ? event.target : null;
+  }, true);
+  document.addEventListener('click', () => {
+    if (assistantPointerTarget) window.setTimeout(releaseAssistantPointer, 0);
+  }, true);
+  document.addEventListener('pointerup', event => {
+    if (assistantPointerTarget && !assistantWorkspaceContains(event.target)) releaseAssistantPointer();
+  }, true);
+  document.addEventListener('pointercancel', releaseAssistantPointer, true);
+  window.addEventListener('blur', releaseAssistantPointer);
   document.addEventListener('keydown', event => {
     if (!event.target || event.target.id !== 'assistant-question' || event.key !== 'Enter') return;
     if (!(event.metaKey || event.ctrlKey) || event.repeat || event.isComposing || assistantQuestionComposing || event.keyCode === 229) return;
@@ -3654,7 +3695,7 @@
           else if (event.notice === 'keyRestored') toast(assistantCopy('已恢复密钥访问，可继续使用学习助手。', 'Key access restored. The assistant is ready.'));
           else if (event.notice === 'keyDeleted') toast(assistantCopy('DeepSeek API 密钥已删除。', 'DeepSeek API key deleted.'));
           if (event.errorCode) toast(assistantErrorText(event.errorCode));
-          if (themeEdition && ['assistant', 'settings'].includes(page)) render();
+          if (themeEdition && ['assistant', 'settings'].includes(page)) { ensureAssistantModels(); render(); }
         }
         else if (event.type === 'assistantGuideResult') {
           if (themeEdition) assistantGuideResult(event.operation, event.success === true);
@@ -3695,6 +3736,8 @@
           assistantBusy = false; assistantActiveRequestID = '';
           if (['keyAccess', 'missingKey', 'keyStore'].includes(event.errorCode)) {
             assistantStatus.deepSeekKeyState = event.errorCode === 'missingKey' ? 'missing' : event.errorCode === 'keyAccess' ? 'locked' : 'unavailable';
+          }
+          if (event.errorCode || typeof event.answer !== 'string' || !event.answer.trim()) {
             const editor = document.getElementById('assistant-question');
             const draft = editor ? String(editor.value || '') : assistantQuestionDraft;
             if (!draft.trim()) {

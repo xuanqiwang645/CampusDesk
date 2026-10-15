@@ -76,6 +76,11 @@ function harness({ native = true, hash = '#overview', saved = null, idle = false
     last: action => sent.filter(item => item.action === action).at(-1)
   };
 }
+function confirmDeepSeekModels(app, models = ['deepseek-flash', 'deepseek-v4-pro']) {
+  const request = app.sent.filter(item => item.action === 'assistantListModels' && item.provider === 'deepseek').at(-1);
+  assert.ok(request, 'DeepSeek discovery must start before confirming models');
+  app.receive({ type: 'assistantModels', provider: 'deepseek', requestId: request.requestId, models });
+}
 test('chat provider buttons preserve draft and route online requests locally when Ollama is selected', () => {
   const app = harness({ themeEdition: true, hash: '#assistant', online: true });
   app.input('assistant-question', 'Keep this question');
@@ -305,6 +310,7 @@ test('DeepSeek-only mode is disabled offline and never falls back to Ollama', ()
   onlineState.settings.aiProvider = 'deepseek';
   online.receive({ type: 'state', state: onlineState });
   online.receive({ type: 'assistantStatus', deepSeekKeyConfigured: true });
+  confirmDeepSeekModels(online);
   online.input('assistant-question', 'What should I study?');
   online.click({ action: 'assistant-send' });
   assert.equal(online.sent.filter(row => row.action === 'assistantRequest').length, 1);
@@ -373,6 +379,7 @@ test('hybrid assistant sends directly with the current network route and reports
   onlineState.settings.aiProvider = 'hybrid';
   online.receive({ type: 'state', state: onlineState });
   online.receive({ type: 'assistantStatus', deepSeekKeyConfigured: true });
+  confirmDeepSeekModels(online);
   online.input('assistant-question', 'What should I study?');
   online.click({ action: 'assistant-send' });
   assert.equal(online.sent.filter(row => row.action === 'assistantRequest').length, 1);
@@ -393,6 +400,7 @@ test('optional AI request preview never sends by itself and API keys never enter
   app.change('setup-ai-provider');
   app.click({ action: 'setup-ai-configure' });
   app.receive({ type: 'assistantStatus', deepSeekKeyConfigured: true });
+  confirmDeepSeekModels(app);
   app.input('assistant-question', 'Which task should I do first?');
   app.click({ action: 'assistant-review' });
   assert.equal(app.node('assistant-confirm-dialog').open, true);
@@ -627,6 +635,7 @@ test('a silent Keychain access failure restores an untouched question, preserves
     state.settings.aiProvider = 'deepseek';
     app.receive({ type: 'state', state });
     app.receive({ type: 'assistantStatus', deepSeekKeyConfigured: true, deepSeekKeyState: 'stored' });
+    confirmDeepSeekModels(app);
     const editor = app.node('assistant-question');
     editor.focus();
     app.input('assistant-question', '这道题尚未发给模型');
@@ -692,6 +701,103 @@ test('DeepSeek models are selectable presets refreshed from the service and arbi
   app.input('assistant-question', 'Use the model I selected');
   app.click({ action: 'assistant-send' });
   assert.equal(app.last('assistantRequest').model, 'deepseek-v4-pro');
+});
+
+test('switching to DeepSeek discovers models immediately and waits for confirmation even with a focused draft', () => {
+  for (const focused of [false, true]) {
+    const app = assistantAuditHarness([]);
+    app.receive({ type: 'assistantStatus', deepSeekKeyConfigured: true, deepSeekKeyState: 'stored' });
+    const editor = app.node('assistant-question');
+    if (focused) editor.focus();
+    app.input('assistant-question', 'Keep my first DeepSeek question');
+    app.click({ action: 'assistant-switch-provider', provider: 'deepseek' });
+    assert.equal(app.last('assistantListModels').provider, 'deepseek', 'mode switching starts discovery without a complete page render');
+    assert.equal(app.node('assistant-send').disabled, true);
+    app.click({ action: 'assistant-send' });
+    assert.equal(app.sent.filter(row => row.action === 'assistantRequest').length, 0);
+    assert.equal(app.node('assistant-question').value, 'Keep my first DeepSeek question');
+    confirmDeepSeekModels(app, ['deepseek-v4-pro']);
+    assert.equal(app.sent.filter(row => row.action === 'assistantRequest').length, 0, 'discovery never sends the waiting draft automatically');
+    if (focused) assert.equal(app.node('assistant-question'), editor);
+    assert.equal(app.node('assistant-send').disabled, false);
+    app.click({ action: 'assistant-send' });
+    assert.equal(app.last('assistantRequest').model, 'deepseek-v4-pro', 'the first question uses the confirmed model rather than the earlier preset');
+  }
+});
+
+test('restoring DeepSeek access starts model discovery while typing and cloud discovery never blocks offline hybrid', () => {
+  const app = assistantAuditHarness([], 'deepseek');
+  app.receive({ type: 'assistantStatus', deepSeekKeyConfigured: true, deepSeekKeyState: 'locked' });
+  const editor = app.node('assistant-question'); editor.focus();
+  app.input('assistant-question', 'Question retained after restoring access');
+  app.receive({ type: 'assistantStatus', deepSeekKeyConfigured: true, deepSeekKeyState: 'stored', notice: 'keyRestored' });
+  assert.equal(app.last('assistantListModels').provider, 'deepseek');
+  assert.equal(app.node('assistant-question'), editor);
+  assert.equal(app.node('assistant-send').disabled, true);
+  app.click({ action: 'assistant-switch-provider', provider: 'hybrid' });
+  app.setOnline(false);
+  assert.equal(app.node('assistant-send').disabled, false, 'offline hybrid needs no confirmation from the cloud');
+  app.click({ action: 'assistant-send' });
+  assert.equal(app.last('assistantRequest').provider, 'hybrid');
+  assert.equal(app.last('assistantRequest').networkAvailable, false);
+});
+
+test('a confirmed DeepSeek model remains usable during refresh and temporary discovery failures', () => {
+  const app = assistantAuditHarness([], 'deepseek');
+  app.receive({ type: 'assistantStatus', deepSeekKeyConfigured: true, deepSeekKeyState: 'stored' });
+  confirmDeepSeekModels(app);
+  app.input('assistant-question', 'Use my confirmed model');
+  app.click({ action: 'assistant-refresh-models', provider: 'deepseek' });
+  assert.equal(app.node('assistant-send').disabled, false, 'refreshing a confirmed catalog must not interrupt a question');
+  const refresh = app.last('assistantListModels');
+  app.receive({ type: 'assistantModels', provider: 'deepseek', requestId: refresh.requestId, errorCode: 'rateLimited' });
+  assert.equal(app.node('assistant-send').disabled, false);
+  app.click({ action: 'assistant-send' });
+  assert.equal(app.last('assistantRequest').model, 'deepseek-flash');
+  app.click({ page: 'settings' });
+  assert.match(app.node('content').innerHTML, /请求过于频繁/);
+  assert.doesNotMatch(app.node('content').innerHTML, /尚未设置 DeepSeek API 密钥/);
+});
+
+test('DeepSeek API and model discovery failures explain the real cause, retain drafts, and never resend or request a new key', () => {
+  const errors = [
+    ['remoteInvalidRequest', /无法处理本次请求/, /could not process/],
+    ['insufficientBalance', /余额不足/, /balance is insufficient/],
+    ['modelUnavailable', /模型当前不可用/, /model is unavailable/],
+    ['rateLimited', /请求过于频繁/, /limiting requests/],
+    ['serviceUnavailable', /服务暂时不可用/, /temporarily unavailable/]
+  ];
+  for (const language of ['zh-CN', 'en-US']) for (const [code, zh, en] of errors) {
+    const app = assistantAuditHarness([], 'deepseek');
+    const state = app.ctx.CampusCore.emptyState();
+    Object.assign(state.settings, { aiProvider: 'deepseek', language, setupWizardCompleted: true });
+    app.receive({ type: 'state', state });
+    app.receive({ type: 'assistantStatus', deepSeekKeyConfigured: true, deepSeekKeyState: 'stored' });
+    const request = app.last('assistantListModels');
+    app.receive({ type: 'assistantModels', provider: 'deepseek', requestId: request.requestId, errorCode: code });
+    const pattern = language === 'zh-CN' ? zh : en;
+    assert.match(app.node('content').innerHTML, pattern);
+    app.input('assistant-question', 'Retain this request');
+    app.click({ action: 'assistant-send' });
+    assert.equal(app.sent.filter(row => row.action === 'assistantRequest').length, 0);
+    assert.equal(app.node('assistant-question').value, 'Retain this request');
+    app.click({ action: 'assistant-refresh-models', provider: 'deepseek' });
+    confirmDeepSeekModels(app);
+    const editor = app.node('assistant-question'); editor.focus();
+    app.click({ action: 'assistant-send' });
+    app.receive({ type: 'assistantResponse', requestId: app.last('assistantRequest').requestId, errorCode: code });
+    assert.equal(app.node('assistant-question'), editor);
+    assert.equal(editor.value, 'Retain this request');
+    assert.match(app.node('assistant-chat-log').innerHTML, pattern);
+    assert.equal(app.sent.filter(row => row.action === 'assistantRequest').length, 1);
+    app.click({ action: 'assistant-send' });
+    app.input('assistant-question', 'A newer draft');
+    app.receive({ type: 'assistantResponse', requestId: app.last('assistantRequest').requestId, errorCode: code });
+    assert.equal(editor.value, 'A newer draft', 'failure must not overwrite a newer question');
+    assert.equal(app.sent.filter(row => row.action === 'assistantSaveDeepSeekKey').length, 0);
+    app.click({ page: 'settings' });
+    assert.doesNotMatch(app.node('content').innerHTML, /id="assistant-deepseek-key"/, 'non-credential errors preserve the saved-key UI');
+  }
 });
 
 test('Ollama lists only discovered installed models and ignores stale model-list replies', () => {
@@ -2020,6 +2126,7 @@ test('switching from local Ollama to DeepSeek starts fresh context even if selec
   replyAuditQuestion(app, local, 'LOCAL_PRIVATE_ANSWER');
   app.receive({ type: 'assistantStatus', deepSeekKeyConfigured: true, deepSeekKeyState: 'stored' });
   app.click({ action: 'assistant-switch-provider', provider: 'deepseek' });
+  confirmDeepSeekModels(app);
   const remote = sendAuditQuestion(app, 'REMOTE_NEW_QUESTION');
   assert.equal(remote.provider, 'deepseek');
   assert.equal(remote.messages.length, 2);
@@ -2083,6 +2190,51 @@ test('assistant trims whole historical turns to budget without repeating hidden 
   const next = sendAuditQuestion(app, 'Still able to ask');
   assert.deepEqual(auditRequestContext(next), {});
   assert.equal(next.messages.length, 2);
+});
+
+test('DeepSeek continues multiple long turns within the request budget while preserving complete successful pairs', () => {
+  const app = assistantAuditHarness([], 'deepseek');
+  app.receive({ type: 'assistantStatus', deepSeekKeyConfigured: true, deepSeekKeyState: 'stored' });
+  confirmDeepSeekModels(app);
+  let latest;
+  for (let turn = 0; turn < 8; turn++) {
+    latest = sendAuditQuestion(app, 'CLOUD_QUESTION_' + turn);
+    assert.equal(latest.provider, 'deepseek');
+    assert.ok(JSON.stringify(latest.messages).length <= 40_000);
+    assert.deepEqual(latest.messages.map(message => message.role), ['system', ...Array((latest.messages.length - 2) / 2).fill(['user', 'assistant']).flat(), 'user']);
+    assert.ok(latest.messages.every(message => message.content.trim()));
+    if (turn) assert.match(JSON.stringify(latest.messages), new RegExp('CLOUD_ANSWER_' + (turn - 1) + '_'));
+    replyAuditQuestion(app, latest, 'CLOUD_ANSWER_' + turn + '_' + 'A'.repeat(12_000));
+  }
+  assert.doesNotMatch(JSON.stringify(latest.messages), /CLOUD_QUESTION_0|CLOUD_ANSWER_0_/);
+  assert.match(JSON.stringify(latest.messages), /CLOUD_QUESTION_6|CLOUD_ANSWER_6_/);
+});
+
+test('a failed DeepSeek follow-up skips only the failed turn and retains previous successful context for manual retry', () => {
+  for (const code of ['network', 'remoteInvalidRequest', 'insufficientBalance', 'modelUnavailable', 'rateLimited', 'serviceUnavailable']) {
+    const app = assistantAuditHarness([], 'deepseek');
+    app.receive({ type: 'assistantStatus', deepSeekKeyConfigured: true, deepSeekKeyState: 'stored' });
+    confirmDeepSeekModels(app);
+    const first = sendAuditQuestion(app, 'SUCCESSFUL_FIRST_QUESTION');
+    replyAuditQuestion(app, first, 'SUCCESSFUL_FIRST_ANSWER');
+    const second = sendAuditQuestion(app, 'FOLLOW_UP_QUESTION');
+    assert.match(JSON.stringify(second.messages), /SUCCESSFUL_FIRST_ANSWER/);
+    app.receive({ type: 'assistantChunk', requestId: second.requestId, text: 'FAILED_ANSWER_FRAGMENT', providerUsed: 'deepseek' });
+    app.receive({ type: 'assistantResponse', requestId: second.requestId, errorCode: code });
+    assert.equal(app.node('assistant-question').value, 'FOLLOW_UP_QUESTION');
+    assert.equal(app.sent.filter(row => row.action === 'assistantRequest').length, 2, 'failure never sends the restored question automatically');
+    app.click({ action: 'assistant-send' });
+    const retry = app.last('assistantRequest');
+    assert.equal(retry.messages.length, 4);
+    assert.match(JSON.stringify(retry.messages), /SUCCESSFUL_FIRST_QUESTION|SUCCESSFUL_FIRST_ANSWER/);
+    assert.doesNotMatch(JSON.stringify(retry.messages), /FAILED_ANSWER_FRAGMENT|余额不足|请求过于频繁|temporarily unavailable/);
+    assert.equal(retry.messages.filter(message => message.content.includes('FOLLOW_UP_QUESTION')).length, 1);
+    replyAuditQuestion(app, retry, 'SUCCESSFUL_SECOND_ANSWER');
+    const third = sendAuditQuestion(app, 'THIRD_QUESTION');
+    assert.equal(third.messages.length, 6);
+    assert.match(JSON.stringify(third.messages), /SUCCESSFUL_FIRST_ANSWER|SUCCESSFUL_SECOND_ANSWER/);
+    assert.doesNotMatch(JSON.stringify(third.messages), /FAILED_ANSWER_FRAGMENT/);
+  }
 });
 
 test('assistant chunks update incrementally, preserve the draft, and keep stop available after navigating back', () => {

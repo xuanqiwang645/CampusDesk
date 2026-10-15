@@ -135,7 +135,25 @@ struct AssistantStreamSmokeTests {
         let cloudRequest = SyntheticAssistantProtocol.captured().first!
         check(cloudRequest.value(forHTTPHeaderField: "Authorization") == "Bearer synthetic-not-a-real-key", "Only the supplied synthetic key is used")
         check(cloudRequest.timeoutInterval == 90, "Normal stream has an idle timeout")
-        check((try JSONSerialization.jsonObject(with: cloudRequest.httpBody!) as? [String: Any])?["stream"] as? Bool == true, "Inference explicitly requests a stream")
+        let cloudPayload = try JSONSerialization.jsonObject(with: cloudRequest.httpBody!) as! [String: Any]
+        check(cloudPayload["stream"] as? Bool == true, "Inference explicitly requests a stream")
+        check((cloudPayload["thinking"] as? [String: String]) == ["type": "disabled"],
+              "Ordinary chat explicitly disables default thinking so its output budget produces a visible answer")
+        check(cloudPayload["max_tokens"] as? Int == 4096, "Visible answer retains the bounded token budget")
+
+        let cloudErrors: [(Int, AssistantError)] = [
+            (400, .remoteInvalidRequest), (422, .remoteInvalidRequest), (401, .unauthorized), (403, .unauthorized),
+            (402, .insufficientBalance), (404, .modelUnavailable), (429, .rateLimited),
+            (500, .serviceUnavailable), (503, .serviceUnavailable), (599, .serviceUnavailable), (418, .serviceRejected)
+        ]
+        for (status, expected) in cloudErrors {
+            let rejected = run(provider: "hybrid") { connection in
+                connection.send("{\"error\":{\"message\":\"synthetic rejection\"}}", status: status)
+            }
+            check(error(rejected.0) == expected, "Cloud HTTP \(status) preserves its actionable error code")
+            check(rejected.1.isEmpty && SyntheticAssistantProtocol.captured().count == 1,
+                  "Cloud HTTP \(status) never emits an answer or falls back to local inference")
+        }
 
         let local = run(provider: "ollama", model: "qwen3:8b") { connection in
             connection.send(connection.request.url!.path == "/api/show" ? localJSON : localReply)
@@ -144,6 +162,8 @@ struct AssistantStreamSmokeTests {
         else { check(false, "Local synthetic stream succeeds") }
         check(SyntheticAssistantProtocol.captured().map { $0.url!.path } == ["/api/show", "/api/chat"], "Local metadata is verified before any question is sent")
         check(SyntheticAssistantProtocol.captured().allSatisfy { $0.value(forHTTPHeaderField: "Authorization") == nil }, "Local requests never receive the DeepSeek key")
+        let localPayload = try JSONSerialization.jsonObject(with: SyntheticAssistantProtocol.captured().last!.httpBody!) as! [String: Any]
+        check(localPayload["thinking"] == nil, "DeepSeek thinking parameters do not leak into Ollama requests")
 
         let remoteAlias = run(provider: "ollama", model: "innocent-alias") { connection in
             connection.send("{\"remote_host\":\"https://ollama.com\",\"remote_model\":\"large-cloud-model\",\"details\":{\"format\":\"gguf\"},\"model_info\":{\"general.architecture\":\"llama\"}}")

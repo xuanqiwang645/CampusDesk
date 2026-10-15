@@ -162,6 +162,10 @@ final class AssistantRequestOperation {
             } catch let error as AssistantError { finish(.failure(error)); return }
             catch { finish(.failure(.keyStore)); return }
             payload["max_tokens"] = 4096; payload["temperature"] = 0.4
+            // DeepSeek enables high-effort thinking by default. Reserve this
+            // ordinary chat budget for the visible answer rather than hidden
+            // reasoning that can consume the whole limit before any reply.
+            payload["thinking"] = ["type": "disabled"]
         }
         guard let data = try? JSONSerialization.data(withJSONObject: payload) else { finish(.failure(.invalidRequest)); return }
         request.httpBody = data
@@ -208,7 +212,16 @@ final class AssistantRequestOperation {
         case .network: return provider == "ollama" ? .localUnavailable : .network
         case .rejected(let code):
             if provider == "ollama" && code == 404 { return .localModelMissing }
-            return provider == "deepseek" && (code == 401 || code == 403) ? .unauthorized : .serviceRejected
+            guard provider == "deepseek" else { return .serviceRejected }
+            switch code {
+            case 400, 422: return .remoteInvalidRequest
+            case 401, 403: return .unauthorized
+            case 402: return .insufficientBalance
+            case 404: return .modelUnavailable
+            case 429: return .rateLimited
+            case 500...599: return .serviceUnavailable
+            default: return .serviceRejected
+            }
         case .invalidResponse, .tooLarge: return .badResponse
         }
     }
@@ -225,7 +238,8 @@ final class AssistantRequestOperation {
 
 enum AssistantError: Error {
     case invalidKey, keyStore, keyAccess, invalidRequest, missingKey, localUnavailable, localModelMissing
-    case network, unauthorized, serviceRejected, badResponse, localModelNotLocal, cancelled
+    case network, unauthorized, remoteInvalidRequest, insufficientBalance, modelUnavailable, rateLimited, serviceUnavailable
+    case serviceRejected, badResponse, localModelNotLocal, cancelled
 
     var code: String {
         switch self {
@@ -238,6 +252,11 @@ enum AssistantError: Error {
         case .localModelMissing: return "localModelMissing"
         case .network: return "network"
         case .unauthorized: return "unauthorized"
+        case .remoteInvalidRequest: return "remoteInvalidRequest"
+        case .insufficientBalance: return "insufficientBalance"
+        case .modelUnavailable: return "modelUnavailable"
+        case .rateLimited: return "rateLimited"
+        case .serviceUnavailable: return "serviceUnavailable"
         case .serviceRejected: return "serviceRejected"
         case .badResponse: return "badResponse"
         case .localModelNotLocal: return "localModelNotLocal"
@@ -256,6 +275,11 @@ enum AssistantError: Error {
         case .localModelMissing: return "Ollama 找不到此模型；请先在 Ollama 中下载该模型，再重试。"
         case .network: return "无法连接 DeepSeek。请检查网络后重试。"
         case .unauthorized: return "DeepSeek API 密钥无效或已失效。"
+        case .remoteInvalidRequest: return "DeepSeek 未接受本次请求参数，请检查所选模型或减少附带资料后重试。"
+        case .insufficientBalance: return "DeepSeek API 账户余额不足，请在 DeepSeek 开放平台充值后重试。"
+        case .modelUnavailable: return "所选 DeepSeek 模型暂不可用，请刷新模型列表并重新选择。"
+        case .rateLimited: return "DeepSeek 请求过于频繁，请稍后重试。"
+        case .serviceUnavailable: return "DeepSeek 服务暂时不可用，请稍后重试。"
         case .serviceRejected: return "AI 服务拒绝了这次请求；请检查模型设置或稍后重试。"
         case .badResponse: return "AI 服务返回的内容无法识别，请稍后重试。"
         case .localModelNotLocal: return "此模型无法确认为本机模型。请选择已下载到这台 Mac 的模型；云模型和远程别名不可用于仅本机模式。"

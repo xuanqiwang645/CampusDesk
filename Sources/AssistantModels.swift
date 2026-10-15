@@ -1,7 +1,8 @@
 import Foundation
 
 enum AssistantModelError: String, Error {
-    case missingKey, unauthorized, network, localUnavailable, badResponse
+    case missingKey, unauthorized, remoteInvalidRequest, insufficientBalance, modelUnavailable, rateLimited, serviceUnavailable, serviceRejected
+    case network, localUnavailable, badResponse
 
     var code: String { rawValue }
 }
@@ -129,8 +130,16 @@ enum CampusAssistantModels {
     static func responseError(provider: String, statusCode: Int) -> AssistantModelError? {
         if (200...299).contains(statusCode) { return nil }
         if (300...399).contains(statusCode) { return .badResponse }
-        if provider == "deepseek", statusCode == 401 || statusCode == 403 { return .unauthorized }
-        return provider == "ollama" ? .localUnavailable : .network
+        guard provider == "deepseek" else { return .localUnavailable }
+        switch statusCode {
+        case 400, 422: return .remoteInvalidRequest
+        case 401, 403: return .unauthorized
+        case 402: return .insufficientBalance
+        case 404: return .modelUnavailable
+        case 429: return .rateLimited
+        case 500...599: return .serviceUnavailable
+        default: return .serviceRejected
+        }
     }
 }
 
