@@ -22,7 +22,9 @@ async function fixture(run, native = false) {
     const errors = [];
     page.on('pageerror', error => errors.push(error.message));
     await page.addInitScript(({ state, native }) => {
-      localStorage.setItem('campusdesk.browser.v1', JSON.stringify(state));
+      // Seed only the isolated browser's first load. Re-seeding on reload would
+      // erase the event just saved and invalidate the persistence regression.
+      if (!localStorage.getItem('campusdesk.browser.v1')) localStorage.setItem('campusdesk.browser.v1', JSON.stringify(state));
       window.CampusDeskThemeEdition = true;
       if (native) { window.testMessages = []; window.webkit = { messageHandlers: { campus: { postMessage: message => window.testMessages.push(message) } } }; }
     }, { state: fixtureState(), native });

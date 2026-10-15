@@ -96,11 +96,39 @@
   }
   function taskStatus(item) {
     // A pending dropbox badge can coexist with a recorded quiz grade.
-    if (item.points && /\d\s*\/\s*\d/.test(item.points)) return 'graded';
+    if (assignmentGrade(item)) return 'graded';
     if (/^(?:submitted|已提交)$/i.test(item.badge)) return 'submitted';
     if (/not submitted|pending|未提交|待提交/i.test(item.badge + ' ' + item.assessment)) return 'pending';
     if (/^upcoming$/i.test(item.section)) return 'upcoming';
     return 'unknown';
+  }
+  function assignmentGrade(item) {
+    // Read only the assignment's dedicated score/grade fields. A number in a
+    // title, deadline, instructions, or course overall is not an assignment mark.
+    const normalize = value => String(value == null ? '' : value).replace(/\s+/g, ' ').trim().replace(/[−–]/g, '-');
+    const stripLabel = value => normalize(value).replace(/^(?:score|points?|mark|grade|成绩|分数|得分|等级)\s*[:：]?\s*/i, '');
+    const points = stripLabel(item.points), gradeText = stripLabel(item.gradeText), percentageText = stripLabel(item.percentageText);
+    let score = null, maxScore = null, percentage = null, gradeLabel = null;
+    const ratio = points.match(/^(\d+(?:\.\d+)?)\s*\/\s*(\d+(?:\.\d+)?)$/);
+    if (ratio) {
+      const earned = Number(ratio[1]), possible = Number(ratio[2]);
+      if (Number.isFinite(earned) && earned <= 1e9 && possible > 0 && possible <= 1e9) {
+        score = earned; maxScore = possible;
+        // Extra credit remains visible as points; do not clamp it to 100%.
+        if (earned <= possible) percentage = Number((earned / possible * 100).toFixed(4));
+      }
+    }
+    for (const value of [points, gradeText, percentageText]) {
+      const mark = value.match(/^([A-F][+-]?)\s*[（(]\s*(\d{1,3}(?:\.\d+)?)\s*%\s*[）)]$/i)
+        || value.match(/^()(\d{1,3}(?:\.\d+)?)\s*%$/);
+      const letter = value.match(/^([A-F][+-]?)$/i);
+      if (mark && Number(mark[2]) <= 100) {
+        // Prefer the explicit earned/possible ratio if both are rendered.
+        if (percentage === null && score === null) percentage = Number(mark[2]);
+        if (mark[1]) gradeLabel = mark[1].toUpperCase();
+      } else if (letter) gradeLabel = letter[1].toUpperCase();
+    }
+    return score !== null || percentage !== null || gradeLabel !== null ? {score,maxScore,percentage,gradeLabel} : null;
   }
   function exactDate(value) {
     // A month/day card omits year and timezone; keep its original dueLabel instead.
@@ -126,7 +154,7 @@
       loginText: text(first(doc, 'main, #main-content, body')).slice(0, 1800),
       term: text(first(doc, 'select#term option:checked')),
       recognized: all(doc, 'main h2, #main-content h2').some(x => /^(?:All Tasks|Task Details|所有任务|任务详情)$/i.test(text(x))),
-      links: [], overallRows: [], tasks: [], feedback: [], gpaRows: [], gradeComponents: []
+      links: [], overallRows: [], tasks: [], feedback: [], gpaRows: [], gradeComponents: [], gradesCaptured: false
     };
     for (const a of all(doc, 'a[href]')) {
       if (!visible(a)) continue;
@@ -200,12 +228,25 @@
       const dateValues = dueNodes.flatMap(node => ['datetime','data-due-at','data-due-date','title','aria-label','data-original-title','data-bs-original-title'].map(name => node.getAttribute(name)).filter(Boolean));
       const datetime = dateValues.find(exactDate) || null;
       const fullDueLabel = dateValues.find(value => /\b20\d{2}\b/.test(value) && /\d[:：]\d{2}/.test(value)) || null;
+      const pointsNode = first(card,'.task-score .points'), scoreNode = first(card,'.task-score');
+      const gradeNode = first(card,'.task-score .grade, .task-score .grade-label');
+      const percentageNode = first(card,'.task-score .percentage');
       page.tasks.push({url:cardURL, title:anchor ? text(anchor) : text(titleNode),
         month:text(first(card,'.date-badge .month')), day:text(first(card,'.date-badge .day')),
         dueText:text(first(card,'.due-date')), datetime, fullDueLabel,
-        badge:text(first(card,'.badge-label')), points:text(first(card,'.task-score .points')),
+        badge:text(first(card,'.badge-label')), points:visible(pointsNode) ? text(pointsNode) : '',
+        gradeText:visible(gradeNode) ? text(gradeNode) : (visible(scoreNode) ? text(scoreNode) : ''),
+        percentageText:visible(percentageNode) ? text(percentageNode) : '',
+        gradePending:visible(scoreNode) && /^(?:pending|ungraded|not (?:assessed|graded)|no grade|未评分|待评分|尚未评分)[.!。]?$/i.test(text(scoreNode)),
         assessment:text(first(card,'.task-score')), section:nearbySection(card)});
     }
+    // A recognized but still-loading page is not an empty grade roster. An
+    // explicit empty-state or rendered task cards is required to seed a baseline.
+    const emptyRoster = all(doc, 'main .empty-state, main .no-tasks, main .empty-message, #main-content .empty-state, #main-content .no-tasks, #main-content .empty-message')
+      .some(node => visible(node) && /^(?:no tasks(?: found| available)?|there are no tasks(?: to display)?|暂无任务|没有任务|暂无作业)[.!。]?$/i.test(text(node)));
+    const rosterBusy = all(doc, 'main[aria-busy="true"], #main-content[aria-busy="true"], main .short-assignment[aria-busy="true"], #main-content .short-assignment[aria-busy="true"]').some(visible);
+    page.gradesCaptured = page.recognized && /^\/student\/classes\/\d+\/core_tasks(?:\/\d+)?\/?$/.test(new URL(url).pathname)
+      && !rosterBusy && (page.tasks.length > 0 || emptyRoster);
     // Restrict feedback to explicitly labeled feedback blocks. Discussions and task
     // instructions are not teacher feedback. No feedback was present in observed tasks.
     for (const heading of all(doc, 'main h2, main h3, main h4, main h5, main h6, main .feedback-label, main .teacher-comment-label')) {
@@ -228,7 +269,7 @@
   }
   function fromProjection(page, capturedAt) {
     const result = {source:'managebac',url:page.url,title:page.title || '',capturedAt:capturedAt || new Date().toISOString(),
-      loginRequired:false,parseError:false,courses:[],tasks:[],feedback:[],links:[],officialGPA:null,warnings:[]};
+      loginRequired:false,parseError:false,courses:[],tasks:[],feedback:[],links:[],officialGPA:null,warnings:[],gradesCaptured:false,grades:[]};
     let path = ''; try { path = new URL(page.url).pathname; } catch (_) {}
     result.loginRequired = Boolean(page.hasPassword || /\/(?:login|sign_in|signin|sessions)(?:\/|$)/i.test(path));
     if (result.loginRequired) { result.warnings.push('ManageBac 需要在应用内登录。'); return result; }
@@ -240,6 +281,8 @@
     const currentID = courseID(page.url), currentTask = taskID(page.url);
     const term = clean(page.term) || null;
     const currentTerm = term ? /\bcurrent\b|当前|本学期/i.test(term) : false;
+    result.gradesCaptured = page.gradesCaptured === true && page.recognized === true && Boolean(currentID)
+      && /^\/student\/classes\/\d+\/core_tasks(?:\/\d+)?\/?$/.test(path);
     if (term && !currentTerm && !/\b(?:previous|past|historical|archived|last term)\b|上学期|历史学期|往期/i.test(term)) {
       result.warnings.push('学期标签“' + term + '”没有明确标注为当前学期；该课程暂不计入当前 GPA，请确认学期选择。');
     }
@@ -266,14 +309,29 @@
       if (distinct.length > 1) result.warnings.push('发现不一致的课程总评，已跳过该课程的 GPA 估算。');
       if (!term) result.warnings.push('页面未显示学期，课程分数暂不用于 GPA 估算。');
     }
+    const assignmentGrades = new Map(), conflictingGrades = new Set();
     for (const task of page.tasks || []) {
       const url = safeURL(task.url,page.url), id = taskID(url);
-      if (!id || !clean(task.title) || result.tasks.some(x=>x.id===id)) continue;
+      if (!id || !clean(task.title)) continue;
+      const explicitMark = assignmentGrade(task);
+      // An explicitly ungraded score block is useful baseline evidence: when
+      // this known task is first graded on its detail page it is a real update.
+      // Missing/hidden score fields and a submission badge alone are not proof.
+      const mark = explicitMark || (task.gradePending === true ? {score:null,maxScore:null,percentage:null,gradeLabel:''} : null);
+      if (mark && currentID && courseID(url) === currentID && (!currentTask || id === currentTask)) {
+        const previous = assignmentGrades.get(id);
+        if (previous && previous.graded && explicitMark && JSON.stringify(previous.mark) !== JSON.stringify(mark)) conflictingGrades.add(id);
+        else if (previous && previous.graded && !explicitMark) { /* Prefer the visible explicit mark to a stale pending badge. */ }
+        else assignmentGrades.set(id, {mark, graded:Boolean(explicitMark), row:{id,assignmentId:id,courseId:currentID,term:term || '',title:clean(task.title),course:clean(page.heading) || null,url,...mark}});
+      }
+      if (result.tasks.some(x=>x.id===id)) continue;
       const dueLabel = clean(task.fullDueLabel) || [clean([task.month,task.day].filter(Boolean).join(' ')),clean(task.dueText)].filter(Boolean).join(' · ') || null;
       result.tasks.push({id,title:clean(task.title),course:clean(page.heading) || null,dueAt:exactDate(task.datetime),dueLabel,dueTerm:term || '',
         status:taskStatus(task),url});
       addLink('feedback',url,clean(task.title));
     }
+    result.grades = [...assignmentGrades].filter(([id])=>!conflictingGrades.has(id)).map(([,entry])=>entry.row);
+    if (conflictingGrades.size) result.warnings.push('同一作业显示了不一致的成绩，已跳过该作业的成绩更新提醒；请以原页面为准。');
     for (const entry of page.feedback || []) {
       if (!clean(entry.text)) continue;
       result.feedback.push({id:(currentTask || page.url) + '-feedback-' + result.feedback.length,
@@ -328,7 +386,7 @@
     if (categoryAveragesPending) result.categoryAveragesPending = true;
     return result;
   }
-  const api = {extract,collect,fromProjection,overallPercentage,parseGradeComponents,categoryAveragesFromText,componentPercentage,componentWeight,isPercentageWeightHeader,taskStatus,exactDate,safeURL};
+  const api = {extract,collect,fromProjection,overallPercentage,parseGradeComponents,categoryAveragesFromText,componentPercentage,componentWeight,isPercentageWeightHeader,taskStatus,assignmentGrade,exactDate,safeURL};
   if (typeof module === 'object' && module.exports) module.exports = api;
   if (root) root.CampusManageBac = api;
 })(typeof window !== 'undefined' ? window : null);

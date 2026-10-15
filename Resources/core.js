@@ -469,7 +469,7 @@
       teamsBrowser: 'chrome', teamsBrowserAutomation: false, teamsMode: 'browser', teamsAutoDiscover: true, graphIncludeChats: true,
       reminderMinutes: 30, reminderSubjects: [], teamsDueOverrides: {}, dashboardTheme: 'classic', colorTheme: 'sage', gpaCandleColors: 'red-up', language: 'zh-CN', focusSubjects: [], focusTeamsChannels: [], customLessons: [],
       scheduleHolidays: [], scheduleWeekAnchor: '', scheduleOverrides: [], focusMode: false, graphicsMode: 'auto', planOrder: [], taskMinutes: {}, taskPriority: {}, gradeGoals: {}, gradePlans: {}, gpaTermDates: {}, ecIdentityNames: [] }, snapshots: { seiue: {}, managebac: {}, teams: {} },
-      manualTasks: [], personalEvents: [], taskChecks: {}, feedbackRead: {}, gradeHistory: [], changeLog: [], schoolCalendar: { fileName: '', importedAt: '', events: [] } };
+      manualTasks: [], personalEvents: [], taskChecks: {}, feedbackRead: {}, gradeHistory: [], gradeUpdates: [], gradeUpdateRead: {}, gradeUpdateBaselines: [], gradeUpdateCaptures: [], changeLog: [], schoolCalendar: { fileName: '', importedAt: '', events: [] } };
     if (themeEdition) Object.assign(state.settings, { aiProvider: 'off', aiModel: '', aiOllamaModel: 'qwen3:8b', aiContextCategories: ['tasks', 'schedule'], setupWizardCompleted: false, setupWizardStep: 0, setupWizardIntroVersion: '' });
     return state;
   }
@@ -741,6 +741,35 @@
     if (value.isCurrentTerm !== undefined) result.isCurrentTerm = bool(value.isCurrentTerm);
     return result;
   }
+  function assignmentGradeValues(row) {
+    record(row, '作业成绩');
+    return { score: finite(row.score, 0, 1000000000, true), maxScore: finite(row.maxScore, 0, 1000000000, true),
+      percentage: finite(row.percentage, 0, 1000, true), gradeLabel: str(row.gradeLabel, 1000) };
+  }
+  function assignmentGradeRow(row) {
+    record(row, '作业成绩');
+    const assignmentId = id(row.assignmentId || row.id), title = str(row.title, 500);
+    if (!title) fail('作业成绩标题不能为空');
+    return Object.assign({ id: id(row.id, assignmentId), assignmentId, courseId: str(row.courseId, 512), term: str(row.term, 300),
+      title, course: str(row.course, 300), url: checkedURL(row.url, 'managebac', true) }, assignmentGradeValues(row));
+  }
+  function gradeUpdateRow(row) {
+    record(row, '成绩通知');
+    if (row.source !== 'managebac' || !['new', 'updated'].includes(row.kind)) fail('成绩通知来源或类型无效');
+    const impact = record(row.impact, '成绩影响'), cleanImpact = { comparable: bool(impact.comparable, false) };
+    for (const key of ['courseBefore', 'courseAfter', 'bandedBefore', 'bandedAfter', 'linearBefore', 'linearAfter']) {
+      cleanImpact[key] = finite(impact[key], 0, key.startsWith('course') ? 100 : 4, true);
+    }
+    // A legacy/imported notification must not claim a comparison with missing evidence.
+    if (!cleanImpact.comparable || Object.values(cleanImpact).some(value => value === null)) {
+      cleanImpact.comparable = false;
+      for (const key of Object.keys(cleanImpact)) if (key !== 'comparable') cleanImpact[key] = null;
+    }
+    return { id: id(row.id), source: row.source, kind: row.kind, title: str(row.title, 500), course: str(row.course, 300),
+      courseId: str(row.courseId, 512), term: str(row.term, 300), url: checkedURL(row.url, 'managebac', true),
+      capturedAt: dateISO(row.capturedAt, false), before: row.before == null ? null : assignmentGradeValues(row.before),
+      after: assignmentGradeValues(row.after), impact: cleanImpact };
+  }
   function snapshot(value, expectedSource, expectedURL) {
     record(value, '快照');
     if (!SOURCES.includes(value.source) || (expectedSource && value.source !== expectedSource)) fail('数据来源无效');
@@ -776,6 +805,8 @@
     }
     else {
       result.courses = array(value.courses, '成绩').map(courseRow);
+      result.gradesCaptured = bool(value.gradesCaptured, false);
+      result.grades = array(value.grades, 'ManageBac 作业成绩').map(assignmentGradeRow);
       result.tasks = array(value.tasks, '待办').map(r => taskRow(r, false));
       result.feedback = array(value.feedback, '教师反馈').map(feedbackRow);
       result.officialGPA = officialGPA(value.officialGPA);
@@ -964,6 +995,19 @@
     if (new Set(s.personalEvents.map(event => event.id)).size !== s.personalEvents.length) fail('个人日程 ID 重复');
     s.taskChecks = flagMap(raw.taskChecks, '待办标记');
     s.feedbackRead = flagMap(raw.feedbackRead, '反馈标记');
+    s.gradeUpdates = array(raw.gradeUpdates, '成绩通知', 200).map(gradeUpdateRow);
+    if (new Set(s.gradeUpdates.map(row => row.id)).size !== s.gradeUpdates.length) fail('成绩通知 ID 重复');
+    const gradeRead = flagMap(raw.gradeUpdateRead, '成绩通知已读标记');
+    s.gradeUpdateRead = Object.fromEntries(s.gradeUpdates.filter(row => gradeRead[row.id]).map(row => [row.id, true]));
+    s.gradeUpdateBaselines = array(raw.gradeUpdateBaselines, '作业成绩基线', 3000).map(row => {
+      record(row, '作业成绩基线');
+      return Object.assign({ key: id(row.key), scope: id(row.scope), capturedAt: dateISO(row.capturedAt, false) }, assignmentGradeValues(row));
+    });
+    s.gradeUpdateCaptures = array(raw.gradeUpdateCaptures, '作业成绩读取范围', 1000).map(row => {
+      record(row, '作业成绩读取范围');
+      return { key: id(row.key), capturedAt: dateISO(row.capturedAt, false) };
+    });
+    if (new Set(s.gradeUpdateBaselines.map(row => row.key)).size !== s.gradeUpdateBaselines.length || new Set(s.gradeUpdateCaptures.map(row => row.key)).size !== s.gradeUpdateCaptures.length) fail('作业成绩基线标识重复');
     s.gradeHistory = array(raw.gradeHistory, '成绩历史', 120).map(historyRow);
     // An old record only has the banded value. Recover the latest linear point
     // when its exact course signature still matches the current snapshot;
@@ -1627,26 +1671,145 @@
     if (!SOURCES.includes(source)) fail('来源无效');
     const all = entries(state, source), now = date === undefined ? Date.now() : new Date(date).valueOf();
     const useful = all.filter(s => !s.loginRequired || s.lastAttemptFailed).filter(s =>
-      source === 'seiue' ? (s.schedule || []).length || (s.calendarDates || []).length : source === 'teams' ? (s.tasks || []).length || (s.posts || []).length || (s.feedback || []).length || (s.grades || []).length || (!s.parseError && !s.lastAttemptFailed) : (s.courses || []).length || (s.tasks || []).length || (s.feedback || []).length || s.officialGPA);
+      source === 'seiue' ? (s.schedule || []).length || (s.calendarDates || []).length : source === 'teams' ? (s.tasks || []).length || (s.posts || []).length || (s.feedback || []).length || (s.grades || []).length || (!s.parseError && !s.lastAttemptFailed) : (s.courses || []).length || (s.tasks || []).length || (s.feedback || []).length || (s.grades || []).length || s.officialGPA);
     const latest = useful[0];
     const lastAttempt = all.slice().sort((a, b) => Date.parse(b.lastAttemptAt || b.capturedAt) - Date.parse(a.lastAttemptAt || a.capturedAt))[0];
     const lastCapturedAt = latest ? latest.capturedAt : null;
     const ageMinutes = lastCapturedAt ? Math.max(0, (now - Date.parse(lastCapturedAt)) / 60000) : null;
-    const records = latest ? (source === 'seiue' ? (latest.schedule || []).length : source === 'managebac' ? (latest.courses || []).length + (latest.tasks || []).length + (latest.feedback || []).length : (latest.tasks || []).length + (latest.posts || []).length + (latest.feedback || []).length + (latest.grades || []).length) : 0;
+    const records = latest ? (source === 'seiue' ? (latest.schedule || []).length : source === 'managebac' ? (latest.courses || []).length + (latest.tasks || []).length + (latest.feedback || []).length + (latest.grades || []).length : (latest.tasks || []).length + (latest.posts || []).length + (latest.feedback || []).length + (latest.grades || []).length) : 0;
     const failed = !!(lastAttempt && lastAttempt.lastAttemptFailed), loginRequired = !!(lastAttempt && lastAttempt.loginRequired);
     const stale = ageMinutes === null || ageMinutes > Math.max(30, state.settings.refreshMinutes * 2);
     const metadata = latest && latest.coverageMetadata;
     const partial = Boolean(lastAttempt && (lastAttempt.warnings.length || (metadata && metadata.status !== 'complete')));
-    const attemptedRecords = lastAttempt ? (source === 'seiue' ? (lastAttempt.schedule || []).length : source === 'managebac' ? (lastAttempt.courses || []).length + (lastAttempt.tasks || []).length + (lastAttempt.feedback || []).length : (lastAttempt.tasks || []).length + (lastAttempt.posts || []).length + (lastAttempt.feedback || []).length + (lastAttempt.grades || []).length) : 0;
+    const attemptedRecords = lastAttempt ? (source === 'seiue' ? (lastAttempt.schedule || []).length : source === 'managebac' ? (lastAttempt.courses || []).length + (lastAttempt.tasks || []).length + (lastAttempt.feedback || []).length + (lastAttempt.grades || []).length : (lastAttempt.tasks || []).length + (lastAttempt.posts || []).length + (lastAttempt.feedback || []).length + (lastAttempt.grades || []).length) : 0;
     const condition = !lastAttempt ? 'not_connected' : loginRequired ? 'login_required' : failed ? 'unread' : partial ? 'partial' : attemptedRecords === 0 ? 'empty' : stale ? 'stale' : 'available';
     return { lastCapturedAt, ageMinutes, stale, loginRequired, warnings: lastAttempt ? lastAttempt.warnings.slice() : [],
       lastAttemptAt: lastAttempt ? lastAttempt.lastAttemptAt || lastAttempt.capturedAt : null, failed, condition, records,
       snapshotCount: all.length, coverage: metadata || null, coverageLabel: lastAttempt && lastAttempt.coverage || '' };
   }
+  function getGradeUpdates(state) {
+    const read = state.gradeUpdateRead || {};
+    return (state.gradeUpdates || []).map(row => Object.assign({}, row, { read: read[row.id] === true }))
+      .sort((a, b) => Date.parse(b.capturedAt) - Date.parse(a.capturedAt) || a.id.localeCompare(b.id));
+  }
+  function markGradeUpdatesRead(state, ids) {
+    const result = validateState(state), selected = ids === undefined ? null : new Set(array(ids, '成绩通知选择', 200).map(value => id(value)));
+    for (const row of result.gradeUpdates) if (!selected || selected.has(row.id)) result.gradeUpdateRead[row.id] = true;
+    return result;
+  }
+  function gradeTrackingKey(prefix, values) {
+    const text = JSON.stringify(values);
+    return prefix + hash(text) + '-' + hash(text.split('').reverse().join(''));
+  }
+  function gradeScope(item, row) {
+    const course = row.courseId || row.course || row.id || row.name || '';
+    return gradeTrackingKey('grade-scope-', [new URL(item.url).origin, String(course).toLowerCase(), termKey(row.term)]);
+  }
+  function hasAssignmentGrade(row) {
+    return row && (row.score !== null || row.percentage !== null || /^[A-F][+−-]?$/i.test(row.gradeLabel));
+  }
+  function assignmentPercentage(row) {
+    return row.percentage !== null ? row.percentage : row.score !== null && row.maxScore > 0 ? row.score / row.maxScore * 100 : null;
+  }
+  function sameAssignmentGrade(before, after) {
+    const label = row => row.gradeLabel.replace(/−/g, '-').toUpperCase();
+    if (before.gradeLabel && after.gradeLabel && label(before) !== label(after)) return false;
+    if (before.score !== null && after.score !== null && before.maxScore > 0 && after.maxScore > 0) {
+      // Different school views may round the derived percentage differently.
+      // Equal explicit point pairs are stronger evidence than that formatting.
+      return before.score === after.score && before.maxScore === after.maxScore;
+    }
+    const a = assignmentPercentage(before), b = assignmentPercentage(after);
+    for (const field of ['score', 'maxScore']) if (before[field] !== null && after[field] !== null && before[field] !== after[field]) return false;
+    if (a !== null && b !== null) {
+      if (Math.abs(a - b) < 0.000001) return true;
+      // A ratio and a percentage-only view can expose different precision.
+      // Compare at the coarser explicit percentage precision (at least hundredths),
+      // not extra digits calculated from a ratio. Integer values are exact scores,
+      // not permission to suppress a later real fractional-percent change.
+      const decimals = value => Math.min(8, (String(value).split('.')[1] || '').length);
+      const precision = [before, after].filter(row => row.percentage !== null).map(row => decimals(row.percentage));
+      const digits = precision.length ? Math.max(2, Math.min(...precision)) : 8, factor = Math.pow(10, digits);
+      return Math.round(a * factor) === Math.round(b * factor);
+    }
+    if (before.score !== null && after.score !== null) return before.score === after.score;
+    if (before.gradeLabel && after.gradeLabel) return label(before) === label(after);
+    return null; // Numeric-only and letter-only captures are not comparable.
+  }
+  function gradeUpdateImpact(row, item, before, after) {
+    const unavailable = { courseBefore: null, courseAfter: null, bandedBefore: null, bandedAfter: null, linearBefore: null, linearAfter: null, comparable: false };
+    const eligible = courses => courses.filter(c => c.gpaEligible !== false && c.isCurrentTerm !== false && c.isCourseGrade !== false && points(c.percentage) !== null);
+    const oldCohort = eligible(before), newCohort = eligible(after);
+    const identity = courses => JSON.stringify(courses.map(c => [c.id, termKey(c.term)]).sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b))));
+    if (!row.courseId || !termKey(row.term) || !oldCohort.length || identity(oldCohort) !== identity(newCohort)) return unavailable;
+    const matches = course => course.id === row.courseId && termKey(course.term) === termKey(row.term);
+    const oldCourse = oldCohort.find(matches), newCourse = newCohort.find(matches);
+    // A list/detail capture may show a score without a course total. Cached totals
+    // must not be presented as this assignment's measured effect.
+    const observed = item.courses.find(course => matches(course) && course.isCurrentTerm === true && course.isCourseGrade === true && points(course.percentage) !== null);
+    if (!oldCourse || !newCourse || !observed || observed.percentage !== newCourse.percentage ||
+        Date.parse(oldCourse.capturedAt) >= Date.parse(item.capturedAt) || Date.parse(newCourse.capturedAt) !== Date.parse(item.capturedAt)) return unavailable;
+    return { courseBefore: oldCourse.percentage, courseAfter: newCourse.percentage,
+      bandedBefore: estimateGPA(oldCohort).value, bandedAfter: estimateGPA(newCohort).value,
+      linearBefore: estimateLinearGPA(oldCohort).value, linearAfter: estimateLinearGPA(newCohort).value, comparable: true };
+  }
+  function mergeGradeUpdates(result, item, coursesBefore, coursesAfter) {
+    const baselines = new Map(result.gradeUpdateBaselines.map(row => [row.key, row]));
+    const captures = new Map(result.gradeUpdateCaptures.map(row => [row.key, row]));
+    const time = Date.parse(item.capturedAt), page = new URL(item.url); page.hash = '';
+    const scopeRows = item.grades.concat(item.courses.map(course => ({ courseId: course.id, course: course.name, term: course.term })));
+    const scopes = new Set(scopeRows.map(row => gradeScope(item, row)));
+    const pageKey = scope => gradeTrackingKey('grade-page-', [page.href, scope]);
+    for (const row of item.grades) {
+      const scope = gradeScope(item, row), scopeCapture = captures.get(scope);
+      if (scopeCapture && Date.parse(scopeCapture.capturedAt) > time) continue;
+      const key = gradeTrackingKey('grade-assignment-', [scope, row.assignmentId]);
+      const previous = baselines.get(key);
+      if (previous && Date.parse(previous.capturedAt) >= time) continue;
+      // Missing/ungraded rows never erase the last explicit mark. An explicit
+      // withdrawal cannot be inferred from an incomplete school page.
+      if (!hasAssignmentGrade(row)) {
+        if (!previous) baselines.set(key, Object.assign({ key, scope, capturedAt: item.capturedAt }, assignmentGradeValues(row)));
+        continue;
+      }
+      const hadGrade = hasAssignmentGrade(previous);
+      const knownPage = scopeCapture && captures.has(pageKey(scope));
+      const changed = hadGrade ? sameAssignmentGrade(previous, row) === false : Boolean(previous || knownPage);
+      if (changed) {
+        const values = assignmentGradeValues(row), prior = hadGrade ? assignmentGradeValues(previous) : null;
+        const notification = { id: gradeTrackingKey('grade-update-', [key, item.capturedAt, values]), source: 'managebac', kind: hadGrade ? 'updated' : 'new',
+          title: row.title, course: row.course, courseId: row.courseId, term: row.term, url: row.url || item.url, capturedAt: item.capturedAt,
+          before: prior, after: values, impact: gradeUpdateImpact(row, item, coursesBefore, coursesAfter) };
+        if (!result.gradeUpdates.some(existing => existing.id === notification.id)) result.gradeUpdates.push(notification);
+      }
+      const values = assignmentGradeValues(row);
+      if (hadGrade && !changed) {
+        // A sparser view supplements the baseline; it must not discard stronger
+        // point evidence or silently turn a numeric grade into an unrelated one.
+        for (const field of ['score', 'maxScore', 'percentage']) if (values[field] === null) values[field] = previous[field];
+        if (!values.gradeLabel) values.gradeLabel = previous.gradeLabel;
+      }
+      baselines.set(key, Object.assign({ key, scope, capturedAt: item.capturedAt }, values));
+    }
+    for (const scope of scopes) {
+      const old = captures.get(scope);
+      if (old && Date.parse(old.capturedAt) > time) continue;
+      captures.set(scope, { key: scope, capturedAt: item.capturedAt });
+      captures.set(pageKey(scope), { key: pageKey(scope), capturedAt: item.capturedAt });
+    }
+    const chronological = (a, b) => Date.parse(a.capturedAt) - Date.parse(b.capturedAt);
+    // Once older assignment evidence is evicted, a first re-observation cannot
+    // distinguish an old mark from a new one. Re-baseline new rows conservatively.
+    if (baselines.size > 3000) captures.clear();
+    result.gradeUpdateBaselines = [...baselines.values()].sort(chronological).slice(-3000);
+    result.gradeUpdateCaptures = [...captures.values()].sort(chronological).slice(-1000);
+    result.gradeUpdates = result.gradeUpdates.sort(chronological).slice(-200);
+    result.gradeUpdateRead = Object.fromEntries(result.gradeUpdates.filter(row => result.gradeUpdateRead[row.id]).map(row => [row.id, true]));
+  }
   function mergeSnapshot(state, incoming) {
     const result = validateState(state), raw = inputObject(incoming), item = snapshot(raw);
     if (!safeURL(item.url, item.source)) fail('尚未配置此学校地址，或新读取页面不属于当前配置的学校');
-    const hasData = item.source === 'seiue' ? item.schedule.length || item.calendarDates.length : item.source === 'teams' ? item.tasks.length || item.posts.length || item.feedback.length || item.grades.length : item.courses.length || item.tasks.length || item.feedback.length || item.officialGPA;
+    const hasData = item.source === 'seiue' ? item.schedule.length || item.calendarDates.length : item.source === 'teams' ? item.tasks.length || item.posts.length || item.feedback.length || item.grades.length : item.courses.length || item.tasks.length || item.feedback.length || item.grades.length || item.officialGPA;
     const failed = item.loginRequired || item.parseError || item.success === false || !!item.error || (!hasData && item.source !== 'teams' && item.success !== true);
     if (item.source === 'teams') {
       const saved = Object.values(result.snapshots.teams), bound = saved.find(row => row.accountId);
@@ -1662,6 +1825,10 @@
     }
     const key = snapshotKey(item), previous = result.snapshots[item.source][key];
     if (previous && Date.parse(previous.lastAttemptAt || previous.capturedAt) > Date.parse(item.capturedAt)) return result;
+    const coursesBefore = !failed && item.source === 'managebac' && item.gradesCaptured ? getCourses(result) : [];
+    // getCourses memoizes a source map. The merge below mutates that map, so
+    // invalidate the cached ordering before comparing post-sync totals.
+    snapshotEntriesCache.delete(result.snapshots[item.source]);
     const changes = !failed && previous ? changeEvents(previous, item, item.source, item.capturedAt) : [];
     // An unreadable/logged-out page records the attempted sync while retaining its last useful data.
     if (failed && previous) result.snapshots[item.source][key] = Object.assign({}, previous, {
@@ -1674,7 +1841,7 @@
       if (failed) {
         if (item.source === 'seiue') { item.schedule = []; item.calendarDates = []; }
         else if (item.source === 'teams') { item.tasks = []; item.posts = []; item.feedback = []; item.grades = []; }
-        else { item.courses = []; item.tasks = []; item.feedback = []; item.officialGPA = null; }
+        else { item.courses = []; item.tasks = []; item.feedback = []; item.grades = []; item.gradesCaptured = false; item.officialGPA = null; }
       } else if (item.source === 'teams' && previous && !(item.coverage === 'graph' && item.graphComplete)) {
         // Browser views and individual Graph pages are partial; absence is not deletion.
         const deleted = new Set((item.graphDeletedIDs || []).concat(item.browserExcludedIDs || []));
@@ -1743,6 +1910,7 @@
     if (changes.length) result.changeLog = result.changeLog.concat(changes).slice(-600);
     if (!failed && item.source === 'managebac') {
       const courses = getCourses(result), estimate = estimateGPA(courses), linear = estimateLinearGPA(courses);
+      if (item.gradesCaptured) mergeGradeUpdates(result, item, coursesBefore, courses);
       if (estimate.count) {
         const relevant = courses.filter(c => c.gpaEligible && points(c.percentage) !== null);
         const signature = JSON.stringify(relevant.map(c => [c.id, c.term, c.percentage]).sort((a, b) => a[0].localeCompare(b[0])));
@@ -1794,6 +1962,6 @@
       changes: state.changeLog.slice().sort((a, b) => Date.parse(b.capturedAt) - Date.parse(a.capturedAt)) };
   }
   return Object.freeze({ VERSION, GPA_BANDS, GPA_BANDED_METHOD: METHOD, configureSchools, schoolHomes, normalizeSchoolHome, emptyState, defaultState: emptyState, validateState, normalizeState: validateState, exportBackup, importBackup,
-    mergeSnapshot, resetTeamsData, clearTeamsData: resetTeamsData, today, clock, getSchedule, getCourses, getTasks, resolveTaskDeadline, parseManualDeadline, normalizePersonalEvent: personalEventRow, getFeedback, getOfficialGPA, estimateGPA, estimateLinearGPA, semesterGPAForecast,
+    mergeSnapshot, resetTeamsData, clearTeamsData: resetTeamsData, today, clock, getSchedule, getCourses, getTasks, resolveTaskDeadline, parseManualDeadline, normalizePersonalEvent: personalEventRow, getFeedback, getGradeUpdates, markGradeUpdatesRead, getOfficialGPA, estimateGPA, estimateLinearGPA, semesterGPAForecast,
     getNextClass, getClassClock, getSchedulePeriods, getTeamsPosts, getTeamsEC, getTeamsGrades, getSourceStatus, buildView, getSchoolCalendarEvents, schoolCalendarScheduleRule, schoolCalendarScheduleConflict, parseSchoolCalendarICS, parseSchoolCalendarPDFText, safeURL, safeAttachmentURL, gradePoints: points, linearGradePoints: linearPoints });
 });

@@ -22,6 +22,13 @@ struct StateValidationSmokeTests {
         check(CampusSecurity.validStateEnvelope(legacy), "Native envelope accepts the old missing-inbox state for migration")
         let valid = try validator.validate(legacy, schools: schools)
         check(valid["changeLog"] is [Any], "Shared schema migrates the missing inbox")
+        check((valid["gradeUpdates"] as? [Any])?.isEmpty == true, "Old states start with an empty grade notification inbox")
+        check((valid["gradeUpdateRead"] as? [String: Any])?.isEmpty == true, "Old states start without unread bookkeeping")
+        check((valid["gradeUpdateBaselines"] as? [Any])?.isEmpty == true && (valid["gradeUpdateCaptures"] as? [Any])?.isEmpty == true,
+              "Old snapshots are not fabricated into new grade notifications")
+        var oversizedInbox = valid
+        oversizedInbox["gradeUpdates"] = Array(repeating: [String: Any](), count: 201)
+        check(!CampusSecurity.validStateEnvelope(oversizedInbox), "Native envelope bounds grade notifications before full validation")
         check((valid["settings"] as? [String: Any])?["setupWizardCompleted"] as? Bool == false, "Theme schema defaults are available natively")
         check((valid["settings"] as? [String: Any])?["seiueURL"] as? String == schools["seiue"], "Foundation URL bridge preserves the configured school origin")
         var withSnapshot = valid
@@ -50,6 +57,29 @@ struct StateValidationSmokeTests {
         try FileManager.default.createDirectory(at: temporary, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: temporary) }
         let current = temporary.appendingPathComponent("state.json"), previous = temporary.appendingPathComponent("state.previous.json")
+        let mark: [String: Any] = ["score": 0, "maxScore": 20, "percentage": 0, "gradeLabel": ""]
+        let impact: [String: Any] = ["comparable": false, "courseBefore": NSNull(), "courseAfter": NSNull(),
+            "bandedBefore": NSNull(), "bandedAfter": NSNull(), "linearBefore": NSNull(), "linearAfter": NSNull()]
+        var withGradeNotice = valid
+        withGradeNotice["gradeUpdates"] = [["id": "synthetic-grade-update", "source": "managebac", "kind": "new",
+            "title": "Synthetic quiz", "course": "Synthetic course", "courseId": "7001", "term": "Practice Term (current)",
+            "url": "https://example-school.managebac.cn/student/classes/7001/core_tasks/8101",
+            "capturedAt": "2032-04-08T01:00:00Z", "before": NSNull(), "after": mark, "impact": impact]]
+        withGradeNotice["gradeUpdateRead"] = ["synthetic-grade-update": true]
+        withGradeNotice["gradeUpdateBaselines"] = [mark.merging(["key": "synthetic-grade-baseline", "scope": "synthetic-grade-scope", "capturedAt": "2032-04-08T01:00:00Z"]) { _, new in new }]
+        withGradeNotice["gradeUpdateCaptures"] = [["key": "synthetic-grade-scope", "capturedAt": "2032-04-08T01:00:00Z"]]
+        let noticeFile = temporary.appendingPathComponent("grade-notifications.json")
+        _ = try validator.write(withGradeNotice, to: noticeFile, previous: nil, schools: schools)
+        let noticeRoundTrip = try validator.read(noticeFile, schools: schools)
+        let savedNotice = (noticeRoundTrip["gradeUpdates"] as? [[String: Any]])?.first
+        check((savedNotice?["after"] as? [String: Any])?["score"] as? Int == 0, "Native persistence preserves an explicit zero assignment grade")
+        check((noticeRoundTrip["gradeUpdateRead"] as? [String: Bool])?["synthetic-grade-update"] == true,
+              "Read notifications remain read after a native disk round trip")
+        check((noticeRoundTrip["gradeUpdateBaselines"] as? [Any])?.count == 1 && (noticeRoundTrip["gradeUpdateCaptures"] as? [Any])?.count == 1,
+              "Grade baselines survive native persistence and prevent first-sync floods after restart")
+        let noticeBackup = try validator.exportBackup(noticeRoundTrip, schools: schools)
+        check((try validator.importBackup(noticeBackup, schools: schools).state["gradeUpdates"] as? [Any])?.count == 1,
+              "Grade notification history survives an identified backup round trip")
         _ = try validator.write(valid, to: current, previous: previous, schools: schools)
         check((try validator.read(current, schools: schools))["changeLog"] is [Any], "Initial state survives a native disk round trip")
         var withTask = valid

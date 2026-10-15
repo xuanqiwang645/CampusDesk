@@ -1,0 +1,61 @@
+/* A compact, persistent entry point; the notification list paints only on open
+   or when its data changes, independently of the current page's editor. */
+.grade-notifications-button { position: relative; flex-shrink: 0; }
+.grade-notification-count { min-width: 19px; height: 19px; padding: 0 5px; border-radius: 10px; display: inline-grid; place-items: center; color: #fff; background: #b74439; font-size: 10px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.grade-notification-sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
+:root #grade-notifications-dialog { position: fixed; inset: 16px 16px 16px auto; margin: 0; width: min(520px, calc(100vw - 32px)); height: calc(100vh - 32px); max-width: none; max-height: none; padding: 0; border: 1px solid var(--line); border-radius: 22px; background: var(--card); color: var(--ink); box-shadow: -8px 0 40px rgba(20,40,35,.14); overflow: hidden; }
+#grade-notifications-dialog::backdrop { background: rgba(18,35,31,.2); }
+#grade-notifications-content { height: 100%; display: flex; flex-direction: column; min-height: 0; }
+.grade-notifications-heading { display: flex; justify-content: space-between; align-items: center; gap: 16px; padding: 25px 24px 16px; }
+.grade-notifications-heading p { color: var(--muted); font-size: 10px; letter-spacing: .13em; margin-bottom: 6px; }
+.grade-notifications-heading h2 { font-size: 24px; font-weight: 650; }
+.grade-notifications-heading .icon-button { width: 36px; height: 36px; flex-shrink: 0; font-size: 24px; }
+.grade-notifications-tools { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; padding: 0 24px 12px; }
+.grade-notifications-tools .filter-pills { flex-wrap: wrap; gap: 4px; }
+.grade-notifications-tools .pill { font-size: 12px; }
+.grade-notifications-help { margin: 0 24px 15px; font-size: 12px; line-height: 1.6; color: var(--muted); }
+.grade-notifications-list { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior-y: contain; padding: 2px 20px 15px; scrollbar-gutter: stable; }
+.grade-notification-card { border: 1px solid var(--line); border-radius: 15px; padding: 17px; margin-bottom: 12px; background: var(--card); overflow-wrap: anywhere; }
+.grade-notification-card.is-unread { border-left: 3px solid var(--teal); background: color-mix(in srgb, var(--teal-soft) 22%, var(--card)); }
+.grade-notification-meta { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; color: var(--muted); font-size: 10px; margin-bottom: 12px; }
+.grade-notification-kind { color: var(--accent-ink, var(--teal)); background: var(--teal-soft); padding: 3px 7px; border-radius: 5px; font-weight: 600; }
+.grade-notification-unread { display: inline-flex; align-items: center; gap: 4px; margin-left: auto; color: var(--danger); font-weight: 600; }
+.grade-notification-unread::before { content: ''; width: 5px; height: 5px; border-radius: 50%; background: currentColor; }
+.grade-notification-course { font-size: 12px; line-height: 1.6; color: var(--muted); margin-bottom: 5px; }
+.grade-notification-card h3 { font-size: 16px; line-height: 1.5; font-weight: 600; }
+.grade-notification-scores { display: flex; align-items: baseline; flex-wrap: wrap; gap: 8px; margin: 12px 0; font-size: 14px; font-variant-numeric: tabular-nums; }
+.grade-notification-scores strong { font-size: 20px; font-weight: 650; color: var(--accent-ink, var(--teal)); }
+.grade-notification-old { color: var(--muted); }
+.grade-notification-impact { border-top: 1px solid var(--line); padding-top: 11px; }
+.grade-notification-impact h4 { font-size: 11px; color: var(--muted); margin: 0 0 8px; font-weight: 550; }
+.grade-notification-impact-row { display: grid; grid-template-columns: minmax(65px,1fr) auto auto; align-items: baseline; gap: 8px; font-size: 11px; line-height: 1.65; margin-top: 3px; font-variant-numeric: tabular-nums; }
+.grade-notification-impact-row strong { min-width: 43px; text-align: right; font-weight: 600; }
+.grade-notification-delta.up { color: var(--accent-ink, var(--teal)); }
+.grade-notification-delta.down { color: var(--danger); }
+.grade-notification-delta.flat { color: var(--muted); }
+.grade-notification-impact p, .grade-notification-impact-unknown { margin-top: 9px; font-size: 10px; line-height: 1.65; color: var(--muted); }
+.grade-notification-footer { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 7px; margin-top: 13px; }
+.grade-notification-footer time, .grade-notification-read-label { color: var(--muted); font-size: 10px; }
+.grade-notification-footer > div { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.grade-notification-footer .button { min-height: 30px; padding: 6px 8px; font-size: 11px; border-radius: 8px; }
+.grade-notifications-footnote { padding: 13px 24px 17px; border-top: 1px solid var(--line); font-size: 10px; line-height: 1.6; color: var(--muted); }
+.grade-notifications-empty { padding: 70px 20px; text-align: center; color: var(--muted); }
+.grade-notifications-empty > svg { width: 27px; height: 27px; margin-bottom: 16px; }
+.grade-notifications-empty h3 { color: var(--ink); font-size: 17px; margin-bottom: 10px; }
+.grade-notifications-empty p { font-size: 12px; line-height: 1.8; }
+.grade-notifications-more { width: 100%; }
+@media (max-width: 1100px) { .grade-notifications-button-label { display: none; } }
+@media (max-width: 600px) {
+  /* The additional bell must not squeeze the focus/sync buttons outside a
+     narrow window when a translated breadcrumb is long. */
+  .topbar .breadcrumb { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  .topbar .toolbar { flex-shrink: 0; }
+  :root #grade-notifications-dialog { inset: 8px; width: calc(100vw - 16px); height: calc(100vh - 16px); border-radius: 17px; }
+  .grade-notifications-heading { padding: 20px 16px 14px; }
+  .grade-notifications-tools { padding-inline: 16px; }
+  .grade-notifications-help { margin-inline: 16px; }
+  .grade-notifications-list { padding-inline: 12px; }
+  .grade-notification-card { padding: 13px; }
+  .grade-notification-impact-row { grid-template-columns: minmax(65px,1fr) auto; }
+  .grade-notification-impact-row strong { grid-column: 2; }
+}

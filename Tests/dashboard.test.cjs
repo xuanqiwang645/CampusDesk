@@ -101,6 +101,62 @@ function teamsSnapshot(tasks = []) {
     { id: 'work-message', title: 'Writing task', text: 'Write a paragraph.\nExplain your evidence.', kind: 'assignment', recipient: 'Grade 10 A', channel: 'HOMEWORK', dateLabel: '5:18 PM', url: 'https://teams.microsoft.com/v2/#/channels/test' }
   ] };
 }
+function gradeUpdateFixture(overrides = {}) {
+  return Object.assign({ id: 'grade-test-1', source: 'managebac', kind: 'updated', title: '<img src=x onerror=alert(1)> Lab report', course: 'Synthetic Physics', courseId: '7001', term: 'Term 1 (current)', url: 'https://example-school.managebac.cn/student/classes/7001/core_tasks/9001', capturedAt: '2026-09-19T00:40:00Z', before: { score: 80, maxScore: 100, percentage: 80, gradeLabel: '' }, after: { score: 90, maxScore: 100, percentage: 90, gradeLabel: '' }, impact: { courseBefore: 86, courseAfter: 88, bandedBefore: 3, bandedAfter: 3.3, linearBefore: 3.44, linearAfter: 3.52, comparable: true } }, overrides);
+}
+test('grade notifications show unread counts, escaped scores and observed impacts without marking on open', () => {
+  const app = harness(), state = app.ctx.CampusCore.emptyState();
+  state.gradeUpdates = [gradeUpdateFixture()]; app.receive({ type: 'state', state });
+  assert.match(app.node('grade-notifications-button').getAttribute('aria-label'), /1 条未读/);
+  app.click({ action: 'grade-notifications-open' });
+  assert.equal(app.node('grade-notifications-dialog').open, true);
+  const html = app.node('grade-notifications-content').innerHTML;
+  assert.match(html, /&lt;img src=x onerror=alert\(1\)&gt;/); assert.doesNotMatch(html, /<img src=x/);
+  assert.match(html, /80 \/ 100 · 80%/); assert.match(html, /90 \/ 100 · 90%/);
+  assert.match(html, /86% → 88%/); assert.match(html, /3 → 3.3/); assert.match(html, /3.44 → 3.52/);
+  assert.match(html, /本次同步的同期变化/); assert.match(html, /不代表这份作业的单独贡献/);
+  assert.equal(app.last('saveState'), undefined, 'opening is not a read acknowledgement');
+  app.click({ action: 'grade-notification-read', id: 'grade-test-1' });
+  assert.equal(app.last('saveState').state.gradeUpdateRead['grade-test-1'], true);
+  assert.match(app.node('grade-notifications-button').getAttribute('aria-label'), /暂无未读/);
+  assert.doesNotMatch(app.node('grade-notifications-content').innerHTML, /data-action="grade-notification-read"/);
+});
+test('grade notification empty, unavailable impact, zero scores, English and mark-all persist correctly', () => {
+  const app = harness({ native: false });
+  app.click({ action: 'grade-notifications-open' });
+  assert.match(app.node('grade-notifications-content').innerHTML, /首次读取某门课程的已有成绩只建立基线/);
+  const state = app.ctx.CampusCore.emptyState(); state.settings.language = 'en-US';
+  state.gradeUpdates = [gradeUpdateFixture({ id: 'zero', kind: 'new', title: 'Zero points', before: null, after: { score: 0, maxScore: 10, percentage: 0, gradeLabel: '' }, impact: { comparable: false } }), gradeUpdateFixture({ id: 'second', title: 'Another task' })];
+  app.receive({ type: 'state', state });
+  assert.match(app.node('grade-notifications-content').innerHTML, /0 \/ 10 · 0%/);
+  assert.match(app.node('grade-notifications-content').innerHTML, /cannot yet be quantified/);
+  assert.match(app.node('grade-notifications-content').innerHTML, /not the effect of this assignment alone/);
+  assert.match(app.node('grade-notifications-button').getAttribute('aria-label'), /2 unread/);
+  app.click({ action: 'grade-notifications-read-all' });
+  const saved = JSON.parse(app.store.get('campusdesk.browser.v1'));
+  assert.deepEqual(saved.gradeUpdateRead, { zero: true, second: true });
+  const reloaded = harness({ native: false, saved });
+  assert.match(reloaded.node('grade-notifications-button').getAttribute('aria-label'), /no unread/);
+  reloaded.click({ action: 'grade-notifications-open' }); reloaded.click({ action: 'grade-notifications-filter', filter: 'unread' });
+  assert.match(reloaded.node('grade-notifications-content').innerHTML, /You’re all caught up/);
+});
+test('grade updates repaint the bell without disturbing a focused assistant draft or the page under the drawer', () => {
+  const app = harness({ themeEdition: true, hash: '#assistant' });
+  const state = app.ctx.CampusCore.emptyState(); state.settings.setupWizardCompleted = true; state.settings.setupWizardIntroVersion = '1.0.0';
+  app.receive({ type: 'state', state });
+  app.input('assistant-question', 'Keep my draft'); const field = app.node('assistant-question'); field.focus();
+  state.gradeUpdates = [gradeUpdateFixture()]; app.receive({ type: 'state', state });
+  assert.equal(app.node('assistant-question'), field); assert.equal(field.value, 'Keep my draft');
+  assert.match(app.node('grade-notifications-button').getAttribute('aria-label'), /1 条未读/);
+  app.click({ action: 'grade-notifications-open' });
+  const writes = app.node('content').writes;
+  state.gradeUpdates.push(gradeUpdateFixture({ id: 'second' })); app.receive({ type: 'state', state });
+  assert.equal(app.node('content').writes, writes); assert.equal(app.node('assistant-question'), field);
+  assert.equal(field.value, 'Keep my draft'); assert.match(app.node('grade-notifications-button').getAttribute('aria-label'), /2 条未读/);
+  app.click({ action: 'grade-notifications-close' });
+  assert.equal(app.node('grade-notifications-dialog').open, false);
+  assert.equal(app.node('grade-notifications-button').getAttribute('aria-expanded'), 'false');
+});
 test('GPA legends identify every moving average and keep the two methods independent', () => {
   for (const language of ['zh-CN', 'en-US']) {
     const app = harness({ hash: '#grades' });

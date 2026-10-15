@@ -84,6 +84,16 @@ enum CampusSecurity {
         if let changes = state["changeLog"] {
             guard let rows = changes as? [Any], rows.count <= 600 else { return false }
         }
+        // Optional on old backups. The full shared validator validates each row
+        // and supplies defaults; this envelope bounds work before loading it.
+        for (key, limit) in [("gradeUpdates", 200), ("gradeUpdateBaselines", 3000), ("gradeUpdateCaptures", 1000)] {
+            if let value = state[key] {
+                guard let rows = value as? [Any], rows.count <= limit else { return false }
+            }
+        }
+        if let read = state["gradeUpdateRead"] {
+            guard let flags = read as? [String: Any], flags.count <= 200 else { return false }
+        }
 
         if let provider = settings["aiProvider"] as? String,
            !["off", "ollama", "deepseek", "hybrid", "auto"].contains(provider) { return false }

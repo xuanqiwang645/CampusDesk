@@ -28,6 +28,7 @@
   let customScheduleOneDate = '';
   let customScheduleDraft = { title: '', room: '', period: '', start: '', end: '' };
   let feedbackFilter = 'all';
+  let gradeNotificationsFilter = 'all', gradeNotificationsLimit = 40;
   let teamsFilter = 'all';
   let teamsChannelFilter = 'all';
   let ecQuery = '', ecDateFilter = 'all', renderedPage = null;
@@ -383,7 +384,7 @@
   function dashboardHidden() { return document.hidden || document.documentElement.dataset.windowVisible === 'false'; }
   function backgroundRenderBlocked() {
     if (dashboardHidden()) return true;
-    if (['task-dialog', 'detail-dialog', 'agenda-event-dialog', 'teams-page-dialog', 'calendar-preview-dialog', 'setup-wizard-dialog', 'quick-connect-dialog', 'assistant-confirm-dialog'].some(id => document.getElementById(id)?.open)) return true;
+    if (['task-dialog', 'detail-dialog', 'agenda-event-dialog', 'teams-page-dialog', 'calendar-preview-dialog', 'setup-wizard-dialog', 'quick-connect-dialog', 'assistant-confirm-dialog', 'grade-notifications-dialog'].some(id => document.getElementById(id)?.open)) return true;
     const active = document.activeElement;
     return Boolean(active && (['INPUT', 'TEXTAREA', 'SELECT'].includes(active.tagName) || active.isContentEditable) && document.getElementById('content')?.contains(active));
   }
@@ -398,6 +399,7 @@
   function requestBackgroundRender() {
     // Persistence/Graph acknowledgements remain immediate and ordered. Only
     // painting is coalesced; the newest state is shown after editing or reveal.
+    updateGradeNotifications();
     backgroundRenderPending = true;
     if (backgroundRenderBlocked()) return;
     const delay = Math.max(0, 400 - (Date.now() - lastBackgroundRender));
@@ -2383,6 +2385,77 @@
     if (settingsIcon && !settingsIcon.firstElementChild) settingsIcon.innerHTML = icon('settings');
   }
   function setText(id, value) { const node = document.getElementById(id), text = String(value == null ? '' : value); if (node && node.textContent !== text) node.textContent = text; }
+  function gradeNotificationCopy(chinese, englishText) { return isEnglish() ? englishText : chinese; }
+  function gradeNotificationRows() { return memoized('grade-notifications', () => typeof Core.getGradeUpdates === 'function' ? Core.getGradeUpdates(state) : []); }
+  function gradeNotificationNumber(value) { return Number.isFinite(value) ? String(Math.round(value * 100) / 100) : ''; }
+  function gradeNotificationScore(grade) {
+    if (!grade) return gradeNotificationCopy('此前未发布成绩', 'Not previously graded');
+    const parts = [];
+    if (Number.isFinite(grade.score)) parts.push(gradeNotificationNumber(grade.score) + (Number.isFinite(grade.maxScore) && grade.maxScore > 0 ? ' / ' + gradeNotificationNumber(grade.maxScore) : gradeNotificationCopy(' 分', ' points')));
+    if (Number.isFinite(grade.percentage)) parts.push(gradeNotificationNumber(grade.percentage) + '%');
+    if (grade.gradeLabel) parts.push(grade.gradeLabel);
+    return parts.join(' · ') || gradeNotificationCopy('原始成绩未标明', 'Score not specified');
+  }
+  function gradeNotificationImpact(item) {
+    const impact = item.impact || {}, rows = [];
+    const add = (label, before, after, unit) => {
+      if (!Number.isFinite(before) || !Number.isFinite(after)) return;
+      const delta = Math.round((after - before) * 100) / 100;
+      const direction = delta > 0 ? 'up' : delta < 0 ? 'down' : 'flat';
+      rows.push('<div class="grade-notification-impact-row"><span>' + label + '</span><span>' + gradeNotificationNumber(before) + unit + ' → ' + gradeNotificationNumber(after) + unit + '</span><strong class="grade-notification-delta ' + direction + '">' + (delta > 0 ? '+' : '') + gradeNotificationNumber(delta) + (unit ? gradeNotificationCopy(' 个百分点', ' pp') : '') + '</strong></div>');
+    };
+    if (impact.comparable) {
+      add(gradeNotificationCopy('科目总评', 'Course overall'), impact.courseBefore, impact.courseAfter, '%');
+      add(gradeNotificationCopy('分档 GPA', 'Banded GPA'), impact.bandedBefore, impact.bandedAfter, '');
+      add(gradeNotificationCopy('线性 GPA', 'Linear GPA'), impact.linearBefore, impact.linearAfter, '');
+    }
+    return rows.length ? '<div class="grade-notification-impact"><h4>' + gradeNotificationCopy('本次同步的同期变化', 'Changes observed in this sync') + '</h4>' + rows.join('') + '<p>' + gradeNotificationCopy('可能包含其他成绩或权重的变动，不代表这份作业的单独贡献。', 'May include other grade or weighting changes; this is not the effect of this assignment alone.') + '</p></div>' : '<p class="grade-notification-impact-unknown">' + gradeNotificationCopy('尚无可比较的前后总评，暂不能量化对科目总评或 GPA 的影响。', 'Comparable before-and-after totals are unavailable; the effect on the course overall or GPA cannot yet be quantified.') + '</p>';
+  }
+  function gradeNotificationCard(item) {
+    const key = encodeURIComponent(item.id), source = item.source === 'teams' ? 'teams' : 'managebac';
+    const url = Core.safeURL(item.url, source);
+    return '<article id="grade-notification-' + key + '" class="grade-notification-card ' + (item.read ? 'is-read' : 'is-unread') + '"><div class="grade-notification-meta"><span class="grade-notification-kind">' + (item.kind === 'updated' ? gradeNotificationCopy('成绩修改', 'Grade changed') : gradeNotificationCopy('新成绩', 'New grade')) + '</span><span>' + esc(sourceName(source)) + '</span>' + (!item.read ? '<span class="grade-notification-unread">' + gradeNotificationCopy('未读', 'Unread') + '</span>' : '') + '</div><p class="grade-notification-course">' + esc(item.course || gradeNotificationCopy('科目未标明', 'Subject not specified')) + (item.term ? '<span> · ' + esc(item.term) + '</span>' : '') + '</p><h3>' + esc(item.title) + '</h3><div class="grade-notification-scores">' + (item.before ? '<span class="grade-notification-old">' + esc(gradeNotificationScore(item.before)) + '</span><span aria-hidden="true">→</span>' : '') + '<strong>' + esc(gradeNotificationScore(item.after)) + '</strong></div>' + gradeNotificationImpact(item) + '<div class="grade-notification-footer"><time datetime="' + esc(item.capturedAt) + '" title="' + esc(gradeNotificationCopy('发现于 ', 'Detected ') + lastUpdated(item.capturedAt)) + '">' + esc(gradeNotificationCopy('发现于 ', 'Detected ') + lastUpdated(item.capturedAt)) + '</time><div>' + (!item.read ? '<button id="grade-notification-read-' + key + '" type="button" class="button button-plain" data-action="grade-notification-read" data-id="' + esc(item.id) + '">' + gradeNotificationCopy('标为已读', 'Mark read') + '</button>' : '<span class="grade-notification-read-label">' + gradeNotificationCopy('已读', 'Read') + '</span>') + (url ? '<button type="button" class="button button-light" data-action="grade-notification-open-source" data-id="' + esc(item.id) + '">' + gradeNotificationCopy('查看原作业', 'Open assignment') + icon('link') + '</button>' : '') + '</div></div></article>';
+  }
+  function updateGradeNotifications() {
+    const trigger = document.getElementById('grade-notifications-button'), dialog = document.getElementById('grade-notifications-dialog');
+    if (!trigger || !dialog) return;
+    const rows = gradeNotificationRows(), unread = rows.filter(item => !item.read).length;
+    const label = gradeNotificationCopy('成绩更新', 'Grade updates');
+    const ariaLabel = label + (unread ? gradeNotificationCopy('，' + unread + ' 条未读', ', ' + unread + ' unread') : gradeNotificationCopy('，暂无未读', ', no unread updates'));
+    if (trigger.dataset.label !== ariaLabel) {
+      trigger.innerHTML = icon('bell') + '<span class="grade-notifications-button-label">' + label + '</span>' + (unread ? '<span class="grade-notification-count" aria-hidden="true">' + (unread > 99 ? '99+' : unread) + '</span>' : '');
+      trigger.setAttribute('aria-label', ariaLabel); trigger.dataset.label = ariaLabel;
+      setText('grade-notification-status', unread ? ariaLabel : gradeNotificationCopy('没有未读成绩更新', 'No unread grade updates'));
+    }
+    trigger.setAttribute('aria-expanded', String(dialog.open));
+    if (!dialog.open) return;
+    const container = document.getElementById('grade-notifications-content');
+    const signature = JSON.stringify([isEnglish(), gradeNotificationsFilter, gradeNotificationsLimit, rows]);
+    if (!container || container.dataset.renderSignature === signature) return;
+    const filtered = gradeNotificationsFilter === 'unread' ? rows.filter(item => !item.read) : rows;
+    const visible = filtered.slice(0, gradeNotificationsLimit);
+    const active = document.activeElement, focusedID = active && container.contains(active) ? active.id : '';
+    const scroll = document.getElementById('grade-notifications-list')?.scrollTop || 0;
+    const html = '<header class="grade-notifications-heading"><div><p>' + gradeNotificationCopy('通知中心', 'NOTIFICATIONS') + '</p><h2 id="grade-notifications-title">' + label + '</h2></div><button id="grade-notifications-close" class="icon-button" type="button" data-action="grade-notifications-close" aria-label="' + gradeNotificationCopy('关闭成绩通知', 'Close grade notifications') + '">×</button></header><div class="grade-notifications-tools"><div class="filter-pills"><button id="grade-notifications-all" type="button" class="pill ' + (gradeNotificationsFilter === 'all' ? 'active' : '') + '" data-action="grade-notifications-filter" data-filter="all" aria-pressed="' + (gradeNotificationsFilter === 'all') + '">' + gradeNotificationCopy('全部', 'All') + '</button><button id="grade-notifications-unread" type="button" class="pill ' + (gradeNotificationsFilter === 'unread' ? 'active' : '') + '" data-action="grade-notifications-filter" data-filter="unread" aria-pressed="' + (gradeNotificationsFilter === 'unread') + '">' + gradeNotificationCopy('未读', 'Unread') + ' · ' + unread + '</button></div><button id="grade-notifications-read-all" class="button button-plain" type="button" data-action="grade-notifications-read-all"' + (unread ? '' : ' disabled') + '>' + gradeNotificationCopy('全部已读', 'Mark all read') + '</button></div><p class="grade-notifications-help">' + gradeNotificationCopy('显示同步后新发现或修改的作业成绩；已读状态保存在本机。', 'New or changed assignment grades detected after sync. Read status stays on this Mac.') + '</p><div id="grade-notifications-list" class="grade-notifications-list" data-preserve-scroll>' + (visible.length ? visible.map(gradeNotificationCard).join('') : '<div class="grade-notifications-empty">' + icon('bell') + '<h3>' + (gradeNotificationsFilter === 'unread' && rows.length ? gradeNotificationCopy('全部看完了', 'You’re all caught up') : gradeNotificationCopy('还没有成绩更新', 'No grade updates yet')) + '</h3><p>' + (gradeNotificationsFilter === 'unread' && rows.length ? gradeNotificationCopy('之后发现的新成绩会在这里提醒你。', 'Newly detected grades will appear here.') : gradeNotificationCopy('首次读取某门课程的已有成绩只建立基线；之后同步到的新成绩或分数修改会出现在这里，不会把旧成绩全部标为未读。', 'The first grade capture for each course establishes a baseline. Later new grades or score changes appear here; existing grades are not all marked unread.')) + '</p></div>') + (visible.length < filtered.length ? '<button id="grade-notifications-more" class="button button-light grade-notifications-more" type="button" data-action="grade-notifications-more">' + gradeNotificationCopy('加载更多', 'Load more') + ' · ' + visible.length + '/' + filtered.length + '</button>' : '') + '</div><p class="grade-notifications-footnote">' + gradeNotificationCopy('仅覆盖已同步、可明确识别的成绩；课程总评和 GPA 以学校原平台为准。', 'Only synced, clearly identified grades are covered. Refer to your school platform for official grades and GPA.') + '</p>';
+    if (window.CampusDOM) window.CampusDOM.patch(container, html); else container.innerHTML = html;
+    container.dataset.renderSignature = signature;
+    const list = document.getElementById('grade-notifications-list'); if (list) list.scrollTop = scroll;
+    if (focusedID) (document.getElementById(focusedID) || document.getElementById('grade-notifications-close'))?.focus({ preventScroll: true });
+  }
+  function markGradeNotificationsRead(ids) {
+    if (typeof Core.markGradeUpdatesRead !== 'function' || pendingImportRequestID) return false;
+    const previous = state;
+    try {
+      state = Core.markGradeUpdatesRead(state, ids);
+      if (persist() === false) { state = previous; invalidateDerivedCaches(); updateGradeNotifications(); return false; }
+      updateGradeNotifications(); return true;
+    } catch (_) { state = previous; invalidateDerivedCaches(); toast(gradeNotificationCopy('已读状态未能保存，请重试。', 'Read status could not be saved. Please try again.')); return false; }
+  }
+  function closeGradeNotifications() {
+    closeDialog('grade-notifications-dialog'); updateGradeNotifications();
+    document.getElementById('grade-notifications-button')?.focus({ preventScroll: true });
+    if (backgroundRenderPending) requestBackgroundRender();
+  }
   function updateStaticChrome() {
     const locale = isEnglish() ? 'en-US' : 'zh-CN';
     if (document.documentElement) document.documentElement.lang = locale;
@@ -2394,6 +2467,7 @@
     setText('settings-nav-label', t('连接与设置'));
     setText('breadcrumb-home', t('我的校园'));
     setText('sync-label', t('同步数据'));
+    updateGradeNotifications();
     const focusButton = document.getElementById('focus-button');
     if (focusButton) {
       const focusLabel = isEnglish() ? (state.settings.focusMode ? 'Exit focus' : 'Focus') : (state.settings.focusMode ? '退出专注' : '专注模式');
@@ -2477,6 +2551,9 @@
   }
   function render() {
     if (dashboardHidden()) { backgroundRenderPending = true; return; }
+    // The drawer owns only notification DOM. A live sync must not replace a
+    // form or assistant draft underneath it, or steal its keyboard focus.
+    if (document.getElementById('grade-notifications-dialog')?.open) { backgroundRenderPending = true; updateGradeNotifications(); updateStatus(); return; }
     // Replacing the page DOM while WebKit's textarea is focused interrupts
     // marked-text composition (notably Chinese Pinyin). Keep the live editor
     // mounted until blur, and render the newest state immediately afterwards.
@@ -2486,6 +2563,7 @@
       assistantQuestionDraft = String(assistantEditor.value || '').slice(0, 6000);
       assistantRenderDeferred = true;
       updateStatus();
+      updateGradeNotifications();
       updateAssistantWorkspace();
       return;
     }
@@ -2759,7 +2837,23 @@
     if (!target) return;
     if (target.dataset.page) { navigate(target.dataset.page); return; }
     const action = target.dataset.action;
-    if (action === 'agenda-day') {
+    if (action === 'grade-notifications-open') {
+      const dialog = document.getElementById('grade-notifications-dialog');
+      if (dialog.open) { closeGradeNotifications(); return; }
+      gradeNotificationsLimit = 40; showDialog('grade-notifications-dialog'); updateGradeNotifications();
+      document.getElementById('grade-notifications-close')?.focus({ preventScroll: true });
+    }
+    else if (action === 'grade-notifications-close') closeGradeNotifications();
+    else if (action === 'grade-notifications-filter') { gradeNotificationsFilter = target.dataset.filter === 'unread' ? 'unread' : 'all'; gradeNotificationsLimit = 40; updateGradeNotifications(); }
+    else if (action === 'grade-notifications-more') { gradeNotificationsLimit += 40; updateGradeNotifications(); }
+    else if (action === 'grade-notification-read') markGradeNotificationsRead([target.dataset.id]);
+    else if (action === 'grade-notifications-read-all') markGradeNotificationsRead();
+    else if (action === 'grade-notification-open-source') {
+      const item = gradeNotificationRows().find(row => row.id === target.dataset.id);
+      if (!item || !Core.safeURL(item.url, item.source)) return;
+      markGradeNotificationsRead([item.id]); openSource(item.source, item.url);
+    }
+    else if (action === 'agenda-day') {
       if (!validCalendarDay(target.dataset.date)) return;
       calendarDay = target.dataset.date; calendarMonth = calendarDay.slice(0, 7); render();
     }
@@ -3788,6 +3882,8 @@
     } else { restoreBrowserState(); maybeOpenSetupWizard(); }
   }
   document.getElementById('quick-connect-dialog').addEventListener('cancel', () => { pendingQuickConnection = null; });
+  document.getElementById('grade-notifications-dialog').addEventListener('cancel', event => { event.preventDefault(); closeGradeNotifications(); });
+  document.getElementById('grade-notifications-dialog').addEventListener('click', event => { if (event.target === event.currentTarget) closeGradeNotifications(); });
   if (window.campusDesktop && typeof window.campusDesktop.onEvent === 'function') {
     window.campusDesktop.onEvent(event => window.CampusDesk.receive(event));
   }
