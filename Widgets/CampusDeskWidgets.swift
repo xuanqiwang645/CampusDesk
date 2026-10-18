@@ -4,7 +4,7 @@ import WidgetKit
 enum CampusWidgetMode {
     case today, deadlines, nextClass
     var title: String {
-        switch self { case .today: return "校园总览"; case .deadlines: return "作业与待办"; case .nextClass: return "课程提醒" }
+        switch self { case .today: return "校园总览"; case .deadlines: return "作业与待办"; case .nextClass: return "下一节课" }
     }
     var symbol: String {
         switch self { case .today: return "calendar"; case .deadlines: return "checklist"; case .nextClass: return "graduationcap" }
@@ -123,10 +123,11 @@ struct CampusWidgetView: View {
     private var header: some View {
         HStack(spacing: 5) {
             Image(systemName: mode.symbol).font(.system(size: 11, weight: .semibold)).foregroundStyle(accent)
-            Text(small && mode == .nextClass && items.first?.isOngoing(at: entry.date) == true ? "正在上课" : mode.title)
+            Text(mode == .nextClass && items.first?.isOngoing(at: entry.date) == true ? "正在上课" : mode.title)
                 .font(.system(size: 11, weight: .semibold)).lineLimit(1).layoutPriority(1)
             Spacer(minLength: 3)
-            Text(String(day.suffix(5)).replacingOccurrences(of: "-", with: "/"))
+            let headerDay = mode == .nextClass ? (items.first?.date ?? day) : day
+            Text(String(headerDay.suffix(5)).replacingOccurrences(of: "-", with: "/"))
                 .font(.system(size: 10, weight: .medium, design: .rounded))
                 .foregroundStyle(.secondary).monospacedDigit().fixedSize()
         }.accessibilityElement(children: .combine)
@@ -353,7 +354,7 @@ struct CampusWidgetView: View {
                     .lineLimit(2).fixedSize(horizontal: false, vertical: true).privacySensitive()
                 Text((course.start.map(timeString) ?? "") + (course.end.map { " – " + timeString($0) } ?? ""))
                     .font(.system(size: 10)).foregroundStyle(.secondary).monospacedDigit().lineLimit(1).fixedSize()
-                if course.date != day {
+                if course.date != day && mode != .nextClass {
                     Text(String(course.date.suffix(5)).replacingOccurrences(of: "-", with: "/"))
                         .font(.system(size: 10, weight: .medium)).foregroundStyle(accent)
                 }
