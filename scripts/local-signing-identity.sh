@@ -22,13 +22,15 @@ if [[ -z "$campus_identity" ]]; then
     exit 1
   fi
   campus_signing_tmp="$(mktemp -d /private/tmp/CampusDesk-signing.XXXXXX)"
-  trap '/bin/rm -f "$campus_signing_tmp/signing.key" "$campus_signing_tmp/signing.rsa" "$campus_signing_tmp/signing.crt"; /bin/rmdir "$campus_signing_tmp"' EXIT
+  trap '/bin/rm -f "$campus_signing_tmp/signing.key" "$campus_signing_tmp/signing.pk8" "$campus_signing_tmp/signing.crt"; /bin/rmdir "$campus_signing_tmp"' EXIT
   /usr/bin/openssl req -x509 -newkey rsa:3072 -nodes -days 3650 \
     -config "$campus_scripts/local-signing.cnf" \
     -keyout "$campus_signing_tmp/signing.key" -out "$campus_signing_tmp/signing.crt" 2>/dev/null
-  # macOS's OpenSSL importer expects PKCS#1, while req may output PKCS#8.
-  /usr/bin/openssl rsa -in "$campus_signing_tmp/signing.key" -out "$campus_signing_tmp/signing.rsa" 2>/dev/null
-  /usr/bin/security import "$campus_signing_tmp/signing.rsa" -k "$campus_keychain" -t priv -f openssl -x -T /usr/bin/codesign >&2
+  # Import an explicitly encoded PKCS#8 private key; LibreSSL's req defaults
+  # vary, while security's pkcs8 importer accepts this format directly.
+  /usr/bin/openssl pkcs8 -topk8 -nocrypt -in "$campus_signing_tmp/signing.key" \
+    -out "$campus_signing_tmp/signing.pk8" 2>/dev/null
+  /usr/bin/security import "$campus_signing_tmp/signing.pk8" -k "$campus_keychain" -t priv -f pkcs8 -x -T /usr/bin/codesign >&2
   /usr/bin/security import "$campus_signing_tmp/signing.crt" -k "$campus_keychain" -t cert -f pemseq >&2
   campus_identity="$(campus_find_identity)"
 fi
