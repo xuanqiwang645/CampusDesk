@@ -86,11 +86,36 @@ struct CampusWidgetView: View {
         #if WIDGET_RENDER
         content.padding(16).background(background)
         #else
-        content
+        productionContent
             .widgetURL(mode == .deadlines ? URL(string: "campusdesk-theme://tasks")! : CampusWidgetSnapshot.link(day: mode == .today ? day : (items.first?.date ?? day)))
             .containerBackground(for: .widget) { background }
             .environment(\.timeZone, CampusWidgetSnapshot.beijing.timeZone)
         #endif
+    }
+
+    // Build83 controlled host probe. Keep the existing kind, provider, background,
+    // and privacy policy; exclude Link, timer Text, overlays, and flexible frames.
+    // A visible marker but missing rows separates data/privacy from a missing root.
+    @ViewBuilder private var productionContent: some View {
+        if mode == .deadlines && large {
+            VStack(alignment: .leading, spacing: 12) {
+                Text("CampusDesk · 诊断83")
+                    .font(.system(size: 18, weight: .bold))
+                Text("纯文本待办 · \(items.count) 项")
+                    .font(.system(size: 12))
+                ForEach(Array(items.prefix(4))) { item in
+                    Text(item.title)
+                        .font(.system(size: 14))
+                        .lineLimit(2)
+                        .privacySensitive()
+                }
+                Text(entry.date, style: .time)
+                    .font(.system(size: 11))
+            }
+            .foregroundStyle(colorScheme == .dark ? Color.white : Color.black)
+        } else {
+            content
+        }
     }
 
     private var content: some View {
