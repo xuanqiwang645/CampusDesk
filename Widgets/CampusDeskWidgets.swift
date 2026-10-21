@@ -1,8 +1,5 @@
 import SwiftUI
 import WidgetKit
-import OSLog
-
-private let campusWidgetLogger = Logger(subsystem: "local.campusdesk.mac.themeedition.widgets", category: "render-diagnostics")
 
 enum CampusWidgetMode {
     case today, deadlines, nextClass
@@ -40,7 +37,6 @@ struct CampusWidgetProvider: TimelineProvider {
         let entries = Array(Set(dates)).sorted().prefix(80).map {
             CampusWidgetEntry(date: $0, snapshot: result.snapshot, preview: false, issue: result.issue)
         }
-        campusWidgetLogger.info("timeline family=\(String(describing: context.family), privacy: .public) loaded=\(result.snapshot != nil) items=\(result.snapshot?.items.count ?? 0) entries=\(entries.count)")
         completion(Timeline(entries: entries, policy: .after(now.addingTimeInterval(30 * 60))))
     }
 }
@@ -51,7 +47,6 @@ struct CampusWidgetView: View {
     var previewFamily: WidgetFamily? = nil
     @Environment(\.widgetFamily) private var systemFamily
     @Environment(\.colorScheme) private var colorScheme
-    @Environment(\.redactionReasons) private var redactionReasons
     private var family: WidgetFamily { previewFamily ?? systemFamily }
     private var small: Bool { family == .systemSmall }
     private var large: Bool { family == .systemLarge }
@@ -82,40 +77,14 @@ struct CampusWidgetView: View {
     }
 
     var body: some View {
-        let _ = campusWidgetLogger.info("view mode=\(String(describing: mode), privacy: .public) family=\(String(describing: family), privacy: .public) loaded=\(entry.snapshot != nil) rows=\(items.count) preview=\(entry.preview) redaction=\(redactionReasons.rawValue) color=\(String(describing: colorScheme), privacy: .public)")
         #if WIDGET_RENDER
         content.padding(16).background(background)
         #else
-        productionContent
+        content
             .widgetURL(mode == .deadlines ? URL(string: "campusdesk-theme://tasks")! : CampusWidgetSnapshot.link(day: mode == .today ? day : (items.first?.date ?? day)))
             .containerBackground(for: .widget) { background }
             .environment(\.timeZone, CampusWidgetSnapshot.beijing.timeZone)
         #endif
-    }
-
-    // Build83 controlled host probe. Keep the existing kind, provider, background,
-    // and privacy policy; exclude Link, timer Text, overlays, and flexible frames.
-    // A visible marker but missing rows separates data/privacy from a missing root.
-    @ViewBuilder private var productionContent: some View {
-        if mode == .deadlines && large {
-            VStack(alignment: .leading, spacing: 12) {
-                Text("CampusDesk · 诊断83")
-                    .font(.system(size: 18, weight: .bold))
-                Text("纯文本待办 · \(items.count) 项")
-                    .font(.system(size: 12))
-                ForEach(Array(items.prefix(4))) { item in
-                    Text(item.title)
-                        .font(.system(size: 14))
-                        .lineLimit(2)
-                        .privacySensitive()
-                }
-                Text(entry.date, style: .time)
-                    .font(.system(size: 11))
-            }
-            .foregroundStyle(colorScheme == .dark ? Color.white : Color.black)
-        } else {
-            content
-        }
     }
 
     private var content: some View {
@@ -360,9 +329,11 @@ struct CampusWidgetView: View {
         HStack(spacing: 3) {
             if let deadline = item.start, deadline > entry.date, deadline.timeIntervalSince(entry.date) < 86400 {
                 Text("剩").fixedSize()
+                // WidgetKit can render the whole large widget empty when a dynamic
+                // timer is asked for its ideal width via horizontal fixedSize.
+                // Let the parent propose a finite width instead.
                 Text(timerInterval: entry.date...deadline, countsDown: true)
                     .multilineTextAlignment(.leading).frame(maxWidth: compact ? nil : .infinity, alignment: .leading)
-                    .fixedSize(horizontal: compact, vertical: false)
             } else { Text(status.remainingText) }
         }.foregroundStyle(urgencyColor(item)).monospacedDigit().lineLimit(1).minimumScaleFactor(0.85)
     }
@@ -477,10 +448,6 @@ struct CampusDeadlinesWidget: Widget {
             .configurationDisplayName("作业与待办提示")
             .description("显示未完成作业、个人待办、剩余时间与截止待确认的任务。点击打开待办事项。")
             .supportedFamilies([.systemSmall, .systemMedium, .systemLarge])
-            // Keep this palette with its foreground content on the desktop.
-            // The host otherwise requests a full-color, background-removed
-            // variant that is absent from the archived deadline timeline.
-            .containerBackgroundRemovable(false)
     }
 }
 
