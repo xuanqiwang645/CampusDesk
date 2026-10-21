@@ -337,11 +337,13 @@ struct CampusWidgetView: View {
     }
 
     private func pressureBar(_ status: CampusWidgetDeadlineStatus, color: Color) -> some View {
-        GeometryReader { geometry in
-            Capsule().fill(color.opacity(0.12)).overlay(alignment: .leading) {
-                Capsule().fill(color).frame(width: geometry.size.width * status.pressure)
+        Capsule().fill(color.opacity(0.12))
+            .overlay(alignment: .leading) {
+                Capsule().fill(color)
+                    .scaleEffect(x: min(1, max(0, status.pressure)), y: 1, anchor: .leading)
             }
-        }.frame(height: 3).accessibilityLabel("截止紧迫度，非完成进度")
+            .frame(height: 3)
+            .accessibilityLabel("截止紧迫度，非完成进度")
     }
 
     private func classContent(_ course: CampusWidgetItem) -> some View {
