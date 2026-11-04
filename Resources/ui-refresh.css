@@ -69,6 +69,7 @@
 .board-source-groups .task-source-heading { padding-bottom: 12px; }
 .board-source-groups .group-heading { margin-bottom: 10px; }
 .board-source-groups .group-heading h2 { font-size: 13px; font-weight: 600; }
+.board-side-column .school-calendar-card .card-header { flex-wrap: wrap; }
 .board-source-groups .task-source-heading h2, .board-source-groups .group-heading h2 { color: var(--ink); }
 .board-source-groups .task-source-heading p, .board-source-groups .group-heading p,
 .board-source-groups .group-heading h2 span { color: var(--muted); }
@@ -152,3 +153,72 @@
 :root[data-graphics-mode="low-power"] .app-shell :is(.button, .pill, .focus-button, .nav-item, .nav-item > .icon, .board-kpi, .board-task-card, .board-mini-card, .todo-deadline-card) {
   transition: none;
 }
+
+/* Clear surfaces for actions, with solid tints for primary and selected states. */
+:root {
+  --action-sheen: linear-gradient(158deg, rgb(255 255 255 / 9%), transparent 48%, rgb(0 0 0 / 7%));
+  --action-rim: inset 0 1px 0 rgb(255 255 255 / 30%), inset 0 -1px 0 rgb(0 0 0 / 9%), 0 1px 2px rgb(0 0 0 / 9%);
+  --action-pressed-rim: inset 0 2px 3px rgb(0 0 0 / 22%);
+  --action-surface: color-mix(in srgb, var(--teal-soft) 48%, transparent);
+  --action-edge: color-mix(in srgb, var(--ink) 22%, transparent);
+  --action-optics: blur(8px) saturate(1.15);
+}
+:is(#app-shell, dialog) button:is(.button-primary, .button-light, .pill.active, .board-check, .check-button, .todo-complete-button, [data-action="prev-day"], [data-action="next-day"]) {
+  background-image: var(--action-sheen);
+  box-shadow: var(--button-rim, var(--action-rim));
+  transform: var(--button-press, none);
+}
+:is(#app-shell, dialog) button:is(.button-light, .board-check, .check-button, .todo-complete-button, [data-action="prev-day"], [data-action="next-day"]) {
+  background-color: var(--card);
+  background-color: var(--action-surface);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-color: var(--action-edge);
+}
+:is(#app-shell, dialog) button:is(.button-primary, .button-light, .pill.active) { border-radius: 999px; }
+:is(#app-shell, dialog) button.button-light:enabled:hover,
+#app-shell button:is(.pill.active, [aria-pressed="true"].button-light, [aria-expanded="true"].button-light) {
+  color: var(--accent-ink);
+  background-color: var(--teal-soft);
+  border-color: var(--accent-ink);
+}
+#app-shell button[data-action="toggle-task"]:is(:hover, [aria-pressed="true"]) {
+  color: white;
+  background-color: var(--teal);
+  border-color: var(--teal);
+}
+:is(#app-shell, dialog) button:enabled:active { --button-rim: var(--action-pressed-rim); }
+@media (prefers-reduced-motion: no-preference) {
+  :root:not([data-graphics-mode="low-power"]) button:enabled:active { --button-press: scale(.975); }
+}
+/* Only action groups with a bounded number of buttons sample their backdrop.
+   Individual task rows use the same tint and rim without a compositor layer. */
+:is(.topbar .toolbar, .board-section-heading, .page-heading) .button {
+  -webkit-backdrop-filter: var(--action-optics);
+  backdrop-filter: var(--action-optics);
+}
+:is(#app-shell, dialog) button:is(.button-light, .button-primary):disabled {
+  background: var(--card);
+  color: var(--muted);
+  border-color: var(--line);
+  opacity: 1;
+  filter: none;
+  box-shadow: none;
+  --action-optics: none;
+}
+:root[data-graphics-mode="low-power"] { --action-optics: none; }
+@media (prefers-reduced-transparency: reduce), (prefers-contrast: more), (forced-colors: active) {
+  :root {
+    --action-sheen: none;
+    --action-rim: none;
+    --action-pressed-rim: none;
+    --action-optics: none;
+    --action-edge: currentColor;
+    --action-surface: var(--card);
+  }
+  :is(#app-shell, dialog) button:is(.button-primary, .button-light, .pill.active, [data-action="toggle-task"], [data-action="prev-day"], [data-action="next-day"]):enabled:active {
+    outline: 2px solid currentColor;
+    outline-offset: -3px;
+  }
+}
+html[data-native-toolbar="true"] .topbar .toolbar > button { display: none !important; }

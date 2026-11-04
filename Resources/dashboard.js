@@ -6,6 +6,9 @@
     return;
   }
   const native = Boolean(window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.campus);
+  const nativeToolbar = native && window.CampusDeskNativeToolbar === true;
+  const toolbarButtonIDs = ['grade-notifications-button', 'focus-button', 'sync-button'];
+  let lastToolbarState = '';
   const themeEdition = window.CampusDeskThemeEdition === true;
   const appVersionInfo = window.CampusDeskAppVersion || { version: themeEdition ? '1.2.0' : '0.5.13', name: themeEdition ? 'Lagoon' : '' };
   const setupWizardReleaseVersion = String(appVersionInfo.version || 'unversioned').slice(0, 40);
@@ -2654,6 +2657,7 @@
     if (trigger.dataset.label !== ariaLabel) {
       trigger.innerHTML = icon('bell') + '<span class="grade-notifications-button-label">' + label + '</span>' + (unread ? '<span class="grade-notification-count" aria-hidden="true">' + (unread > 99 ? '99+' : unread) + '</span>' : '');
       trigger.setAttribute('aria-label', ariaLabel); trigger.dataset.label = ariaLabel;
+      trigger.dataset.unread = String(unread);
       setText('grade-notification-status', unread ? ariaLabel : gradeNotificationCopy('没有未读成绩更新', 'No unread grade updates'));
     }
     trigger.setAttribute('aria-expanded', String(dialog.open));
@@ -2682,8 +2686,26 @@
   }
   function closeGradeNotifications() {
     closeDialog('grade-notifications-dialog'); updateGradeNotifications();
-    document.getElementById('grade-notifications-button')?.focus({ preventScroll: true });
+    if (nativeToolbar) { publishNativeToolbar(); send('focusDashboardNotifications'); }
+    else document.getElementById('grade-notifications-button')?.focus({ preventScroll: true });
     if (backgroundRenderPending) requestBackgroundRender();
+  }
+  function toolbarBlocked() {
+    return Boolean(pendingImportRequestID || document.querySelector('dialog[open]'));
+  }
+  function publishNativeToolbar() {
+    if (!nativeToolbar || nativeStateGeneration === null) return;
+    const [bell, focus, sync] = toolbarButtonIDs.map(id => document.getElementById(id));
+    const model = {
+      notificationsLabel: bell.querySelector('.grade-notifications-button-label')?.textContent || '',
+      notificationsAccessibilityLabel: bell.getAttribute('aria-label'),
+      unreadCount: Number(bell.dataset.unread || 0), notificationsExpanded: bell.getAttribute('aria-expanded') === 'true',
+      focusLabel: focus.dataset.label, focusPressed: focus.getAttribute('aria-pressed') === 'true',
+      syncLabel: document.getElementById('sync-label').textContent, syncDisabled: sync.disabled,
+      actionsDisabled: toolbarBlocked()
+    };
+    const signature = JSON.stringify(model);
+    if (signature !== lastToolbarState) { send('updateDashboardToolbar', model); lastToolbarState = signature; }
   }
   function updateStaticChrome() {
     const locale = isEnglish() ? 'en-US' : 'zh-CN';
@@ -3885,6 +3907,13 @@
     receive: function (event) {
       if (!event || typeof event !== 'object') return;
       try {
+        if (event.type === 'dashboardToolbarAction') {
+          if (!nativeToolbar || !toolbarButtonIDs.includes(event.id) || toolbarBlocked() ||
+              event.stateGeneration !== nativeStateGeneration) return;
+          const button = document.getElementById(event.id);
+          if (!button.disabled) button.click();
+          return;
+        }
         if (event.type === 'navigate' && event.page === 'tasks') {
           if (['task-dialog', 'agenda-event-dialog', 'setup-wizard-dialog'].some(id => document.getElementById(id)?.open)) { toast(calendarCopy('请先完成或关闭当前编辑，再打开待办事项。', 'Finish or close the current editor before opening tasks.')); return; }
           if (state.settings.focusMode) { state.settings.focusMode = false; persist(); }
@@ -4179,6 +4208,16 @@
     window.campusDesktop.onEvent(event => window.CampusDesk.receive(event));
   }
   render();
+  if (nativeToolbar) {
+    document.documentElement.dataset.nativeToolbar = 'true';
+    const observer = new MutationObserver(publishNativeToolbar);
+    for (const id of toolbarButtonIDs) {
+      observer.observe(document.getElementById(id), { attributes: true, childList: true, characterData: true, subtree: true });
+    }
+    for (const dialog of document.querySelectorAll('dialog')) observer.observe(dialog, { attributes: true, attributeFilter: ['open'] });
+    observer.observe(document.getElementById('app-shell'), { attributes: true, attributeFilter: ['inert'] });
+    publishNativeToolbar();
+  }
   send('ready');
   send('requestGraphStatus');
   send('requestTeamsAutoStatus');

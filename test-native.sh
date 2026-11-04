@@ -17,6 +17,10 @@ fi
 campus_tests="$(mktemp -d /private/tmp/CampusDesk-tests.XXXXXX)"
 campus_arch="$(uname -m)"
 /usr/bin/xcrun swiftc -swift-version 5 -O -target "$campus_arch-apple-macosx12.0" \
+  -framework AppKit "$campus_root/Sources/DashboardToolbar.swift" "$campus_root/Tests/dashboard-toolbar-smoke.swift" \
+  -o "$campus_tests/dashboard-toolbar-smoke"
+"$campus_tests/dashboard-toolbar-smoke"
+/usr/bin/xcrun swiftc -swift-version 5 -O -target "$campus_arch-apple-macosx12.0" \
   "$campus_root/Sources/NativeWorkQueue.swift" "$campus_root/Tests/native-work-queue-smoke.swift" \
   -o "$campus_tests/native-work-queue-smoke"
 "$campus_tests/native-work-queue-smoke"

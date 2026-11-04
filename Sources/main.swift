@@ -109,6 +109,13 @@ final class SchoolBrowser: NSObject, WKNavigationDelegate, WKUIDelegate, NSWindo
         let refresh = NSButton(title: "刷新", target: self, action: #selector(reloadPage))
         let capture = NSButton(title: "读取当前页到看板", target: self, action: #selector(capturePage))
         let dashboard = NSButton(title: "返回看板", target: self, action: #selector(returnToDashboard))
+        #if compiler(>=6.2)
+        if #available(macOS 26.0, *) {
+            for button in [back, home, refresh, capture, dashboard] {
+                button.bezelStyle = .glass
+            }
+        }
+        #endif
         address.lineBreakMode = .byTruncatingMiddle
         address.textColor = .secondaryLabelColor
         address.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
@@ -409,6 +416,7 @@ final class SyncWorker: NSObject, WKNavigationDelegate {
 final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavigationDelegate, WKUIDelegate {
     var window: NSWindow!
     var dashboard: WKWebView!
+    var dashboardToolbar: DashboardToolbar?
     var statusItem: NSStatusItem!
     var browsers: [String: SchoolBrowser] = [:]
     var workers: [String: SyncWorker] = [:]
@@ -545,6 +553,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         window.minSize = NSSize(width: 900, height: 640)
         window.isReleasedWhenClosed = false
         window.contentView = dashboard
+        dashboardToolbar = DashboardToolbar(window: window) { [weak self] id in
+            guard let self, self.ready, self.stateBridge.awaitingImportRequestID == nil else { return }
+            if id == "grade-notifications-button" { self.window.makeFirstResponder(self.dashboard) }
+            self.emit(["type": "dashboardToolbarAction", "id": id])
+        }
+        if dashboardToolbar != nil {
+            config.userContentController.addUserScript(WKUserScript(source: "window.CampusDeskNativeToolbar = true;",
+                injectionTime: .atDocumentStart, forMainFrameOnly: true))
+        }
         for name in [NSWindow.didChangeOcclusionStateNotification, NSWindow.didMiniaturizeNotification,
                      NSWindow.didDeminiaturizeNotification, NSWindow.willCloseNotification] {
             NotificationCenter.default.addObserver(self, selector: #selector(windowVisibilityChanged(_:)), name: name, object: window)
@@ -1156,6 +1173,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         guard action.utf8.count <= 80 else { return }
         guard CampusStateBridgeBoundary.acceptsEnvelope(body, maximumBytes: CampusSecurity.maximumStateBytes + 4096,
                                                         currentState: state, onImportFailure: emit) else { return }
+        // Presentation updates also run while an import has disabled the page.
+        if action == "updateDashboardToolbar" { dashboardToolbar?.update(body); return }
         if CampusStateBridgeBoundary.requiresCurrentState(action), !stateBridge.acceptsMutation(body["stateGeneration"]) {
             if let requestID = CampusStateBridgeBoundary.importRequestID(body) {
                 emit(["type": "importResult", "requestId": requestID, "success": false, "state": state,
@@ -1167,6 +1186,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
             importFailurePaused = false
         }
         switch action {
+        case "focusDashboardNotifications": dashboardToolbar?.focusNotifications()
         case "ready":
             stateBridge.dashboardReloaded()
             resumeAfterImportAcknowledgement = false

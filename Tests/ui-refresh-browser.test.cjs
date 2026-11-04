@@ -124,6 +124,69 @@ test('all palettes retain their colors and focus remains visible on reset title 
   assert.equal(saved.manualTasks.at(-1).dueAt, '2030-10-09T10:30:00.000Z');
 }));
 
+test('toolbar and primary actions show press, focus and accessible solid states in all palettes', optional, async () => fixture(async page => {
+  const primary = page.locator('.board-section-heading button[data-action="add-task"]');
+  const secondary = page.locator('.board-section-heading button[data-action="go-tasks"]');
+  const complete = page.locator('.board-check').first();
+  const sync = page.locator('#sync-button');
+  const style = (button, property) => button.evaluate((node, property) => getComputedStyle(node)[property], property);
+  for (const [index, palette] of ['sage', 'ocean', 'ember', 'midnight'].entries()) {
+    await page.evaluate(state => CampusDesk.receive({ type: 'state', state }), stateFor('board', palette, index % 2 ? 'en-US' : 'zh-CN'));
+    for (const control of [primary, secondary, sync, complete]) {
+      assert.match(await style(control, 'backgroundImage'), /linear-gradient/, palette);
+      assert.ok(await control.evaluate(node => node.scrollWidth <= node.clientWidth + 1));
+    }
+    assert.notEqual(await style(primary, 'backgroundColor'), await style(secondary, 'backgroundColor'));
+    assert.match(await style(secondary, 'backdropFilter'), /blur/);
+    assert.equal(await style(complete, 'backdropFilter'), 'none', 'no blur per task');
+    assert.ok(await page.locator('.board-side-column .calendar-import-actions .button').evaluate(node =>
+      node.getBoundingClientRect().right <= node.closest('.card').getBoundingClientRect().right + 1), 'calendar action fits its card');
+  }
+  await secondary.focus();
+  await page.keyboard.press('Shift+Tab');
+  assert.ok(await primary.evaluate(node => node.matches(':focus-visible')), 'keyboard navigation reaches Add to-do');
+  assert.equal(await style(primary, 'outlineStyle'), 'solid');
+  assert.equal(await style(primary, 'outlineWidth'), '2px');
+  if (process.env.CAMPUS_BUTTON_SCREENSHOT) await page.screenshot({ path: process.env.CAMPUS_BUTTON_SCREENSHOT });
+  await primary.hover();
+  await page.mouse.down();
+  assert.notEqual(await style(primary, 'transform'), 'none');
+  await page.mouse.up();
+  assert.equal(await page.locator('#task-dialog').evaluate(node => node.open), true);
+  await page.locator('#task-dialog [data-action="close-task"]').first().click();
+
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await primary.hover();
+  await page.mouse.down();
+  assert.equal(await style(primary, 'transform'), 'none');
+  await page.mouse.move(1, 1);
+  await page.mouse.up();
+  const cdp = await page.context().newCDPSession(page);
+  for (const feature of [{ name: 'prefers-reduced-transparency', value: 'reduce' }, { name: 'prefers-contrast', value: 'more' }]) {
+    await cdp.send('Emulation.setEmulatedMedia', { features: [feature] });
+    assert.equal(await page.evaluate(({ name, value }) => matchMedia('(' + name + ':' + value + ')').matches, feature), true);
+    for (const control of [primary, secondary, complete, sync]) {
+      assert.equal(await style(control, 'backgroundImage'), 'none');
+      assert.equal(await style(control, 'boxShadow'), 'none');
+      assert.equal(await style(control, 'backdropFilter'), 'none');
+    }
+  }
+  await cdp.send('Emulation.setEmulatedMedia', { features: [] });
+  await page.evaluate(() => CampusDesk.receive({ type: 'status', source: 'managebac', message: 'Reading', busy: true }));
+  assert.equal(await sync.isDisabled(), true);
+  assert.equal(await style(sync, 'backgroundImage'), 'none');
+  assert.equal(await style(sync, 'boxShadow'), 'none');
+  const completedID = await complete.getAttribute('data-id');
+  await complete.click();
+  await secondary.click();
+  await page.locator('[data-action="task-filter"][data-filter="done"]').click();
+  const completed = page.locator('.todo-complete-button[data-id="' + completedID + '"]');
+  assert.equal(await completed.getAttribute('aria-pressed'), 'true');
+  assert.equal(await style(completed, 'color'), 'rgb(255, 255, 255)');
+  assert.equal(await style(completed, 'backdropFilter'), 'none');
+  assert.match(await style(page.locator('[data-action="task-filter"][data-filter="done"]'), 'backgroundImage'), /linear-gradient/);
+}));
+
 test('reduced motion and low power keep hover feedback stationary without hiding Liquid Glass', optional, async () => fixture(async page => {
   for (const mode of ['reduced-motion', 'low-power']) {
     await page.emulateMedia({ reducedMotion: mode === 'reduced-motion' ? 'reduce' : 'no-preference' });

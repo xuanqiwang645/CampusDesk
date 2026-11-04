@@ -272,6 +272,7 @@ if (!canvas) {
     let lastFrame = -Infinity;
     let frameID = 0, frameTimer = 0, lastInteraction = performance.now();
     const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
+    const reducedTransparency = matchMedia('(prefers-reduced-transparency: reduce)');
     const glassSelectors = [
       '.sidebar', '.topbar', '.card', '.class-clock', '.connect-banner',
       '.board-hero', '.board-kpi', '.board-task-section', '.board-mini-card', '.board-task-card',
@@ -368,7 +369,7 @@ if (!canvas) {
       // loop still costs CPU/GPU even when no pixels need to change.
       if (!staticMode() && milliseconds - lastInteraction < 2500) scheduleFrame(40);
     }
-    function hidden() { return document.hidden || root.dataset.windowVisible === 'false'; }
+    function hidden() { return document.hidden || root.dataset.windowVisible === 'false' || reducedTransparency.matches; }
     function staticMode() { return reducedMotion.matches || root.dataset.graphicsMode === 'low-power'; }
     function scheduleFrame(delay = 0) {
       if (hidden() || frameID || frameTimer) return;
@@ -404,6 +405,7 @@ if (!canvas) {
     new MutationObserver(invalidate).observe(root, { attributes: true, attributeFilter: ['data-graphics-mode', 'data-window-visible'] });
     if ('ResizeObserver' in window) new ResizeObserver(invalidate).observe(document.getElementById('app-shell'));
     reducedMotion.addEventListener?.('change', invalidate);
+    reducedTransparency.addEventListener?.('change', invalidate);
 
     root.classList.add('webgl-liquid-glass');
     canvas.hidden = false;

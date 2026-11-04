@@ -106,6 +106,17 @@ test('real WebGL drawing pauses for hidden windows and low-power mode, then resu
     await page.evaluate(()=>{delete document.hidden;document.dispatchEvent(new Event('visibilitychange'));});
     await page.waitForFunction(before=>glassTestDraws>before,before);
 
+    const session = await page.context().newCDPSession(page);
+    await session.send('Emulation.setEmulatedMedia', {features:[{name:'prefers-reduced-transparency',value:'reduce'}]});
+    await page.waitForFunction(()=>matchMedia('(prefers-reduced-transparency: reduce)').matches);
+    await assertPaused('reduced transparency suspends the hidden glass surface');
+    before=await draws();
+    await page.locator('#graphics-mode').dispatchEvent('pointerdown');
+    await page.waitForTimeout(150);
+    assert.equal(await draws(), before, 'button input does not draw the hidden glass canvas');
+    await session.send('Emulation.setEmulatedMedia', {features:[]});
+    await page.waitForFunction(before=>glassTestDraws>before,before);
+
     await page.locator('#graphics-mode').selectOption('low-power');
     await page.waitForFunction(()=>document.documentElement.dataset.graphicsMode==='low-power');
     await assertPaused('low-power mode does not schedule a continuous animation loop');

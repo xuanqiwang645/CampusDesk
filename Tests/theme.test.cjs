@@ -35,7 +35,11 @@ test('the WebGL liquid-glass compositor loads after the content dashboard', () =
   const glass = fs.readFileSync(path.join(resources, 'liquid-glass.css'), 'utf8');
   const shader = fs.readFileSync(path.join(resources, 'liquid-glass-webgl.js'), 'utf8');
   for (const file of fs.readdirSync(resources).filter(file => file.endsWith('.css'))) {
-    assert.doesNotMatch(fs.readFileSync(path.join(resources, file), 'utf8'), /backdrop-filter/, file + ' must not fake glass with CSS backdrop capture');
+    const css = fs.readFileSync(path.join(resources, file), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
+    for (const [, selector] of css.matchAll(/([^{}]+)\{[^{}]*backdrop-filter\s*:[^{}]*\}/g)) {
+      assert.equal(file, 'ui-refresh.css', 'backdrop sampling stays within bounded action groups');
+      assert.equal(selector.trim(), ':is(.topbar .toolbar, .board-section-heading, .page-heading) .button');
+    }
   }
   assert.match(html, /id="liquid-glass-canvas"/);
   assert.match(html, /src="three\.min\.js"/);

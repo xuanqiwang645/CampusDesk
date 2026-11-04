@@ -94,3 +94,49 @@ test('grade notifications handle unknown impacts and zero marks in English witho
     assert.deepEqual(errors, []);
   } finally { await browser.close(); }
 });
+
+test('native toolbar mirrors localized controls and routes only enabled actions on the current page', optional, async () => {
+  const browser = await launchChromium();
+  try {
+    const page = await browser.newPage();
+    await page.addInitScript(() => {
+      window.CampusDeskNativeToolbar = true;
+      window.messages = [];
+      window.webkit = { messageHandlers: { campus: { postMessage: value => window.messages.push(value) } } };
+    });
+    await page.goto(pathToFileURL(path.resolve(__dirname, '../Resources/index.html')).href);
+    await page.evaluate(() => {
+      const state = CampusCore.emptyState();
+      state.settings.language = 'en-US';
+      CampusDesk.receive({ type: 'state', state, stateGeneration: 3 });
+    });
+    const latest = () => page.evaluate(() => messages.filter(m => m.action === 'updateDashboardToolbar').at(-1));
+    const invoke = (id, generation = 3) => page.evaluate(([id, stateGeneration]) =>
+      CampusDesk.receive({ type: 'dashboardToolbarAction', id, stateGeneration }), [id, generation]);
+    const count = action => page.evaluate(a => messages.filter(m => m.action === a).length, action);
+    await page.waitForFunction(() => messages.some(m => m.action === 'updateDashboardToolbar'));
+    assert.equal((await latest()).notificationsLabel, 'Grade updates');
+    assert.equal((await latest()).unreadCount, 0);
+    assert.equal(await page.locator('#focus-button').isVisible(), false);
+    await invoke('focus-button', 2);
+    assert.equal(await count('saveState'), 0);
+    await invoke('focus-button');
+    assert.equal((await latest()).focusPressed, true);
+    assert.equal(await count('saveState'), 1);
+    await page.evaluate(() => CampusDesk.receive({ type: 'status', source: 'seiue', stateGeneration: 3, busy: true, message: 'Reading' }));
+    assert.equal((await latest()).syncDisabled, true);
+    await invoke('sync-button');
+    assert.equal(await count('sync'), 0);
+    await page.evaluate(() => CampusDesk.receive({ type: 'status', source: 'seiue', stateGeneration: 3, busy: false, message: '' }));
+    await invoke('sync-button');
+    assert.equal(await count('sync'), 1);
+    await invoke('grade-notifications-button');
+    assert.equal(await page.locator('#grade-notifications-dialog').evaluate(el => el.open), true);
+    assert.equal((await latest()).actionsDisabled, true);
+    await invoke('focus-button');
+    assert.equal(await count('saveState'), 1, 'native controls cannot mutate a page underneath a modal');
+    await page.keyboard.press('Escape');
+    assert.equal((await latest()).actionsDisabled, false);
+    assert.equal(await count('focusDashboardNotifications'), 1);
+  } finally { await browser.close(); }
+});
