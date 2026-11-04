@@ -32,20 +32,20 @@
 
 /* Borders do the work of separating nested cards. Small, stationary shadows
    avoid repainting broad soft edges on each pointer movement. */
-:root .app-shell[data-dashboard-theme][data-color-theme] :is(.card, .class-clock, .button-light, .board-kpi, .board-task-section, .board-mini-card, .board-task-card) {
+:root .app-shell[data-dashboard-theme][data-color-theme] :is(.card, .class-clock, .button-light, .board-task-section, .board-mini-card) {
   box-shadow: var(--ui-shadow);
 }
-:root.webgl-liquid-glass .app-shell[data-dashboard-theme][data-color-theme] :is(.card, .class-clock, .button-light, .board-kpi, .board-task-section, .board-mini-card, .board-task-card) {
+:root.webgl-liquid-glass .app-shell[data-dashboard-theme][data-color-theme] :is(.card, .class-clock, .button-light, .board-task-section, .board-mini-card) {
   box-shadow: var(--ui-glass-shadow);
 }
 :root .app-shell[data-dashboard-theme][data-color-theme] :is(.sidebar, .topbar) { box-shadow: none; }
 :root .app-shell[data-dashboard-theme][data-color-theme] :is(.nav-item, .nav-item > .icon, .card-title > .icon, .board-check, .focus-button) {
   box-shadow: none;
 }
-.board-kpi, .board-task-card, .board-mini-card, .todo-deadline-card {
+.board-task-card, .board-mini-card, .todo-deadline-card {
   transition: border-color .14s ease, background-color .14s ease;
 }
-.board-kpi:hover, .board-task-card:hover, .board-mini-card:hover, .todo-deadline-card:hover { transform: none; }
+.board-task-card:hover, .board-mini-card:hover, .todo-deadline-card:hover { transform: none; }
 .board-hero {
   display: flex;
   align-items: center;
@@ -58,35 +58,61 @@
 .board-hero h1 { margin: 0; color: var(--ink); font-size: 24px; font-weight: 600; line-height: 1.28; letter-spacing: -.02em; }
 .board-hero p { margin: 5px 0 0; color: var(--muted); font-size: 14px; line-height: 1.5; }
 .board-hero > button { flex: none; }
-.board-kpi { min-height: 108px; padding: 17px 16px 15px; border-radius: 15px; }
-.board-kpi strong { margin-block: 8px 5px; font-weight: 650; font-variant-numeric: tabular-nums; letter-spacing: -.025em; }
-.board-kpi span, .board-kpi small { line-height: 1.5; }
+.board-statistics {
+  display: grid;
+  grid-template-columns: minmax(0, 1.7fr) minmax(0, 1fr);
+  margin-bottom: 18px;
+  padding: 14px 18px;
+  border: 1px solid var(--line);
+  border-radius: 15px;
+  background: var(--card);
+}
+.board-statistics dl { display: grid; align-items: end; gap: 8px 12px; margin: 0; }
+.board-task-totals { grid-template-columns: repeat(4, minmax(0, 1fr)); padding-right: 18px; }
+.board-grade-totals { grid-template-columns: repeat(2, minmax(0, 1fr)); padding-left: 18px; border-left: 1px solid var(--line); }
+.board-statistics dt { color: var(--muted); font-size: 12px; font-weight: 550; line-height: 1.35; overflow-wrap: anywhere; }
+.board-statistics dd { margin: 5px 0 0; color: var(--ink); font-size: 22px; font-weight: 600; line-height: 1.15; font-variant-numeric: tabular-nums; }
+.board-statistics dd small { display: inline-block; font-size: 12px; font-weight: 450; color: var(--muted); }
 .board-task-section { border-radius: 18px; }
-.board-section-heading { gap: 12px; }
+.board-section-heading { flex-flow: row wrap; align-items: center; gap: 10px 16px; }
 .board-section-heading > div:last-child { flex-wrap: wrap; }
-.board-task-card { padding: 14px 13px; border-radius: 12px; }
-.board-task-card h3 { line-height: 1.6; font-weight: 550; }
-:root .app-shell[data-dashboard-theme][data-color-theme] .board-task-card h3 { color: var(--ink); }
-.board-task-card h3 button { text-underline-offset: 3px; }
-.board-task-card .board-course { color: var(--muted); }
-.board-due { font-variant-numeric: tabular-nums; }
-.board-check { width: 28px; height: 28px; flex-shrink: 0; }
-.task-source-heading, .group-heading { min-width: 0; }
-.task-source-heading > div, .group-heading > div { min-width: 0; }
+.board-section-heading h2 small { margin-left: 4px; color: var(--muted); font-size: 13px; font-weight: 500; }
+
+.task-source-heading, .group-heading, .task-source-heading > div, .group-heading > div { min-width: 0; }
 .task-source-heading h2, .group-heading h2 { overflow-wrap: anywhere; }
 .task-source-heading > span { flex-shrink: 0; }
 .task-source-subjects { border-left-width: 2px; }
-.board-source-groups .task-source-heading { padding-bottom: 12px; }
-.board-source-groups .group-heading { margin-bottom: 10px; }
-.board-source-groups .group-heading h2 { font-size: 13px; font-weight: 600; }
 .board-side-column .school-calendar-card .card-header { flex-wrap: wrap; }
-.board-source-groups .task-source-heading h2, .board-source-groups .group-heading h2 { color: var(--ink); }
-.board-source-groups .task-source-heading p, .board-source-groups .group-heading p,
-.board-source-groups .group-heading h2 span { color: var(--muted); }
-.board-task-column .board-task-grid {
-  grid-template-columns: repeat(auto-fit, minmax(min(160px, 100%), 1fr));
-  gap: 10px;
-}
+.board-source-groups .task-source-heading { justify-content: flex-start; align-items: baseline; gap: 8px; padding-bottom: 6px; }
+.board-source-groups :is(.task-source-heading, .group-heading) p { display: none; }
+.board-source-groups .task-source-heading h2 { color: var(--ink); font-size: 15px; }
+.board-source-groups .task-source-heading > span { background: transparent; padding: 0; color: var(--muted); font-size: 12px; }
+.board-source-groups .task-source-subjects { border: 0; padding: 0; }
+.board-source-groups .task-subject-group { padding: 8px 0; border: 0; }
+.board-source-groups .group-heading { flex-direction: row; align-items: center; gap: 8px; margin-bottom: 0; }
+.board-source-groups .group-heading h2 { color: var(--muted); font-size: 13px; font-weight: 600; }
+.board-source-groups .group-heading h2 span { position: absolute; width: 1px; height: 1px; margin: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.board-source-groups .focus-button { justify-content: center; min-width: 0; width: 28px; height: 28px; flex: none; padding: 0; border-color: transparent; background: transparent; color: var(--muted); }
+.board-source-groups .focus-button span { display: none; }
+.board-source-groups .focus-button:is(.active, :hover) { background: var(--teal-soft); color: var(--accent-ink); }
+.board-task-column:empty { display: none; }
+.board-task-column:has(+ .board-task-column:empty), .board-task-column:empty + .board-task-column { grid-column: 1 / -1; }
+.board-task-column .board-task-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 0; }
+.board-task-card { display: grid; grid-template-columns: 28px minmax(0, 1fr); align-items: start; gap: 10px; padding: 10px 0; }
+.board-task-card + .board-task-card { border-top: 1px solid var(--line); }
+.board-task-card h3 { margin: 0; color: var(--ink); font-size: 15px; font-weight: 550; line-height: 1.45; overflow-wrap: anywhere; }
+.board-task-card h3 button { all: unset; cursor: pointer; text-underline-offset: 3px; }
+.board-task-card h3 button:hover, .board-set-deadline:hover, .board-more:hover { text-decoration: underline; }
+.board-check { width: 28px; height: 28px; }
+.board-check[aria-pressed="false"]:not(:hover, :focus-visible) svg { opacity: 0; }
+.board-row-meta { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 10px; margin-top: 3px; color: var(--muted); font-size: 12px; line-height: 1.45; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.board-row-meta .todo-time-left { margin: 0; color: var(--accent-ink); font: inherit; font-weight: 550; white-space: normal; }
+.board-task-card.todo-band-overdue .todo-time-left { color: var(--danger); }
+.board-row-meta .todo-time-left:is([data-band="blue"], [data-band="ok"]) { display: none; }
+.board-row-meta .visually-hidden { width: 1px; height: 1px; padding: 0; margin: 0; }
+.board-set-deadline, button.board-more { padding: 0; border: 0; background: none; color: var(--accent-ink); font: inherit; cursor: pointer; }
+.board-row-meta .board-set-deadline { margin: 0; text-underline-offset: 2px; }
+button.board-more { margin: 5px 0; font-size: 12px; }
 
 /* An inset ring remains visible on clipped cards and all:unset title buttons.
    Use the palette's readable accent, including the bright midnight accent. */
@@ -104,7 +130,7 @@
 
 /* Legacy board accents were fixed green even in the midnight preset. */
 :root[data-color-theme="midnight"] { --ui-glass-shadow: inset 0 1px 0 rgba(255, 255, 255, .08), 0 3px 10px rgba(0, 0, 0, .12); }
-:root[data-color-theme="midnight"] .app-shell[data-dashboard-theme="board"] :is(.board-kpi-open strong, .board-kpi-gpa-linear strong, .board-section-heading p, .board-mini-card > p, .focus-button) {
+:root[data-color-theme="midnight"] .app-shell[data-dashboard-theme="board"] :is(.board-mini-card > p, .focus-button) {
   color: var(--accent-ink);
 }
 :root[data-color-theme="midnight"] .app-shell[data-dashboard-theme="board"] :is(.board-tip span, .board-mini-card > .board-muted, .clock-label, .clock-secondary p, .clock-secondary small, .empty h3) {
@@ -115,17 +141,15 @@
 @media (max-width: 1050px) {
   .content { padding-top: 25px; }
 }
-@media (min-width: 581px) and (max-width: 900px) {
-  .board-task-column .board-task-grid { grid-template-columns: minmax(0, 1fr); }
-}
 @media (max-width: 760px) {
   .board-hero { padding-inline: 14px; }
-  .board-kpi-grid .board-kpi:last-child { grid-column: auto; }
+  .board-statistics { grid-template-columns: 1fr; gap: 12px; padding: 12px 14px; }
+  .board-task-totals { padding-right: 0; }
+  .board-grade-totals { padding: 10px 0 0; border: 0; border-top: 1px solid var(--line); }
   .board-header-clock .clock-secondary { max-width: 100%; }
   .board-task-section { padding: 16px; }
   .board-task-column-left > .task-source-teams,
   .board-task-column-right > .task-source-managebac { padding-top: 20px; }
-  .board-source-groups .group-heading { flex-wrap: wrap; }
 }
 @media (max-width: 580px) {
   .sidebar { padding: 15px 16px 10px; overflow: visible; }
@@ -137,14 +161,6 @@
   .topbar .button { min-height: 34px; padding: 8px 10px; }
   .content { padding: 22px 16px 32px; }
   .board-hero h1 { font-size: 22px; }
-  .board-kpi-grid { gap: 9px; }
-  .board-kpi { padding: 15px; min-height: 104px; }
-  .board-kpi strong { font-size: 28px; }
-  .board-task-column .board-task-grid { grid-template-columns: minmax(0, 1fr); }
-  .board-due-card { min-height: 158px; }
-  .board-due-card .board-course { font-size: 11px; }
-  .board-task-card h3 { font-size: 14px; }
-  .board-due-foot .board-due, .board-due-foot .todo-time-left { font-size: 11px; }
   .board-section-heading .button { min-height: 36px; }
   .card-header { flex-wrap: wrap; }
   .date-control { min-width: 0; flex-wrap: wrap; gap: 8px; }
@@ -154,10 +170,10 @@
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; animation: none !important; transition: none !important; }
-  .nav-item:active, .nav-item.active > .icon, .board-kpi:hover, .board-task-card:hover,
+  .nav-item:active, .nav-item.active > .icon, .board-task-card:hover,
   .board-mini-card:hover, .todo-deadline-card:hover { transform: none; }
 }
-:root[data-graphics-mode="low-power"] .app-shell :is(.button, .pill, .focus-button, .nav-item, .nav-item > .icon, .board-kpi, .board-task-card, .board-mini-card, .todo-deadline-card) {
+:root[data-graphics-mode="low-power"] .app-shell :is(.button, .pill, .focus-button, .nav-item, .nav-item > .icon, .board-task-card, .board-mini-card, .todo-deadline-card) {
   transition: none;
 }
 

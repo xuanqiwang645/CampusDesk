@@ -166,7 +166,7 @@
     '频道里的重要信息，在这里。': 'Important channel updates, in one place.', '按发件人和频道整理；特别关注仅影响 CampusDesk 的优先展示。': 'Grouped by sender and channel; favorites only affect CampusDesk ordering.',
     'English Corner，记得赴约。': 'English Corner, don\'t miss it.', '搜索已读取原文和附件文字，核对最新安排。': 'Search captured posts and attachment text to confirm the latest plan.',
     '现在没有待完成的事项': 'Nothing is due right now', '等待处理的任务': 'Tasks waiting for you', '优先回到原页面核对': 'Check the source page first', '有明确截止时间': 'With confirmed due dates', '仅本机勾选记录': 'Local completion records only', '等待成绩同步': 'Waiting for grade sync', '登录希悦并打开课表后，这里会显示当天课程。': 'Sign in to Seiue and open the schedule to see today\'s classes here.', '卡片只整理已经读取到的课程、成绩和作业；点击学校任务可查看原文要求。': 'Cards organize only captured schedules, grades, and assignments; open school tasks to read the original requirements.', '标为已完成：': 'Mark complete: ', '标为未完成：': 'Mark incomplete: ',
-    '集中处理最重要的事': 'Focus on what matters most', '今日提示': 'Today\'s note', '信息以原平台为准': 'The source platform is authoritative', '等待课表同步': 'Waiting for schedule sync', '节已读取课程': 'captured classes', '7 天内': 'Within 7 days', '今日概览': 'Today at a glance',
+    '今日提示': 'Today\'s note', '信息以原平台为准': 'The source platform is authoritative', '等待课表同步': 'Waiting for schedule sync', '节已读取课程': 'captured classes', '7 天内': 'Within 7 days', '今日概览': 'Today at a glance',
     '今天，也有条不紊。': 'Today, steady and organized.', '课程、成绩和待办，在这里从容安排。': 'Schedule, grades, and to-dos, organized in one place.', '完整课表': 'Full schedule', '先把你的课程表接进来': 'Connect your schedule first', '在应用中登录希悦并打开课程表，这里的每一天就有了安排。': 'Sign in to Seiue and open your schedule to plan each day here.', '打开希悦': 'Open Seiue', '成绩详情': 'Grade details', '非官方 · 等权参考': 'Unofficial · equally weighted', '门可用课程': ' available courses', '按 A 至 F 的 12 档换算（93 分起为 4.0），课程等权，不含 AP 加权。': '12 grade bands from A to F (4.0 from 93%), equally weighted; no AP weighting.', '不含 AP 加权。': 'AP weighting is not included.', '待办一览': 'To-do overview', '今日截止': 'Due today', '接下来要做': 'Up next', '完成勾选仅保存在本机': 'Completion checks stay on this Mac', '不代表已向学校提交': 'They do not submit work to school', '老师的反馈': 'Teacher feedback', '等待新的反馈': 'Waiting for new feedback', '同步后汇总已读取的老师评语。仅覆盖已读取页面。': 'Captured teacher feedback appears after sync; coverage is limited to pages read.', '个附件': ' attachment(s)', '打开学校任务': 'Open school task',
     '课表日期': 'Schedule date', '校历事件': 'School calendar events', '导入校历': 'Import school calendar', '选择 .ics 校历文件': 'Choose an .ics calendar file', '尚未导入校历': 'No school calendar imported', '导入后会在总览和课程表中显示当天校历事件。': 'Imported events appear on the overview and schedule for their date.', '再次导入会替换当前本机校历。': 'Importing again replaces the calendar saved on this Mac.', '清除校历': 'Remove calendar', '全天': 'All day', '跨日': 'Multi-day', '导入于': 'Imported', '今天没有校历事件': 'No calendar events today', '没有校历事件': 'No calendar events for this date', '已导入校历：': 'Imported calendar: ', '请选择 .ics 格式的校历文件。': 'Choose a calendar file in .ics format.', '校历文件超过 5 MB': 'Calendar file exceeds 5 MB.', '校历文件不是有效的 UTF-8 文本': 'Calendar file is not valid UTF-8 text.', '无法读取校历文件': 'Could not read calendar file.', '校历文件过大，请选择 5 MB 以内的文件。': 'Calendar file is too large; choose a file under 5 MB.', '校历已导入，共 ': 'Calendar imported: ', ' 条事件。': ' event(s).', '导入会替换当前本机校历，确定继续吗？': 'Importing replaces the calendar saved on this Mac. Continue?', '确定清除本机导入的校历吗？': 'Remove the calendar saved on this Mac?', '校历已清除。': 'Calendar removed.', '校历导入失败：': 'Could not import calendar: ', '校历只保存在本机，不会上传。': 'The school calendar stays on this Mac and is never uploaded.',
     '课表日期': 'Schedule date', '自习仅补充学校页面中能确认时间的空白课节，不推测未读取的课表。': 'Self-study only fills confirmed open periods; it does not infer an unread schedule.', '勾选仅更新本机待办状态，不会提交作业、回复老师或修改 ManageBac / Teams。学科特别关注只保存在本机。': 'Checks only update local to-do status; they never submit work, reply to teachers, or modify ManageBac / Teams. Subject favorites stay on this Mac.',
@@ -843,7 +843,7 @@
   function focusButton(action, value, active, label) {
     const englishLabel = isEnglish() ? label.replace(/^学科：/, 'Subject: ').replace(/^频道：/, 'Channel: ') : label;
     const aria = isEnglish() ? (active ? 'Unfavorite ' : 'Favorite ') + englishLabel : (active ? '取消' : '特别关注') + label;
-    return '<button type="button" class="focus-button ' + (active ? 'active' : '') + '" data-action="' + esc(action) + '" data-value="' + esc(value) + '" aria-pressed="' + active + '" aria-label="' + esc(aria) + '">' + icon('focus') + '<span>' + (active ? '已关注' : '特别关注') + '</span></button>';
+    return '<button type="button" class="focus-button ' + (active ? 'active' : '') + '" data-action="' + esc(action) + '" data-value="' + esc(value) + '" aria-pressed="' + active + '" aria-label="' + esc(aria) + '" title="' + esc(aria) + '">' + icon('focus') + '<span>' + (active ? '已关注' : '特别关注') + '</span></button>';
   }
   function postSender(post) { return post.author || t('发件人未标明'); }
   function postRecipient(post) { return post.recipient || t('收件人未标明'); }
@@ -1081,39 +1081,36 @@
       '<section class="card task-summary-card">' + cardHeader('tasks', '待办一览', goLink('tasks', '全部待办')) + '<div class="task-stats"><div class="stat"><span class="stat-number">' + openTasks.length + '</span><span class="stat-name">未完成</span></div><div class="stat"><span class="stat-number">' + dueToday + '</span><span class="stat-name">今日截止</span></div><div class="stat overdue"><span class="stat-number">' + overdue + '</span><span class="stat-name">已逾期</span></div></div></section></div>' +
       '<div class="overview-bottom"><section class="card overview-task-sources">' + cardHeader('tasks', '接下来要做', button(icon('plus') + '添加待办', 'add-task', '', 'button-plain')) + (openTasks.length ? taskPreview : '<div class="empty small-empty"><h3>给重要的事留一个位置</h3><p>学校任务会在同步后出现，也可以先添加自己的待办。</p></div>') + '<div class="section-foot"><span>完成勾选仅保存在本机</span><span>不代表已向学校提交</span></div></section><section class="card feedback-preview">' + cardHeader('feedback', '老师的反馈', goLink('feedback', '查看全部')) + (feedback.length ? feedbackRows(feedback, 1) : '<div class="empty small-empty"><h3>等待新的反馈</h3><p>同步后汇总已读取的老师评语。仅覆盖已读取页面。</p></div>') + sourceFooter('managebac') + '</section></div>';
   }
-  function boardDueLabel(task) {
-    const due = taskDue(task);
-    return due.label === '未标明' ? '截止时间未标明' : due.label;
-  }
   function boardTaskCards(tasks, limit) {
-    const visible = tasks.slice(0, limit || tasks.length);
-    if (!visible.length) return '<div class="board-empty"><span>' + icon('tasks') + '</span><h3>现在没有待完成的事项</h3><p>学校任务同步后会出现在这里；也可以从经典面板添加个人待办。</p></div>';
-    const now = Date.now();
+    if (!tasks.length) return '<div class="board-empty"><h3>' + (isEnglish() ? 'No open tasks' : '暂无待办') + '</h3></div>';
+    const visible = tasks.slice(0, limit), now = Date.now(), en = isEnglish();
+    const labels = en
+      ? { overdue: 'Overdue', urgent: 'Urgent', soon: 'Due soon', blue: 'On track', ok: 'Plenty of time' }
+      : { overdue: '已逾期', urgent: '紧急', soon: '较急', blue: '正常', ok: '充裕' };
     const cards = visible.map(task => {
-      const source = task.source === 'teams' ? 'teams' : task.source === 'managebac' ? 'managebac' : 'manual';
-      const urgency = todoCardUrgency(Date.parse(task.dueAt), now);
-      const labels = isEnglish()
-        ? { overdue: 'Overdue', urgent: 'Urgent', soon: 'Due soon', blue: 'On track', ok: 'Plenty of time', unknown: 'Check due date' }
-        : { overdue: '已逾期', urgent: '紧急', soon: '较急', blue: '正常', ok: '充裕', unknown: '待核对' };
-      const sourceLabel = source === 'teams' ? 'Teams' : source === 'managebac' ? 'ManageBac' : (isEnglish() ? 'Personal' : '个人');
-      const course = task.course || (source === 'manual' ? (isEnglish() ? 'Personal task' : '个人待办') : sourceName(source));
-      const hasDueLabel = String(task.dueLabel || '').trim().replace(/^(?:homework\s+)?(?:deadline|due(?:\s+date)?|截止(?:时间|日期)?)\s*[:：]?\s*$/i, '');
-      const dueLabel = urgency.dueAt
-        ? fmtDate(urgency.dueAt, { year: 'numeric', month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false })
-        : (hasDueLabel || (source === 'manual' ? (isEnglish() ? 'No deadline set' : '未设置截止时间') : (isEnglish() ? 'Due date not provided' : '截止时间未标明')));
-      const countdown = urgency.leftText || (source === 'manual' ? (isEnglish() ? 'Optional deadline' : '截止时间可选') : (isEnglish() ? 'Date unconfirmed' : (hasDueLabel ? '完整日期待核对' : '日期待核对')));
-      const sourceClass = source === 'teams' ? 'teal' : source === 'managebac' ? 'amber' : 'violet';
-      const knownDue = urgency.dueAt > 0;
-      if (source === 'manual' && !knownDue) labels.unknown = isEnglish() ? 'No deadline' : '无截止时间';
-      const ariaLabel = (isEnglish() ? 'Deadline urgency: ' : '截止紧迫度：') + labels[urgency.band] + (knownDue ? ' · ' + countdown : '');
-      return '<article data-dom-key="task-' + esc(task.id) + '" class="board-task-card board-due-card board-accent-' + (urgency.band === 'overdue' || urgency.band === 'urgent' ? 'rose' : sourceClass) + ' todo-band-' + urgency.band + '" data-source="' + source + '" data-due-ms="' + urgency.dueAt + '">' +
-        '<div class="board-task-top"><span class="board-course" title="' + esc(course) + '">' + esc(course) + '</span><span class="board-source">' + esc(sourceLabel) + '</span><span class="todo-urgency" aria-label="' + esc(ariaLabel) + '">' + esc(labels[urgency.band]) + '</span></div>' +
-        '<h3><button type="button" data-action="task-detail" data-id="' + esc(task.id) + '">' + esc(task.title) + '</button></h3>' +
-        '<div class="todo-urgency-bar" role="progressbar" aria-label="' + esc(isEnglish() ? 'Deadline urgency' : '截止紧迫度') + '" aria-valuemin="0" aria-valuemax="100" aria-valuenow="' + Math.round(urgency.progress * 100) + '"><span data-todo-progress style="width:' + (urgency.progress * 100).toFixed(1) + '%"></span></div>' +
-        '<div class="board-task-foot board-due-foot"><span class="board-due' + (urgency.band === 'overdue' ? ' overdue' : '') + '" title="' + esc(dueLabel) + '">' + icon('clock') + '<span>' + esc(dueLabel) + '</span></span><button class="board-check" type="button" data-action="toggle-task" data-id="' + esc(task.id) + '" aria-label="' + esc((isEnglish() ? (task.completed ? 'Mark incomplete: ' : 'Mark complete: ') : (task.completed ? '标为未完成：' : '标为已完成：')) + task.title) + '" aria-pressed="' + Boolean(task.completed) + '">' + icon('check') + '</button><span class="todo-time-left' + (knownDue ? '' : ' unknown') + '" data-todo-countdown data-band="' + urgency.band + '">' + esc(countdown) + '</span></div>' +
-        (source === 'manual' && !knownDue ? '<button class="board-set-deadline" type="button" data-action="task-detail" data-id="' + esc(task.id) + '">' + (isEnglish() ? 'Set a deadline' : '设置截止时间') + '</button>' : '') + '</article>';
+      const id = esc(task.id), urgency = todoCardUrgency(Date.parse(task.dueAt), now);
+      const detailAction = 'type="button" data-action="task-detail" data-id="' + id + '"';
+      let deadline;
+      if (urgency.dueAt) {
+        const date = fmtDate(urgency.dueAt, { year: 'numeric', month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false });
+        const urgencyLabel = en ? 'Deadline urgency' : '截止紧迫度';
+        deadline = '<time class="board-due" datetime="' + esc(task.dueAt) + '"><span>' + esc(date) + '</span></time>' +
+          '<span class="todo-urgency visually-hidden" aria-label="' + esc(urgencyLabel + (en ? ': ' : '：') + labels[urgency.band] + ' · ' + urgency.leftText) + '">' + esc(labels[urgency.band]) + '</span>' +
+          '<span class="todo-time-left" data-todo-countdown data-band="' + urgency.band + '">' + esc(urgency.leftText) + '</span>' +
+          '<span class="todo-urgency-bar visually-hidden" role="progressbar" aria-label="' + urgencyLabel + '" aria-valuemin="0" aria-valuemax="100" aria-valuenow="' + Math.round(urgency.progress * 100) + '"><span data-todo-progress style="width:' + (urgency.progress * 100).toFixed(1) + '%"></span></span>';
+      } else if (task.source === 'manual') {
+        deadline = '<button class="board-set-deadline" ' + detailAction + '>' + (en ? 'Set a deadline' : '设置截止时间') + '</button>';
+      } else {
+        const sourceLabel = String(task.dueLabel || '').trim().replace(/^(?:homework\s+)?(?:deadline|due(?:\s+date)?|截止(?:时间|日期)?)\s*[:：]?\s*$/i, '');
+        deadline = '<span class="board-due" title="' + esc(sourceLabel) + '">' + esc(sourceLabel || (en ? 'Due date unconfirmed' : '截止时间待确认')) + '</span>';
+      }
+      const complete = (en ? 'Mark complete: ' : '标为已完成：') + task.title;
+      return '<article data-dom-key="task-' + id + '" class="board-task-card board-due-card todo-band-' + urgency.band + '" data-source="' + esc(task.source) + '" data-due-ms="' + urgency.dueAt + '">' +
+        '<button class="board-check" type="button" data-action="toggle-task" data-id="' + id + '" aria-label="' + esc(complete) + '" aria-pressed="false">' + icon('check') + '</button>' +
+        '<div class="board-row-body"><h3><button ' + detailAction + '>' + esc(task.title) + '</button></h3><div class="board-row-meta">' + deadline + '</div></div></article>';
     }).join('');
-    return '<div class="board-task-grid">' + cards + '</div>' + (tasks.length > visible.length ? '<p class="board-more">' + (isEnglish() ? 'Showing ' + visible.length + ' of ' + tasks.length + ' tasks. Open To-Do to see all.' : '已显示 ' + visible.length + ' / ' + tasks.length + ' 项，前往待办事项查看全部。') + '</p>' : '');
+    const more = tasks.length - visible.length;
+    return '<div class="board-task-grid">' + cards + '</div>' + (more ? '<button class="board-more" type="button" data-action="go-tasks">' + (en ? 'View ' + more + ' more' : '另有 ' + more + ' 项，查看全部') + '</button>' : '');
   }
   function renderBoardOverview() {
     const today = Core.today(), tasks = taskRowsForState(), openTasks = [];
@@ -1133,9 +1130,17 @@
     const classCount = classes.length ? ' · ' + classes.length + (isEnglish() ? (classes.length === 1 ? ' class' : ' classes') : ' 节课') : '';
     const classPreview = classes.slice(0, 3).map(item => '<div class="board-class-row"><span>' + esc(item.start || '—') + '</span><strong>' + esc(item.title || '自习课') + '</strong><small>' + esc(item.room || '地点待确认') + '</small></div>').join('');
     const boardClock = '<div class="board-header-clock">' + renderClassClock() + '</div>';
-    const metrics = '<div class="board-kpi-grid"><article class="board-kpi board-kpi-open"><span>未完成</span><strong>' + openTasks.length + '</strong><small>等待处理的任务</small></article><article class="board-kpi board-kpi-overdue"><span>已逾期</span><strong>' + overdue + '</strong><small>优先回到原页面核对</small></article><article class="board-kpi board-kpi-week"><span>7 天内</span><strong>' + nextWeek + '</strong><small>有明确截止时间</small></article><article class="board-kpi board-kpi-done"><span>已完成</span><strong>' + completed + '</strong><small>仅本机勾选记录</small></article><article class="board-kpi board-kpi-gpa"><span>' + (gpa.official ? '学校 GPA' : '参考 GPA') + '</span><strong>' + (displayGpa && displayGpa.value != null ? esc(Number(displayGpa.value).toFixed(2)) : '—') + '</strong><small>' + (displayGpa && displayGpa.scale ? '/ ' + esc(displayGpa.scale) : '等待成绩同步') + '</small></article><article class="board-kpi board-kpi-gpa-linear"><span>' + t('线性折算 GPA') + '</span><strong>' + (gpa.linear.value == null ? '—' : gpa.linear.value.toFixed(2)) + '</strong><small>/ 4.00 · ' + (isEnglish() ? 'Unofficial' : '非官方') + '</small></article></div>';
+    const en = isEnglish();
+    const metric = (label, value, suffix = '') => '<div><dt>' + esc(label) + '</dt><dd>' + esc(value) + (suffix ? '<small> / ' + esc(suffix) + '</small>' : '') + '</dd></div>';
+    const gradeMetric = (label, grade) => grade.value == null ? metric(label, '—') : metric(label, grade.value.toFixed(2), grade.scale);
+    const metrics = '<div class="board-statistics"><dl class="board-task-totals" aria-label="' + (en ? 'Task counts, including local completion marks' : '待办统计，含本机完成标记') + '">' +
+      metric(en ? 'Open' : '未完成', openTasks.length) + metric(en ? 'Overdue' : '已逾期', overdue) +
+      metric(en ? 'Due in 7 days' : '7 天内截止', nextWeek) + metric(en ? 'Marked done' : '已完成', completed) +
+      '</dl><dl class="board-grade-totals" aria-label="' + (en ? 'Grade point averages' : '平均绩点') + '">' +
+      gradeMetric(gpa.official ? (en ? 'School GPA' : '学校 GPA') : (en ? 'Banded GPA estimate' : '分档参考 GPA'), displayGpa) +
+      gradeMetric(en ? 'Linear GPA estimate' : '线性参考 GPA', gpa.linear) + '</dl></div>';
     const boardTasks = boardTaskSourceColumns(openTasks, rows => boardTaskCards(rows, 6));
-    const taskSection = '<section class="board-task-section"><div class="board-section-heading"><div><p>全部待办 · ' + openTasks.length + '</p><h2>集中处理最重要的事</h2></div><div>' + button(icon('plus') + '添加待办', 'add-task', '', 'button-primary') + button('查看全部', 'go-tasks', '', 'button-light') + '</div></div><div class="board-source-groups">' + (openTasks.length ? boardTasks : boardTaskCards(openTasks)) + '</div>' + (openTasks.length > 15 ? '<p class="board-more">' + (isEnglish() ? 'Some tasks are omitted here. Open To-Do to see all.' : '总览仅显示各分组中的部分任务，前往“待办事项”查看全部。') + '</p>' : '') + '</section>';
+    const taskSection = '<section class="board-task-section"><div class="board-section-heading"><h2>' + (en ? 'To-do' : '待办事项') + ' <small>' + openTasks.length + '</small></h2><div>' + button(icon('plus') + '添加待办', 'add-task', '', 'button-primary') + button('查看全部', 'go-tasks', '', 'button-light') + '</div></div><div class="board-source-groups">' + (openTasks.length ? boardTasks : boardTaskCards(openTasks)) + '</div></section>';
     const side = '<aside class="board-side-column"><section class="board-mini-card"><p>今日课程</p><h2>' + (classes.length ? classes.length + ' 节已读取课程' : '等待课表同步') + '</h2>' + (classPreview || '<p class="board-muted">登录希悦并打开课表后，这里会显示当天课程。</p>') + '</section>' + renderSchoolCalendar(today, false) + '<section class="board-mini-card board-tip"><p>今日提示</p><h2>信息以原平台为准</h2><span>卡片只整理已经读取到的课程、成绩和作业；点击学校任务可查看原文要求。</span></section></aside>';
     const header = '<header class="board-hero"><div><h1>今日概览</h1><p><time datetime="' + esc(today) + '">' + esc(dateLabel) + '</time>' + classCount + '</p></div>' +
       button(icon('settings') + '面板样式', 'appearance-settings', '', 'button-light') + '</header>';

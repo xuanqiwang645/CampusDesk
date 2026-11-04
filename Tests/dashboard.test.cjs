@@ -1060,7 +1060,10 @@ function schedule() { return { source: 'seiue', url: 'https://example-school.sei
 ] }; }
 
 test('dashboard appearance setting switches between the preserved classic panel and the card board', () => {
-  const app = harness(); app.receive({ type: 'snapshot', snapshot: teamsSnapshot([task()]) }); app.receive({ type: 'snapshot', snapshot: schedule() });
+  const app = harness(), legacy = app.ctx.CampusCore.emptyState();
+  delete legacy.settings.dashboardTheme;
+  app.receive({ type: 'state', state: legacy });
+  app.receive({ type: 'snapshot', snapshot: teamsSnapshot([task()]) }); app.receive({ type: 'snapshot', snapshot: schedule() });
   assert.equal(app.node('app-shell').dataset.dashboardTheme, 'classic');
   assert.match(app.node('content').innerHTML, /今天，也有条不紊/);
   app.click({ page: 'settings' });
@@ -1069,7 +1072,8 @@ test('dashboard appearance setting switches between the preserved classic panel 
   app.click({ action: 'dashboard-theme', theme: 'board' });
   assert.equal(app.node('app-shell').dataset.dashboardTheme, 'board');
   app.click({ page: 'overview' });
-  assert.match(app.node('content').innerHTML, /集中处理最重要的事/);
+  assert.equal(app.last('saveState').state.settings.dashboardTheme, 'board');
+  assert.match(app.node('content').innerHTML, /<h1>今日概览<\/h1>/);
   assert.match(app.node('content').innerHTML, /board-task-columns/);
   assert.match(app.node('content').innerHTML, /board-task-grid/);
   assert.match(app.node('content').innerHTML, /data-todo-countdown/);
@@ -1078,6 +1082,7 @@ test('dashboard appearance setting switches between the preserved classic panel 
   assert.match(app.node('content').innerHTML, /经典面板/);
   app.click({ action: 'dashboard-theme', theme: 'classic' });
   assert.equal(app.node('app-shell').dataset.dashboardTheme, 'classic');
+  assert.equal(app.last('saveState').state.settings.dashboardTheme, 'classic');
   app.click({ page: 'overview' });
   assert.match(app.node('content').innerHTML, /今天，也有条不紊/);
 });
@@ -1212,13 +1217,21 @@ test('estimated GPA is always presented with two decimal places', () => {
     { id: 'english', name: 'English', percentage: 80, term: 'Current', isCurrentTerm: true, isCourseGrade: true }
   ], tasks: [], feedback: [], officialGPA: null } });
   app.click({ page: 'settings' }); app.click({ action: 'dashboard-theme', theme: 'board' }); app.click({ page: 'overview' });
-  assert.match(app.node('content').innerHTML, /<strong>3\.20<\/strong>/);
+  assert.match(app.node('content').innerHTML, /<dt>分档参考 GPA<\/dt><dd>3\.20<small> \/ 4<\/small><\/dd>/);
+  assert.match(app.node('content').innerHTML, /<dt>线性参考 GPA<\/dt><dd>3\.40<small> \/ 4<\/small><\/dd>/);
   app.click({ page: 'grades' });
   assert.match(app.node('content').innerHTML, />3\.20</);
   assert.match(app.node('content').innerHTML, />3\.70</);
   assert.match(app.node('content').innerHTML, /线性折算 GPA/);
   assert.match(app.node('content').innerHTML, />3\.40</);
   assert.match(app.node('content').innerHTML, /<th>线性绩点<\/th>/);
+  const state = app.last('saveState').state, snapshot = Object.values(state.snapshots.managebac)[0];
+  for (const course of snapshot.courses) course.percentage = 0;
+  app.receive({ type: 'state', state }); app.click({ page: 'overview' });
+  assert.equal((app.node('content').innerHTML.match(/<dd>0\.00<small> \/ 4<\/small><\/dd>/g) || []).length, 2);
+  snapshot.courses = [];
+  app.receive({ type: 'state', state });
+  assert.equal((app.node('content').innerHTML.match(/<dd>—<\/dd>/g) || []).length, 2, 'missing grades do not appear as zero');
 });
 
 test('semester forecast explains its assumptions and saves local term dates', () => {

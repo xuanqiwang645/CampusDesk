@@ -4,15 +4,15 @@ html.webgl-liquid-glass .app-shell[data-dashboard-theme="board"] #main,html.webg
 .app-shell[data-dashboard-theme="board"] .sidebar{box-shadow:12px 0 35px rgba(70,91,70,.04)}
 .app-shell[data-dashboard-theme="board"] .topbar{position:relative;z-index:2}
 .board-panel{position:relative;isolation:isolate}
-html.webgl-liquid-glass .app-shell[data-dashboard-theme="board"] .board-kpi,html.webgl-liquid-glass .app-shell[data-dashboard-theme="board"] .board-task-section,html.webgl-liquid-glass .app-shell[data-dashboard-theme="board"] .board-mini-card,html.webgl-liquid-glass .app-shell[data-dashboard-theme="board"] .board-task-card{position:relative;border-color:var(--board-glass-edge);background:transparent;box-shadow:inset 0 1px 0 rgba(255,255,255,.62),0 10px 25px var(--board-glass-shadow)}
+html.webgl-liquid-glass .app-shell[data-dashboard-theme="board"] .board-task-section,html.webgl-liquid-glass .app-shell[data-dashboard-theme="board"] .board-mini-card{position:relative;border-color:var(--board-glass-edge);background:transparent;box-shadow:inset 0 1px 0 rgba(255,255,255,.62),0 10px 25px var(--board-glass-shadow)}
 
-.board-kpi-grid{position:relative;padding:2px}.board-task-section{padding:21px}.board-task-card,.board-mini-card{overflow:hidden}
-.board-kpi,.board-task-card,.board-mini-card{transition:transform .22s ease,box-shadow .22s ease,border-color .22s ease}
-.board-kpi:hover,.board-task-card:hover,.board-mini-card:hover{transform:translateY(-2px);border-color:rgba(103,157,126,.55);box-shadow:inset 0 1px 0 rgba(255,255,255,.75),0 14px 28px rgba(59,104,79,.14)}
+.board-task-section{padding:21px}.board-mini-card{overflow:hidden}
+.board-mini-card{transition:transform .22s ease,box-shadow .22s ease,border-color .22s ease}
+.board-mini-card:hover{transform:translateY(-2px);border-color:rgba(103,157,126,.55);box-shadow:inset 0 1px 0 rgba(255,255,255,.75),0 14px 28px rgba(59,104,79,.14)}
 .board-check{box-shadow:inset 0 1px 0 rgba(255,255,255,.7),0 4px 10px rgba(55,112,77,.12)}
 .focus-button{justify-content:center;min-width:96px;flex-shrink:0;text-align:center;line-height:1.2}.focus-button>span{display:block;min-width:0;text-align:center}
-@media(prefers-reduced-motion:reduce){.board-kpi,.board-task-card,.board-mini-card{transition:none}.board-kpi:hover,.board-task-card:hover,.board-mini-card:hover{transform:none}}
-@media(prefers-reduced-transparency:reduce){.app-shell[data-dashboard-theme="board"] .sidebar,.app-shell[data-dashboard-theme="board"] .topbar,.board-kpi,.board-task-section,.board-mini-card,.board-task-card{background:var(--card)}}
+@media(prefers-reduced-motion:reduce){.board-mini-card{transition:none}.board-mini-card:hover{transform:none}}
+@media(prefers-reduced-transparency:reduce){.app-shell[data-dashboard-theme="board"] .sidebar,.app-shell[data-dashboard-theme="board"] .topbar,.board-task-section,.board-mini-card{background:var(--card)}}
 
 
 /* Keep sidebar selection feedback on the compositor; no layout-affecting motion. */

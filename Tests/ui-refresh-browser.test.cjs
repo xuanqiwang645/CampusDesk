@@ -58,7 +58,7 @@ test('refreshed board keeps source and subject hierarchy, desktop columns and re
           sources: [...left.children].map(node => node.dataset.domKey), rightSources: [...right.children].map(node => node.dataset.domKey),
           subjects: [...panel.querySelectorAll('.task-subject-group')].map(node => node.dataset.domKey), left: rect(left), right: rect(right),
           cards: [...panel.querySelectorAll('.board-task-card')].map(node => ({ ...rect(node), scrollWidth: node.scrollWidth, clientWidth: node.clientWidth })),
-          metrics: [...panel.querySelectorAll('.board-kpi')].map(rect) };
+          metrics: [...panel.querySelectorAll('.board-statistics dl > div')].map(rect) };
       });
       const context = language + '/' + width + ': ' + JSON.stringify(layout);
       assert.deepEqual(layout.sources, ['source-manual', 'source-teams'], context);
@@ -127,6 +127,92 @@ test('all palettes retain their colors and focus remains visible on reset title 
   await page.locator('#task-form button[type="submit"]').click();
   const saved = await page.evaluate(() => JSON.parse(localStorage.getItem('campusdesk.browser.v1')));
   assert.equal(saved.manualTasks.at(-1).dueAt, '2030-10-09T10:30:00.000Z');
+}));
+
+test('board checklist stacks compact rows within a subject and preserves favorite, deadline and completion actions', optional, async () => fixture(async page => {
+  const state = stateFor('board', 'sage', 'en-US');
+  state.manualTasks = [
+    { id: 'sketch', title: 'Draw sketch', course: 'Design Workshop', dueAt: '2030-10-09T10:30:00Z', status: 'open' },
+    { id: 'revise', title: 'Revise notes', course: 'Design Workshop', dueAt: null, status: 'open' }
+  ];
+  await page.evaluate(state => CampusDesk.receive({ type: 'state', state }), state);
+  const group = page.locator('[data-dom-key="source-manual"] [data-dom-key="subject-Design Workshop"]');
+  const rows = group.locator('[data-dom-key^="task-"]');
+  for (const width of [1440, 390]) {
+    await page.setViewportSize({ width, height: 900 });
+    const layout = await rows.evaluateAll(nodes => nodes.map(node => {
+      const rect = node.getBoundingClientRect(), list = node.parentElement.getBoundingClientRect();
+      return { left: rect.left, top: rect.top, bottom: rect.bottom, height: rect.height, width: rect.width,
+        listWidth: list.width, shadow: getComputedStyle(node).boxShadow, text: node.innerText };
+    }));
+    assert.equal(layout.length, 2);
+    assert.equal(layout[0].left, layout[1].left);
+    assert.ok(layout[1].top >= layout[0].bottom, 'tasks occupy separate rows at ' + width);
+    for (const row of layout) {
+      assert.ok(row.height > 0 && row.height <= 95, 'short task row at ' + width + ': ' + row.height);
+      assert.ok(Math.abs(row.width - row.listWidth) <= 2, 'each task fills its subject list');
+      assert.equal(row.shadow, 'none', 'rows are not separate elevated tiles');
+      assert.doesNotMatch(row.text, /Design Workshop|Personal/i, 'the source and subject are already identified by the group');
+    }
+  }
+  const favorite = group.locator('[data-action="toggle-focus-subject"]');
+  await favorite.click();
+  assert.equal(await favorite.getAttribute('aria-pressed'), 'true');
+  assert.deepEqual(await page.evaluate(() => JSON.parse(localStorage.getItem('campusdesk.browser.v1')).settings.focusSubjects), ['Design Workshop']);
+  const undated = group.locator('[data-dom-key="task-revise"]');
+  await undated.getByRole('button', { name: 'Set a deadline' }).click();
+  await page.locator('#manual-due-date').fill('2031-04-06');
+  await page.locator('#manual-due-time').fill('13:40');
+  await page.locator('[data-action="save-manual-task-due"]').click();
+  await page.locator('[data-action="close-detail"]').click();
+  assert.equal(Number(await undated.getAttribute('data-due-ms')), Date.parse('2031-04-06T13:40:00+08:00'));
+  assert.match(await undated.innerText(), /13:40/);
+  await undated.locator('[data-action="toggle-task"]').click();
+  assert.equal(await undated.count(), 0);
+  assert.equal(await group.locator('[data-dom-key="task-sketch"]').count(), 1);
+}));
+
+test('board statistics preserve open/completed counts and distinguish school GPA from estimates', optional, async () => fixture(async page => {
+  const state = stateFor('board', 'midnight', 'en-US');
+  const mb = Object.values(state.snapshots.managebac)[0];
+  const currentTime = Date.now();
+  for (const task of Object.values(state.snapshots.teams)[0].tasks) task.dueAt = new Date(currentTime + 14 * 86400000).toISOString();
+  mb.tasks[0].dueAt = new Date(currentTime - 60000).toISOString();
+  mb.tasks[1].dueAt = new Date(currentTime + 86400000).toISOString();
+  state.taskChecks.personal = true;
+  mb.courses = [{ id: 'chem', name: 'Chemistry', term: 'Term 1 (current)', percentage: 90, isCurrentTerm: true, isCourseGrade: true }];
+  const apply = () => page.evaluate(state => CampusDesk.receive({ type: 'state', state }), state);
+  const read = selector => page.locator(selector + ' > div').evaluateAll(nodes => nodes.map(node => [
+    node.querySelector('dt').textContent, node.querySelector('dd').textContent
+  ]));
+  await apply();
+  assert.deepEqual(await read('.board-task-totals'), [['Open','4'], ['Overdue','1'], ['Due in 7 days','1'], ['Marked done','1']]);
+  assert.deepEqual(await read('.board-grade-totals'), [['Banded GPA estimate','3.70 / 4'], ['Linear GPA estimate','3.60 / 4']]);
+
+  mb.officialGPA = { value: 4.62, scale: 5 };
+  state.settings.language = 'zh-CN'; await apply();
+  assert.deepEqual(await read('.board-grade-totals'), [['学校 GPA','4.62 / 5'], ['线性参考 GPA','3.60 / 4']]);
+  mb.officialGPA.scale = null; mb.officialGPA.value = 0; await apply();
+  assert.deepEqual((await read('.board-grade-totals'))[0], ['学校 GPA','0.00']);
+  delete mb.officialGPA; mb.courses = []; await apply();
+  assert.deepEqual(await read('.board-grade-totals'), [['分档参考 GPA','—'], ['线性参考 GPA','—']]);
+
+  state.settings.language = 'en-US'; mb.officialGPA = { value: 100, scale: 100 }; await apply();
+  for (const width of [1440, 1220, 900, 761, 760, 390]) {
+    await page.setViewportSize({ width, height: 850 });
+    const bounds = await page.locator('.board-statistics').evaluate(strip => ({
+      height: strip.getBoundingClientRect().height,
+      clipped: [...strip.querySelectorAll('dt, dd')].some(node => node.scrollWidth > node.clientWidth + 1),
+      groups: [...strip.children].map(node => {
+        const rect = node.getBoundingClientRect(); return { left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom };
+      })
+    }));
+    assert.equal(bounds.clipped, false, 'labels, full GPA values and their scales fit at ' + width);
+    const [tasks, grades] = bounds.groups;
+    if (width <= 760) assert.ok(grades.top > tasks.bottom, 'task and GPA groups stack at ' + width);
+    else assert.ok(grades.left >= tasks.right - 1, 'groups share one row at ' + width);
+    if (width >= 1220) assert.ok(bounds.height < 90, 'compact row leaves room for tasks');
+  }
 }));
 
 test('toolbar and primary actions show press, focus and accessible solid states in all palettes', optional, async () => fixture(async page => {

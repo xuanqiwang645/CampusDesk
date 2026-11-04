@@ -275,7 +275,7 @@ if (!canvas) {
     const reducedTransparency = matchMedia('(prefers-reduced-transparency: reduce)');
     const glassSelectors = [
       '.sidebar', '.topbar', '.card', '.class-clock', '.connect-banner',
-      '.board-kpi', '.board-task-section', '.board-mini-card', '.board-task-card',
+      '.board-task-section', '.board-mini-card',
       '.button-light', '.icon-button', '.focus-button', '.check-button', '.board-check',
       '.brand-mark', '.nav-item > .icon', '.card-title > .icon', '.banner-icon', '.clock-mark', '.empty-illustration'
     ].join(',');

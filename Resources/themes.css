@@ -124,22 +124,12 @@
 .app-shell[data-dashboard-theme="board"][data-color-theme]:not([data-color-theme="sage"]) .brand,
 .app-shell[data-dashboard-theme="board"][data-color-theme]:not([data-color-theme="sage"]) .board-section-heading h2,
 .app-shell[data-dashboard-theme="board"][data-color-theme]:not([data-color-theme="sage"]) .board-mini-card h2 { color: var(--ink); }
-.app-shell[data-dashboard-theme="board"][data-color-theme]:not([data-color-theme="sage"]) .board-kpi span,
-.app-shell[data-dashboard-theme="board"][data-color-theme]:not([data-color-theme="sage"]) .board-kpi small,
-.app-shell[data-dashboard-theme="board"][data-color-theme]:not([data-color-theme="sage"]) .board-task-card h3,
 .app-shell[data-dashboard-theme="board"][data-color-theme]:not([data-color-theme="sage"]) .board-due,
 .app-shell[data-dashboard-theme="board"][data-color-theme]:not([data-color-theme="sage"]) .board-muted { color: var(--muted); }
-.app-shell[data-dashboard-theme="board"][data-color-theme]:not([data-color-theme="sage"]) .board-kpi,
 .app-shell[data-dashboard-theme="board"][data-color-theme]:not([data-color-theme="sage"]) .board-task-section,
-.app-shell[data-dashboard-theme="board"][data-color-theme]:not([data-color-theme="sage"]) .board-mini-card,
-.app-shell[data-dashboard-theme="board"][data-color-theme]:not([data-color-theme="sage"]) .board-task-card { background: var(--card); border-color: var(--line); }
-.app-shell[data-dashboard-theme="board"][data-color-theme]:not([data-color-theme="sage"]) .board-kpi-open strong,
+.app-shell[data-dashboard-theme="board"][data-color-theme]:not([data-color-theme="sage"]) .board-mini-card { background: var(--card); border-color: var(--line); }
 .app-shell[data-dashboard-theme="board"][data-color-theme]:not([data-color-theme="sage"]) .board-section-heading p,
 .app-shell[data-dashboard-theme="board"][data-color-theme]:not([data-color-theme="sage"]) .board-mini-card > p { color: var(--teal); }
-:root[data-color-theme="midnight"] .app-shell[data-dashboard-theme="board"] .board-kpi-overdue strong { color: #ff9388; }
-:root[data-color-theme="midnight"] .app-shell[data-dashboard-theme="board"] .board-kpi-week strong { color: #f1ce93; }
-:root[data-color-theme="midnight"] .app-shell[data-dashboard-theme="board"] .board-kpi-done strong { color: #a9caff; }
-:root[data-color-theme="midnight"] .app-shell[data-dashboard-theme="board"] .board-kpi-gpa strong { color: #d4b6ff; }
 
 .sidebar > .brand { min-height: 42px; }
 @media (max-width: 580px) { .sidebar > .brand { min-height: 30px; } }
@@ -149,10 +139,8 @@
 @media (prefers-reduced-transparency: reduce) {
   :root[data-color-theme] .app-shell[data-dashboard-theme="board"] .sidebar,
   :root[data-color-theme] .app-shell[data-dashboard-theme="board"] .topbar,
-  :root[data-color-theme] .app-shell[data-dashboard-theme="board"] .board-kpi,
   :root[data-color-theme] .app-shell[data-dashboard-theme="board"] .board-task-section,
   :root[data-color-theme] .app-shell[data-dashboard-theme="board"] .board-mini-card,
-  :root[data-color-theme] .app-shell[data-dashboard-theme="board"] .board-task-card,
   :root[data-color-theme] .app-shell[data-dashboard-theme="board"] .card,
   :root[data-color-theme] .app-shell[data-dashboard-theme="board"] .class-clock,
   :root[data-color-theme] .app-shell[data-dashboard-theme="board"] .connect-banner { background: var(--card); }

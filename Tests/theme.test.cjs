@@ -89,8 +89,9 @@ test('color palettes preserve readable text and accessible primary actions', () 
   assert.match(presets, /@media \(max-width: 900px\)[\s\S]*color-theme-options/);
   assert.match(presets, /@media \(prefers-reduced-motion: reduce\)/);
   assert.match(presets, /prefers-reduced-transparency: reduce/);
-  assert.match(presets, /board-kpi-overdue strong/);
-  assert.match(presets, /board-kpi-week strong/);
-  assert.match(presets, /board-kpi-done strong/);
-  assert.match(presets, /board-kpi-gpa strong/);
+  const board = fs.readFileSync(path.join(resources, 'ui-refresh.css'), 'utf8');
+  assert.match(board, /\.board-statistics\s*\{[^}]*background:\s*var\(--card\)/);
+  assert.match(board, /\.board-statistics dt\s*\{[^}]*color:\s*var\(--muted\)/);
+  assert.match(board, /\.board-statistics dd\s*\{[^}]*color:\s*var\(--ink\)/);
+  assert.match(board, /\.board-statistics dd small\s*\{[^}]*color:\s*var\(--muted\)/);
 });
