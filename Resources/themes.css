@@ -122,11 +122,8 @@
 .app-shell[data-dashboard-theme="board"][data-color-theme]:not([data-color-theme="sage"]) .sidebar { background: var(--nav); }
 .app-shell[data-dashboard-theme="board"][data-color-theme]:not([data-color-theme="sage"]) .topbar { background: var(--card); }
 .app-shell[data-dashboard-theme="board"][data-color-theme]:not([data-color-theme="sage"]) .brand,
-.app-shell[data-dashboard-theme="board"][data-color-theme]:not([data-color-theme="sage"]) .board-hero h1,
 .app-shell[data-dashboard-theme="board"][data-color-theme]:not([data-color-theme="sage"]) .board-section-heading h2,
 .app-shell[data-dashboard-theme="board"][data-color-theme]:not([data-color-theme="sage"]) .board-mini-card h2 { color: var(--ink); }
-.app-shell[data-dashboard-theme="board"][data-color-theme]:not([data-color-theme="sage"]) .board-hero p:not(.board-eyebrow),
-.app-shell[data-dashboard-theme="board"][data-color-theme]:not([data-color-theme="sage"]) .board-hero-actions,
 .app-shell[data-dashboard-theme="board"][data-color-theme]:not([data-color-theme="sage"]) .board-kpi span,
 .app-shell[data-dashboard-theme="board"][data-color-theme]:not([data-color-theme="sage"]) .board-kpi small,
 .app-shell[data-dashboard-theme="board"][data-color-theme]:not([data-color-theme="sage"]) .board-task-card h3,
@@ -152,7 +149,6 @@
 @media (prefers-reduced-transparency: reduce) {
   :root[data-color-theme] .app-shell[data-dashboard-theme="board"] .sidebar,
   :root[data-color-theme] .app-shell[data-dashboard-theme="board"] .topbar,
-  :root[data-color-theme] .app-shell[data-dashboard-theme="board"] .board-hero,
   :root[data-color-theme] .app-shell[data-dashboard-theme="board"] .board-kpi,
   :root[data-color-theme] .app-shell[data-dashboard-theme="board"] .board-task-section,
   :root[data-color-theme] .app-shell[data-dashboard-theme="board"] .board-mini-card,

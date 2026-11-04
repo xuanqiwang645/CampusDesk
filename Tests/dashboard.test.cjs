@@ -1167,7 +1167,7 @@ test('interface language setting persists and translates the application chrome 
   app.click({ page: 'settings' });
   app.click({ action: 'dashboard-theme', theme: 'board' });
   app.click({ page: 'overview' });
-  assert.match(app.node('content').innerHTML, /Today, make steady progress\./);
+  assert.match(app.node('content').innerHTML, /<h1>Today at a glance<\/h1>/);
   assert.doesNotMatch(app.node('content').innerHTML, /[\u4e00-\u9fff]/);
   app.click({ action: 'dashboard-theme', theme: 'classic' });
   app.click({ page: 'overview' });

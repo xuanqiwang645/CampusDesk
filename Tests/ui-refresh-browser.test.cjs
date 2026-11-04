@@ -51,7 +51,10 @@ test('refreshed board keeps source and subject hierarchy, desktop columns and re
       const layout = await page.locator('.board-panel').evaluate(panel => {
         const rect = node => { const box = node.getBoundingClientRect(); return { left: box.left, right: box.right, top: box.top, bottom: box.bottom, width: box.width }; };
         const left = panel.querySelector('.board-task-column-left'), right = panel.querySelector('.board-task-column-right');
+        const header = panel.querySelector('.board-hero'), title = header.querySelector('h1');
         return { viewport: innerWidth, pageWidth: document.documentElement.scrollWidth,
+          header: rect(header), title: rect(title), titleSize: parseFloat(getComputedStyle(title).fontSize),
+          action: rect(header.querySelector('button')), clock: rect(panel.querySelector('.board-header-clock')),
           sources: [...left.children].map(node => node.dataset.domKey), rightSources: [...right.children].map(node => node.dataset.domKey),
           subjects: [...panel.querySelectorAll('.task-subject-group')].map(node => node.dataset.domKey), left: rect(left), right: rect(right),
           cards: [...panel.querySelectorAll('.board-task-card')].map(node => ({ ...rect(node), scrollWidth: node.scrollWidth, clientWidth: node.clientWidth })),
@@ -62,6 +65,8 @@ test('refreshed board keeps source and subject hierarchy, desktop columns and re
       assert.deepEqual(layout.rightSources, ['source-managebac'], context);
       assert.equal(layout.subjects.length, 5, context);
       assert.ok(layout.pageWidth <= width + 1, 'the page must not overflow: ' + context);
+      assert.ok(layout.title.left - layout.header.left >= 14 && layout.header.right - layout.action.right >= 14, 'heading and button need breathing room: ' + context);
+      assert.ok(layout.titleSize <= 24 && layout.clock.top - layout.header.bottom >= 12, 'heading stays compact and separate from the countdown: ' + context);
       if (width > 760) assert.ok(layout.right.left >= layout.left.right, 'desktop source columns stay side by side: ' + context);
       else assert.ok(layout.right.top >= layout.left.bottom, 'narrow source columns follow the same reading order: ' + context);
       for (const card of layout.cards) {

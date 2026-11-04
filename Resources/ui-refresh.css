@@ -19,8 +19,8 @@
 .toolbar { min-width: 0; gap: 10px; }
 .content { padding-top: 30px; }
 .page-heading { margin-bottom: 24px; }
-.page-heading h1, .board-hero h1 { font-weight: 650; letter-spacing: -.035em; }
-.page-subtitle, .board-hero p:not(.board-eyebrow) { line-height: 1.75; }
+.page-heading h1 { font-weight: 650; letter-spacing: -.035em; }
+.page-subtitle { line-height: 1.75; }
 .card-title, .board-section-heading h2, .board-mini-card h2 { font-weight: 600; }
 .card-header { margin-bottom: 19px; }
 .button { min-height: 36px; border-radius: 10px; font-weight: 550; }
@@ -32,10 +32,10 @@
 
 /* Borders do the work of separating nested cards. Small, stationary shadows
    avoid repainting broad soft edges on each pointer movement. */
-:root .app-shell[data-dashboard-theme][data-color-theme] :is(.card, .board-hero, .class-clock, .button-light, .board-kpi, .board-task-section, .board-mini-card, .board-task-card) {
+:root .app-shell[data-dashboard-theme][data-color-theme] :is(.card, .class-clock, .button-light, .board-kpi, .board-task-section, .board-mini-card, .board-task-card) {
   box-shadow: var(--ui-shadow);
 }
-:root.webgl-liquid-glass .app-shell[data-dashboard-theme][data-color-theme] :is(.card, .board-hero, .class-clock, .button-light, .board-kpi, .board-task-section, .board-mini-card, .board-task-card) {
+:root.webgl-liquid-glass .app-shell[data-dashboard-theme][data-color-theme] :is(.card, .class-clock, .button-light, .board-kpi, .board-task-section, .board-mini-card, .board-task-card) {
   box-shadow: var(--ui-glass-shadow);
 }
 :root .app-shell[data-dashboard-theme][data-color-theme] :is(.sidebar, .topbar) { box-shadow: none; }
@@ -46,8 +46,18 @@
   transition: border-color .14s ease, background-color .14s ease;
 }
 .board-kpi:hover, .board-task-card:hover, .board-mini-card:hover, .todo-deadline-card:hover { transform: none; }
-.board-hero { padding: 8px 0 22px; border-radius: 18px; }
-.board-hero-actions { flex-wrap: wrap; justify-content: flex-end; }
+.board-hero {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px 16px;
+  padding: 4px 18px;
+  margin-bottom: 16px;
+}
+.board-hero h1 { margin: 0; color: var(--ink); font-size: 24px; font-weight: 600; line-height: 1.28; letter-spacing: -.02em; }
+.board-hero p { margin: 5px 0 0; color: var(--muted); font-size: 14px; line-height: 1.5; }
+.board-hero > button { flex: none; }
 .board-kpi { min-height: 108px; padding: 17px 16px 15px; border-radius: 15px; }
 .board-kpi strong { margin-block: 8px 5px; font-weight: 650; font-variant-numeric: tabular-nums; letter-spacing: -.025em; }
 .board-kpi span, .board-kpi small { line-height: 1.5; }
@@ -94,7 +104,7 @@
 
 /* Legacy board accents were fixed green even in the midnight preset. */
 :root[data-color-theme="midnight"] { --ui-glass-shadow: inset 0 1px 0 rgba(255, 255, 255, .08), 0 3px 10px rgba(0, 0, 0, .12); }
-:root[data-color-theme="midnight"] .app-shell[data-dashboard-theme="board"] :is(.board-kpi-open strong, .board-kpi-gpa-linear strong, .board-section-heading p, .board-mini-card > p, .board-eyebrow, .focus-button) {
+:root[data-color-theme="midnight"] .app-shell[data-dashboard-theme="board"] :is(.board-kpi-open strong, .board-kpi-gpa-linear strong, .board-section-heading p, .board-mini-card > p, .focus-button) {
   color: var(--accent-ink);
 }
 :root[data-color-theme="midnight"] .app-shell[data-dashboard-theme="board"] :is(.board-tip span, .board-mini-card > .board-muted, .clock-label, .clock-secondary p, .clock-secondary small, .empty h3) {
@@ -104,15 +114,12 @@
 
 @media (max-width: 1050px) {
   .content { padding-top: 25px; }
-  .board-hero { gap: 16px; }
-  .board-hero-actions { max-width: 45%; }
 }
 @media (min-width: 581px) and (max-width: 900px) {
   .board-task-column .board-task-grid { grid-template-columns: minmax(0, 1fr); }
 }
 @media (max-width: 760px) {
-  .board-hero-actions { max-width: none; justify-content: flex-start; }
-  .board-hero { padding: 4px 0 18px; }
+  .board-hero { padding-inline: 14px; }
   .board-kpi-grid .board-kpi:last-child { grid-column: auto; }
   .board-header-clock .clock-secondary { max-width: 100%; }
   .board-task-section { padding: 16px; }
@@ -129,7 +136,7 @@
   .toolbar { gap: 7px; }
   .topbar .button { min-height: 34px; padding: 8px 10px; }
   .content { padding: 22px 16px 32px; }
-  .board-hero h1 { font-size: 27px; }
+  .board-hero h1 { font-size: 22px; }
   .board-kpi-grid { gap: 9px; }
   .board-kpi { padding: 15px; min-height: 104px; }
   .board-kpi strong { font-size: 28px; }
