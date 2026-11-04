@@ -21,6 +21,17 @@ struct StateValidationSmokeTests {
             "manualTasks": [Any](), "taskChecks": [String: Any](), "feedbackRead": [String: Any](), "gradeHistory": [Any]()]
         check(CampusSecurity.validStateEnvelope(legacy), "Native envelope accepts the old missing-inbox state for migration")
         let valid = try validator.validate(legacy, schools: schools)
+        do {
+            _ = try validator.prepare(["version": 999], schools: schools)
+            check(false, "A failed preparation must retain the specific validation error")
+        } catch {
+            check(error.localizedDescription.contains("不支持的数据版本"), "The schema error crosses JavaScriptCore intact")
+        }
+        rejects("The ordinary save preparation enforces the 25 MiB input limit") {
+            var huge = legacy
+            huge["extra"] = String(repeating: "x", count: CampusSecurity.maximumStateBytes)
+            _ = try validator.prepare(huge, schools: schools)
+        }
         check(valid["changeLog"] is [Any], "Shared schema migrates the missing inbox")
         check((valid["gradeUpdates"] as? [Any])?.isEmpty == true, "Old states start with an empty grade notification inbox")
         check((valid["gradeUpdateRead"] as? [String: Any])?.isEmpty == true, "Old states start without unread bookkeeping")
@@ -72,6 +83,16 @@ struct StateValidationSmokeTests {
                 ["role": "assistant", "content": "First answer", "display": "First answer\nDeepSeek", "contextKey": "deepseek|tasks", "providerUsed": "deepseek"]]]]
         withAssistantHistory["assistantActiveConversationId"] = "chat-followup"
         let assistantFile = temporary.appendingPathComponent("assistant-history.json")
+        let serialized = String(decoding: try CampusStateValidator.encode(withAssistantHistory), as: UTF8.self)
+        let fromWebKit = try validator.prepare(json: serialized, schools: schools)
+        check((fromWebKit.state as NSDictionary).isEqual(to: try validator.prepare(withAssistantHistory, schools: schools).state),
+              "WebKit JSON and legacy dictionary saves produce identical validated data including draft whitespace")
+        for invalidJSON in ["[{}]", "null", "{", #""{\"version\":1}""#] {
+            rejects("WebKit state requires a well-formed JSON object") { _ = try validator.prepare(json: invalidJSON, schools: schools) }
+        }
+        rejects("Serialized WebKit input checks its own UTF-8 byte limit before parsing") {
+            _ = try validator.prepare(json: String(repeating: "学", count: CampusSecurity.maximumStateBytes / 3 + 1), schools: schools)
+        }
         _ = try validator.write(withAssistantHistory, to: assistantFile, previous: nil, schools: schools)
         let assistantRoundTrip = try validator.read(assistantFile, schools: schools)
         let savedConversation = (assistantRoundTrip["assistantConversations"] as? [[String: Any]])?.first

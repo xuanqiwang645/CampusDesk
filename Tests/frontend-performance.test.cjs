@@ -241,17 +241,22 @@ test('native import temporarily blocks old-state controls and restores interacti
     CampusDesk.receive({ type: 'state', state: __originalState, stateGeneration: 0 });
     document.querySelector('#nav [data-page="tasks"]').click();
   });
-  for (const [generation, success] of [[0, false], [1, true]]) {
+  // An envelope rejected before native commit returns the current generation.
+  for (const [generation, resultGeneration, success] of [[0, 0, false], [0, 1, false], [1, 2, true]]) {
     await page.evaluate(generation => CampusDesk.receive({ type: 'import', state: __importState, validated: true, stateGeneration: generation }), generation);
     assert.equal(await page.locator('#app-shell').evaluate(node => node.inert), true);
     assert.equal(await page.locator('#task-dialog').evaluate(node => node.inert), true);
-    await page.evaluate(({ generation, success }) => {
+    await page.evaluate(({ resultGeneration, success }) => {
       const request = __bridgeMessages.filter(message => message.action === 'saveState' && message.imported).at(-1);
-      CampusDesk.receive({ type: 'importResult', requestId: request.importRequestId, success, state: success ? __importState : __originalState, stateGeneration: generation + 1 });
-    }, { generation, success });
+      CampusDesk.receive({ type: 'importResult', requestId: request.importRequestId, success, state: success ? __importState : __originalState, stateGeneration: resultGeneration });
+    }, { resultGeneration, success });
     assert.equal(await page.locator('#app-shell').evaluate(node => node.inert), false);
     assert.equal(await page.locator('#task-dialog').evaluate(node => node.inert), false);
-    assert.equal(await page.evaluate(() => __bridgeMessages.filter(message => message.action === 'importResultApplied').at(-1).stateGeneration), generation + 1);
+    assert.equal(await page.evaluate(() => __bridgeMessages.filter(message => message.action === 'importResultApplied').at(-1).stateGeneration), resultGeneration);
+    if (!success) {
+      assert.match(await page.locator('#content').innerText(), /Synthetic original task/);
+      assert.doesNotMatch(await page.locator('#content').innerText(), /Synthetic imported task/);
+    }
     await page.locator('[data-action="add-task"]').first().click();
     await page.locator('#task-title').fill('Draft retained after ' + (success ? 'success' : 'failure'));
     await page.locator('#task-dialog [data-action="close-task"]').first().click();

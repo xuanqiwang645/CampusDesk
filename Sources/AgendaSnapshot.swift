@@ -5,6 +5,7 @@ import JavaScriptCore
 /// Input is an immutable state that has already passed the native validator.
 final class CampusAgendaSnapshotBuilder {
     private let context: JSContext
+    private var cachedReader: (input: NSDictionary, render: JSValue)?
 
     init(resources: URL, themeEdition: Bool) throws {
         guard let context = JSContext() else { throw CampusAgendaSnapshotError.unavailable }
@@ -16,20 +17,42 @@ final class CampusAgendaSnapshotBuilder {
             guard context.exception == nil else { throw CampusAgendaSnapshotError.unavailable }
         }
         context.evaluateScript("""
-        function __campusAgendaSnapshot(encoded, now) {
-            return JSON.stringify(CampusAgenda.widgetSnapshot(JSON.parse(encoded), new Date(now)));
+        function __campusAgendaReader(encoded) {
+            const read = CampusAgenda.widgetSnapshotReader(JSON.parse(encoded));
+            return now => JSON.stringify(read(now));
         }
         """)
         guard context.exception == nil else { throw CampusAgendaSnapshotError.unavailable }
     }
 
+    // Keep the inputs to CampusCore.getTasks/getSchedule and the calendar.
+    // Unrelated histories, Teams posts and feedback can be several MiB.
+    private func reader(for state: [String: Any]) throws -> JSValue {
+        guard let sources = state["snapshots"] as? [String: [String: [String: Any]]],
+              let settings = state["settings"] as? [String: Any] else { throw CampusAgendaSnapshotError.invalid }
+        var input = state.filter { ["manualTasks", "personalEvents", "taskChecks", "schoolCalendar"].contains($0.key) }
+        input["settings"] = settings.filter {
+            ["timezone", "selfStudy", "scheduleWeekAnchor", "scheduleHolidays", "scheduleOverrides",
+             "customLessons", "teamsDueOverrides", "gpaTermDates"].contains($0.key)
+        }
+        input["snapshots"] = sources.mapValues { pages in
+            pages.mapValues { page in
+                page.filter { ["accountId", "url", "capturedAt", "schedule", "calendarDates", "periods", "tasks", "courses"].contains($0.key) }
+            }
+        }
+        let comparable = input as NSDictionary
+        if let cachedReader, cachedReader.input.isEqual(comparable) { return cachedReader.render }
+        let bytes = try JSONSerialization.data(withJSONObject: comparable)
+        guard bytes.count <= 25 * 1024 * 1024, let encoded = String(data: bytes, encoding: .utf8),
+              let render = context.objectForKeyedSubscript("__campusAgendaReader")?.call(withArguments: [encoded]),
+              context.exception == nil, render.isObject else { throw CampusAgendaSnapshotError.invalid }
+        cachedReader = (comparable, render)
+        return render
+    }
+
     func snapshot(state: [String: Any], now: Date = Date()) throws -> Data {
-        let stateData = try JSONSerialization.data(withJSONObject: state)
-        guard stateData.count <= 25 * 1024 * 1024,
-              let encoded = String(data: stateData, encoding: .utf8) else { throw CampusAgendaSnapshotError.invalid }
         context.exception = nil
-        guard let value = context.objectForKeyedSubscript("__campusAgendaSnapshot")?
-            .call(withArguments: [encoded, now.timeIntervalSince1970 * 1000])?.toString(),
+        guard let value = try reader(for: state).call(withArguments: [now.timeIntervalSince1970 * 1000])?.toString(),
               context.exception == nil else { throw CampusAgendaSnapshotError.invalid }
         let data = Data(value.utf8)
         guard data.count <= 262_144,

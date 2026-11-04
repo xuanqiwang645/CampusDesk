@@ -81,6 +81,17 @@ function confirmDeepSeekModels(app, models = ['deepseek-flash', 'deepseek-v4-pro
   assert.ok(request, 'DeepSeek discovery must start before confirming models');
   app.receive({ type: 'assistantModels', provider: 'deepseek', requestId: request.requestId, models });
 }
+test('a JSON-capable native host receives one serialized save with the current state generation', () => {
+  const app = harness({ hash: '#settings' });
+  app.ctx.CampusDeskJSONStateSaves = true;
+  app.receive({ type: 'state', state: app.ctx.CampusCore.emptyState(), stateGeneration: 2 });
+  app.change('refresh-minutes', { value: '30' });
+  const message = app.last('saveState');
+  assert.deepEqual(Object.keys(message).sort(), ['action', 'stateGeneration', 'stateJSON']);
+  assert.equal(message.stateGeneration, 2);
+  assert.equal(JSON.parse(message.stateJSON).settings.refreshMinutes, 30);
+});
+
 test('chat provider buttons preserve draft and route online requests locally when Ollama is selected', () => {
   const app = harness({ themeEdition: true, hash: '#assistant', online: true });
   app.input('assistant-question', 'Keep this question');
@@ -1984,6 +1995,41 @@ test('clock cache expires each second and invalidates when the schedule is repla
   app.receive({type: 'state', state: app.ctx.CampusCore.emptyState()});
   assert.equal(app.node('class-clock-label').textContent, '等待今日课表');
   assert.equal(app.node('class-clock-time').textContent, '—');
+});
+
+test('a minute of dashboard countdown ticks reuses the prepared school day', t => {
+  const app = harness(), snapshot = schedule();
+  for (let period = 10; period <= 16; period++) {
+    snapshot.schedule.push({ id: 'p' + period, date: '2026-09-19', start: period + ':00', end: period + ':40', title: 'Lesson ' + period });
+  }
+  app.receive({ type: 'snapshot', snapshot });
+  let parsedBoundaries = 0;
+  const parse = app.ctx.Date.parse;
+  app.ctx.Date.parse = value => {
+    if (typeof value === 'string' && /^2026-09-19T\d\d:\d\d:00\+08:00$/.test(value)) parsedBoundaries++;
+    return parse(value);
+  };
+  for (let tick = 0; tick < 60; tick++) app.tick(1000);
+  t.diagnostic('School-day timestamps parsed across 60 ticks: ' + parsedBoundaries);
+  assert.equal(app.node('class-clock-time').textContent, '07:32');
+  assert.equal(parsedBoundaries, 0);
+});
+
+test('local holiday edits invalidate the prepared day and hidden windows retain the live menu clock', () => {
+  const app = harness({ hash: '#schedule' });
+  app.receive({ type: 'snapshot', snapshot: schedule() });
+  assert.equal(app.node('class-clock-time').textContent, '08:32');
+  app.node('holiday-date').value = '2026-09-19';
+  app.click({ action: 'add-holiday' });
+  assert.equal(app.node('class-clock-time').textContent, '—');
+  app.click({ action: 'remove-holiday', date: '2026-09-19' });
+  assert.equal(app.node('class-clock-time').textContent, '08:32');
+  app.receive({ type: 'windowVisibility', visible: false });
+  app.tick(512000);
+  assert.match(app.last('setMenuTitle').title, /English · 40:00/);
+  assert.equal(app.node('class-clock-time').textContent, '08:32');
+  app.receive({ type: 'windowVisibility', visible: true });
+  assert.equal(app.node('class-clock-time').textContent, '40:00');
 });
 
 test('successful replacement text clears an old version when new identity is absent or invalid',()=>{

@@ -242,3 +242,19 @@ test('agenda and widget projection run in a DOM-free native-style JSContext', ()
   assert.equal(JSON.parse(output).day, '2026-10-10');
   assert.deepEqual(JSON.parse(output).items, []);
 });
+
+test('native reader reuses the schedule window until Beijing midnight and rechecks exact deadlines and event endings', () => {
+  let taskReads = 0;
+  const context = vm.createContext({ CampusCore: { ...Core, getTasks(state) { taskReads++; return Core.getTasks(state); } } });
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '../Resources/agenda.js'), 'utf8'), context);
+  const state = Agenda.upsertPersonalEvent(Core.emptyState(), event({ startTime: '23:58', endTime: '23:59' }), { now });
+  state.manualTasks.push(task('last-minute', '2026-10-10T15:59:00Z'));
+  const read = context.CampusAgenda.widgetSnapshotReader(state);
+  for (const [time, expectedReads] of [
+    ['2026-10-10T15:58:59Z', 1], ['2026-10-10T15:59:00Z', 1], ['2026-10-10T15:59:00.001Z', 1],
+    ['2026-10-10T16:00:00Z', 2], ['2026-10-10T15:57:00Z', 3]
+  ]) {
+    assert.deepEqual(JSON.parse(JSON.stringify(read(time))), Agenda.widgetSnapshot(state, time));
+    assert.equal(taskReads, expectedReads);
+  }
+});

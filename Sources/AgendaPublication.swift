@@ -6,7 +6,7 @@ final class CampusAgendaPublication {
     private let resources: URL
     let target: URL
     private var builder: CampusAgendaSnapshotBuilder?
-    private var lastContent: Data?
+    private var lastContent: NSDictionary?
     private var lastWrite: Date?
 
     init(resources: URL, target: URL) {
@@ -21,8 +21,8 @@ final class CampusAgendaPublication {
         let data = try builder!.snapshot(state: state, now: now)
         var content = try JSONSerialization.jsonObject(with: data) as! [String: Any]
         content.removeValue(forKey: "generatedAt")
-        let comparable = try JSONSerialization.data(withJSONObject: content, options: .sortedKeys)
-        if !force, comparable == lastContent, let lastWrite,
+        let comparable = content as NSDictionary
+        if !force, lastContent?.isEqual(comparable) == true, let lastWrite,
            now.timeIntervalSince(lastWrite) >= 0, now.timeIntervalSince(lastWrite) < 1800,
            FileManager.default.fileExists(atPath: target.path) { return false }
         let directory = target.deletingLastPathComponent()

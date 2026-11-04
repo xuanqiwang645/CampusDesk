@@ -69,11 +69,12 @@ final class CampusStateValidator {
           try {
             CampusCore.configureSchools(JSON.parse(schools));
             const input = JSON.parse(encoded);
+            if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Error('根数据应为对象');
             const value = operation === 'export' ? CampusCore.exportBackup(input)
               : operation === 'import' ? CampusCore.importBackup(input, {allowLegacy: allowLegacy})
               : CampusCore.validateState(input);
-            return JSON.stringify({ok: true, encoded: JSON.stringify(value)});
-          } catch (error) { return JSON.stringify({ok: false, error: String(error.message || error)}); }
+            return {encoded: JSON.stringify(value)};
+          } catch (error) { return {error: String(error.message || error)}; }
         }
         """)
         guard context.exception == nil else {
@@ -86,7 +87,11 @@ final class CampusStateValidator {
     }
 
     func prepare(_ state: [String: Any], schools: [String: String] = [:]) throws -> PreparedState {
-        let result = try runEncoded("validate", value: state, schools: schools)
+        try prepare(json: String(decoding: Self.encode(state), as: UTF8.self), schools: schools)
+    }
+
+    func prepare(json: String, schools: [String: String] = [:]) throws -> PreparedState {
+        let result = try runEncoded("validate", json: json, schools: schools)
         return PreparedState(state: result.state, data: result.data, schools: schools, owner: identity)
     }
 
@@ -182,24 +187,29 @@ final class CampusStateValidator {
     }
 
     private func run(_ operation: String, value: [String: Any], schools: [String: String], allowLegacy: Bool = false) throws -> [String: Any] {
-        try runEncoded(operation, value: value, schools: schools, allowLegacy: allowLegacy).state
+        try runEncoded(operation, json: String(decoding: Self.encode(value), as: UTF8.self), schools: schools, allowLegacy: allowLegacy).state
     }
 
-    private func runEncoded(_ operation: String, value: [String: Any], schools: [String: String], allowLegacy: Bool = false) throws -> (state: [String: Any], data: Data) {
-        let data = try Self.encode(value)
-        let schoolData = try JSONSerialization.data(withJSONObject: schools)
-        guard let encoded = String(data: data, encoding: .utf8), let schoolJSON = String(data: schoolData, encoding: .utf8) else {
-            throw CampusStateValidationError(message: "无法读取数据文本。")
+    private func runEncoded(_ operation: String, json: String, schools: [String: String], allowLegacy: Bool = false) throws -> (state: [String: Any], data: Data) {
+        guard json.utf8.count <= CampusSecurity.maximumStateBytes else {
+            throw CampusStateValidationError(message: "数据超过 25 MiB，未覆盖磁盘备份。")
         }
+        let schoolData = try JSONSerialization.data(withJSONObject: schools)
+        let schoolJSON = String(decoding: schoolData, as: UTF8.self)
         lock.lock(); defer { lock.unlock() }
         context.exception = nil
-        guard let returned = context.objectForKeyedSubscript("__campusStateOperation")?.call(withArguments: [operation, encoded, schoolJSON, allowLegacy])?.toString(),
-              context.exception == nil,
-              let response = try JSONSerialization.jsonObject(with: Data(returned.utf8)) as? [String: Any] else {
+        guard let response = context.objectForKeyedSubscript("__campusStateOperation")?.call(withArguments: [operation, json, schoolJSON, allowLegacy]),
+              context.exception == nil, response.isObject else {
             throw CampusStateValidationError(message: "无法完成数据格式校验。")
         }
-        guard response["ok"] as? Bool == true, let encodedResult = response["encoded"] as? String else {
-            throw CampusStateValidationError(message: response["error"] as? String ?? "数据格式无效。")
+        if let error = response.objectForKeyedSubscript("error"), error.isString {
+            throw CampusStateValidationError(message: error.toString())
+        }
+        // Read the JSON string directly from JavaScriptCore. Wrapping it in a
+        // second JSON document would escape and parse the entire state again.
+        guard let payload = response.objectForKeyedSubscript("encoded"), payload.isString,
+              let encodedResult = payload.toString() else {
+            throw CampusStateValidationError(message: "数据格式无效。")
         }
         // JavaScript has already serialized the fully validated object. Reuse
         // those bytes rather than walking/serializing megabytes again in Swift.

@@ -135,8 +135,8 @@
    * Legacy date counts describe the bounded date window. Category counts include
    * all useful candidates before the 100-item cap (including unresolved work).
    */
-  function widgetSnapshot(state, now) {
-    const current = instant(now), day = today(current), tasks = Core.getTasks(state);
+  function widgetCandidates(state, day) {
+    const tasks = Core.getTasks(state);
     const inRange = collect(state, { start: day, end: addDays(day, 7) }, tasks).filter(item => !item.completed);
     const homework = tasks.filter(task => !task.completed).map(task => taskItem(task) || {
       id: 'task:' + task.source + ':' + task.id, title: task.title, kind: 'task', source: task.source,
@@ -144,6 +144,9 @@
       // there is no known deadline; it must never become a fabricated due date.
       date: day, startAt: null, endAt: null, allDay: false, completed: false, location: ''
     });
+    return { day, inRange, homework };
+  }
+  function projectWidget({ day, inRange, homework }, current) {
     const overdue = homework.filter(item => item.startAt && Date.parse(item.startAt) < current.valueOf());
     const prior = overdue.filter(item => item.date < day).sort((a, b) => b.startAt.localeCompare(a.startAt)).slice(0, 20);
     const useful = inRange.filter(item => item.kind !== 'task' && (item.endAt ? Date.parse(item.endAt) > current.valueOf() : item.allDay || Date.parse(item.startAt) >= current.valueOf()));
@@ -169,5 +172,16 @@
       counts: { today: inRange.filter(item => item.date === day).length, upcoming: inRange.filter(item => item.date > day).length, overdue: overdue.length,
         courses: courses.length, calendar: calendar.length, homework: homework.length } };
   }
-  return Object.freeze({ today, addDays, monthRange, buildRange, eventForDate, normalizePersonalEvent, upsertPersonalEvent, removePersonalEvent, widgetSnapshot });
+  // The native publisher owns one reader per immutable input. Only the day
+  // window is reusable: a deadline or lesson can end between two saves.
+  function widgetSnapshotReader(state) {
+    let candidates;
+    return now => {
+      const current = instant(now), day = today(current);
+      if (!candidates || candidates.day !== day) candidates = widgetCandidates(state, day);
+      return projectWidget(candidates, current);
+    };
+  }
+  function widgetSnapshot(state, now) { return widgetSnapshotReader(state)(now); }
+  return Object.freeze({ today, addDays, monthRange, buildRange, eventForDate, normalizePersonalEvent, upsertPersonalEvent, removePersonalEvent, widgetSnapshot, widgetSnapshotReader });
 });

@@ -693,6 +693,7 @@ test('a partial Teams recapture without full timestamp retains a previously conf
 
 test('clock tracks exact seconds across start/end boundaries and never makes arrival/departure a break', () => {
   const state = Core.mergeSnapshot(Core.emptyState(), seiue());
+  const read = Core.createClassClockReader(state);
   const cases = [
     ['2026-09-17T23:59:59Z', 'before', 1], ['2026-09-18T00:00:00Z', 'class', 2400],
     ['2026-09-18T00:39:59Z', 'class', 1], ['2026-09-18T00:40:00Z', 'break', 600],
@@ -700,7 +701,7 @@ test('clock tracks exact seconds across start/end boundaries and never makes arr
     ['2026-09-18T01:30:00Z', 'after', 0], ['2026-09-18T16:00:00Z', 'empty', 0]
   ];
   for (const [now, phase, seconds] of cases) {
-    const value = Core.getClassClock(state, now);
+    const value = read(now);
     assert.equal(value.phase, phase, now);
     assert.equal(value.remainingSeconds, seconds, now);
   }
@@ -748,8 +749,10 @@ test('lunch heuristic requires an internal gap of at least 45 minutes containing
 
 test('clock marks stale school data and verified empty days without reusing yesterday', () => {
   let state = Core.mergeSnapshot(Core.emptyState(), seiue());
-  assert.equal(Core.getClassClock(state, '2026-09-18T00:20:00Z').stale, false);
-  assert.equal(Core.getClassClock(state, '2026-09-18T00:31:00Z').stale, true);
+  const read = Core.createClassClockReader(state);
+  assert.equal(read('2026-09-18T00:30:00.000Z').stale, false);
+  assert.equal(read('2026-09-18T00:30:00.001Z').stale, true);
+  assert.equal(read('2026-09-18T00:20:00Z').stale, false, 'moving the clock back restores the correct freshness');
   state = Core.mergeSnapshot(state, seiue({ capturedAt: '2026-09-18T00:40:00Z', loginRequired: true, schedule: [] }));
   assert.equal(Core.getClassClock(state, '2026-09-18T00:41:00Z').stale, true);
   state = Core.mergeSnapshot(state, seiue({ capturedAt: '2026-09-19T00:00:00Z', schedule: [], calendarDates: ['2026-09-19'] }));

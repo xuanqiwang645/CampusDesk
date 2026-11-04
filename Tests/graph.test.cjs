@@ -206,6 +206,18 @@ test('deleted replies do not remove their parent or siblings', () => {
   assert(Core.getTeamsPosts(state).some(p => p.id.endsWith(':reply:r2')));
 });
 
+test('tombstones remove nested replies and log the same removals without matching near-prefix IDs', () => {
+  const page = Graph.normalizeBatch(channel()).snapshots[0], root = page.posts[0], reply = root.id + ':reply:r1';
+  const nested = ['nested', 'next'].reduce((id, part) => id + ':reply:' + part, reply);
+  const initial = Core.mergeSnapshot(Core.emptyState(), { ...page, posts: [root,
+    { ...root, id: reply, title: 'removed reply' }, { ...root, id: nested, title: 'removed nested' },
+    { ...root, id: reply + '0', title: 'kept sibling' }] });
+  const next = Core.mergeSnapshot(initial, { ...page, capturedAt: later, posts: [], graphDeletedIDs: [reply] });
+  assert.deepEqual(Core.getTeamsPosts(next).map(row => row.id).sort(), [root.id, reply + '0'].sort());
+  assert.deepEqual(next.changeLog.filter(row => row.kind === 'removed').map(row => row.title), ['removed reply', 'removed nested']);
+  assert.equal(Core.getTeamsPosts(initial).length, 4);
+});
+
 test('chat pages have an independent namespace and preserve chat source context', () => {
   const batch = { kind: 'chatMessages', capturedAt: CAPTURE, chat: { id: 'chat-1', topic: 'Fixture study group' }, messages: [message('m1')] };
   const state = apply(apply(Core.emptyState(), channel()), batch);

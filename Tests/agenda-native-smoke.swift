@@ -43,6 +43,33 @@ struct AgendaNativeSmoke {
         check((cleared["items"] as? [[String: Any]])?.isEmpty == true, "Removed tasks are absent from the disk summary")
         check(!(try publisher.publish(state: state, now: now.addingTimeInterval(240))), "Duplicate cleared state is coalesced")
         check(try publisher.publish(state: state, now: now.addingTimeInterval(3600)), "Active app refreshes stale projection timestamp")
+        let teamsURL = "https://teams.microsoft.com/v2/"
+        func teamsPage(_ account: String, _ title: String) -> [String: Any] {
+            ["url": teamsURL, "source": "teams", "coverage": "graph", "accountId": account,
+             "capturedAt": "2026-10-10T01:00:00Z", "tasks": [["id": "teams:same-id", "title": title,
+             "requirements": "Deadline: 2026-10-11 17:00", "status": "open"]]]
+        }
+        func diskItems() throws -> [[String: Any]] {
+            let object = try JSONSerialization.jsonObject(with: Data(contentsOf: target)) as! [String: Any]
+            return object["items"] as! [[String: Any]]
+        }
+        state["snapshots"] = ["seiue": [:], "managebac": [:], "teams": [teamsURL: teamsPage("account-A", "First exercise")]]
+        state = try validator.validate(state)
+        check(try publisher.publish(state: state, now: now), "A newly synced account reaches the widget")
+        check(try diskItems().first?["startAt"] as? String == "2026-10-11T09:00:00.000Z", "Widget input retains assignment text used for deadline resolution")
+        var settings = state["settings"] as! [String: Any]
+        settings["teamsDueOverrides"] = ["teams:same-id": "2026-10-12T00:00:00Z"]
+        state["settings"] = settings
+        check(try publisher.publish(state: state, now: now), "Changing deadline settings invalidates the cached agenda")
+        check(try diskItems().first?["startAt"] as? String == "2026-10-12T00:00:00.000Z", "Saved override replaces the inferred deadline")
+        state["snapshots"] = ["seiue": [:], "managebac": [:], "teams": [teamsURL: teamsPage("account-B", "Replacement exercise")]]
+        settings["teamsDueOverrides"] = [:] as [String: String]
+        state["settings"] = settings
+        state = try validator.validate(state)
+        check(try publisher.publish(state: state, now: now), "Account replacement with a reused source URL and task ID refreshes the widget")
+        check(try diskItems().compactMap { $0["title"] as? String } == ["Replacement exercise"], "Only the replacement account remains on disk")
+        try FileManager.default.removeItem(at: target)
+        check(try publisher.publish(state: state, now: now), "Unchanged input recreates a missing widget file")
         check(CampusAgendaLink.day(from: URL(string: "campusdesk-theme://calendar?date=2026-10-10")!) == "2026-10-10", "Widget link routes a valid day")
         check(CampusAgendaLink.isTasks(URL(string: "campusdesk-theme://tasks")!), "Widget homework opens tasks without a fabricated date")
         for invalid in ["https://tasks", "campusdesk-theme://user@tasks", "campusdesk-theme://tasks:80", "campusdesk-theme://tasks/open", "campusdesk-theme://tasks?url=https://example.com", "campusdesk-theme://tasks#x"] {

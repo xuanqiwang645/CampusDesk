@@ -162,3 +162,18 @@ test('capacity preflight reserves exact UTF-8 JSON bytes without changing archiv
   assert.equal(Core.assistantHistoryHasCapacity([{ role: 'system', content: 'bytes only' }]), true);
   assert.throws(() => Core.validateAssistantConversations([{ role: 'system', content: 'bytes only' }]));
 });
+
+test('both UTF-8 budget paths agree with encoded byte lengths across block and surrogate boundaries', () => {
+  const context = vm.createContext({ TextEncoder: undefined });
+  vm.runInContext(fs.readFileSync(require.resolve('../Resources/core.js'), 'utf8'), context);
+  const limit = 8 * 1024 * 1024;
+  for (const value of ['A'.repeat(9000), 'é'.repeat(7000), '汉'.repeat(6500), '😀'.repeat(4100),
+    '"\\\n\ud800A\udfff', 'a'.repeat(4094) + '😀' + '中'.repeat(4096), '汉'.repeat(4095) + 'A'.repeat(8200)]) {
+    const json = JSON.stringify(value), bytes = Buffer.byteLength(json);
+    for (const budget of [json.length, json.length * 3, bytes - 1, bytes, bytes + 1]) {
+      for (const core of [Core, context.CampusCore]) {
+        assert.equal(core.assistantHistoryHasCapacity(value, limit - budget), bytes <= budget);
+      }
+    }
+  }
+});

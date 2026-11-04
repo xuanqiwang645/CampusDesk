@@ -90,26 +90,38 @@
       inspect(value[key], depth + 1, count);
     }
   }
-  function utf8Length(value) {
-    if (typeof TextEncoder !== 'undefined') return new TextEncoder().encode(value).length;
-    let bytes = 0;
-    for (let i = 0; i < value.length; i++) {
-      const code = value.charCodeAt(i);
-      if (code <= 0x7f) bytes += 1;
-      else if (code <= 0x7ff) bytes += 2;
-      else if (code >= 0xd800 && code <= 0xdbff && i + 1 < value.length && value.charCodeAt(i + 1) >= 0xdc00 && value.charCodeAt(i + 1) <= 0xdfff) { bytes += 4; i += 1; }
-      else bytes += 3; // Unicode replacement characters cover unpaired surrogates.
+  function fitsUTF8(value, limit) {
+    const length = value.length;
+    // Each UTF-16 unit accounts for 1–3 UTF-8 bytes (four bytes per pair).
+    if (length > limit) return false;
+    if (length * 3 <= limit) return true;
+    if (typeof TextEncoder !== 'undefined') return new TextEncoder().encode(value).length <= limit;
+    // JavaScriptCore has no TextEncoder. Stop counting as soon as even the
+    // smallest or largest possible encoding of the remaining text settles it.
+    let bytes = 0, i = 0;
+    while (i < length) {
+      const end = Math.min(length, i + 4096);
+      while (i < end) {
+        const code = value.charCodeAt(i++);
+        if (code <= 0x7f) bytes += 1;
+        else if (code <= 0x7ff) bytes += 2;
+        else if (code >= 0xd800 && code <= 0xdbff && i < length && value.charCodeAt(i) >= 0xdc00 && value.charCodeAt(i) <= 0xdfff) { bytes += 4; i++; }
+        else bytes += 3; // Unpaired surrogates encode as replacement characters.
+      }
+      const remaining = length - i;
+      if (bytes + remaining > limit) return false;
+      if (bytes + remaining * 3 <= limit) return true;
     }
-    return bytes;
+    return bytes <= limit;
   }
   function checkSize(value) {
     let serialized;
     try { serialized = JSON.stringify(value); } catch (_) { fail('无法读取对象'); }
-    if (utf8Length(serialized) > MAX_BYTES) fail('文件超过 25 MB');
+    if (!fitsUTF8(serialized, MAX_BYTES)) fail('文件超过 25 MB');
   }
   function inputObject(input) {
     if (typeof input === 'string') {
-      if (utf8Length(input) > MAX_BYTES) fail('文件超过 25 MB');
+      if (!fitsUTF8(input, MAX_BYTES)) fail('文件超过 25 MB');
       try { input = JSON.parse(input); } catch (_) { fail('不是有效的 JSON'); }
     }
     inspect(input, 0, { n: 0 });
@@ -594,8 +606,8 @@
       location: str(row.location, 300), notes: str(row.notes, 4000),
       createdAt: dateISO(row.createdAt, true), updatedAt: dateISO(row.updatedAt, true) };
   }
-  function teamsID(value, fallback) {
-    const key = id(value, fallback);
+  function teamsID(value) {
+    const key = id(value);
     return key.startsWith('teams:') ? key : 'teams:' + key;
   }
   function attachments(value) {
@@ -691,7 +703,7 @@
     const title = str(row.title, 500), course = str(row.course, 300);
     if (!title) fail('Teams 作业标题不能为空');
     const url = checkedURL(row.url, 'teams', true);
-    const result = { id: teamsID(row.id, hash(url + title + course)), title, course,
+    const result = { id: teamsID(row.id ?? hash(url + title + course)), title, course,
       dueAt: zonedISO(row.dueAt, true), dueLabel: str(row.dueLabel, 300), status: str(row.status, 100, 'open'),
       url, requirements: str(row.requirements, 30000), attachments: attachments(row.attachments) };
     if (row.capturedAt !== undefined) result.capturedAt = dateISO(row.capturedAt, false);
@@ -709,7 +721,7 @@
     if (!title && !text) fail('Teams 帖子不能为空');
     const kind = str(row.kind, 30, 'general');
     if (!['assignment', 'ec', 'general'].includes(kind)) fail('Teams 帖子类型无效');
-    const result = { id: teamsID(row.id, hash(url + title + text)), title, text, url, kind,
+    const result = { id: teamsID(row.id ?? hash(url + title + text)), title, text, url, kind,
       author: str(row.author, 300), recipient: str(row.recipient, 300), channel: str(row.channel, 300), date: str(row.date, 100),
       dateLabel: str(row.dateLabel, 300, str(row.date, 100)), attachments: attachments(row.attachments) };
     if (row.replyToId !== undefined) result.replyToId = row.replyToId ? teamsID(row.replyToId) : '';
@@ -879,7 +891,7 @@
     if (!Number.isSafeInteger(reserveBytes) || reserveBytes < 0 || reserveBytes > MAX_ASSISTANT_HISTORY_BYTES) return false;
     try {
       const serialized = JSON.stringify(value);
-      return typeof serialized === 'string' && utf8Length(serialized) + reserveBytes <= MAX_ASSISTANT_HISTORY_BYTES;
+      return typeof serialized === 'string' && fitsUTF8(serialized, MAX_ASSISTANT_HISTORY_BYTES - reserveBytes);
     } catch (_) { return false; }
   }
   function assistantHistorySize(value) {
@@ -1649,6 +1661,15 @@
     }
     return rows.sort((a, b) => Number(a.read) - Number(b.read) || (Date.parse(b.date) || 0) - (Date.parse(a.date) || 0));
   }
+  function isDeletedRecord(id, deleted) {
+    if (!deleted.size) return false;
+    if (deleted.has(id)) return true;
+    // Deleting a parent also removes replies, including nested reply IDs in old saves.
+    for (let i = id.indexOf(':reply:'); i >= 0; i = id.indexOf(':reply:', i + 1)) {
+      if (deleted.has(id.slice(0, i))) return true;
+    }
+    return false;
+  }
   function changeEvents(previous, current, source, capturedAt) {
     if (!previous) return [];
     const rows = [];
@@ -1686,7 +1707,7 @@
     // absent row in a visible-page or partial sync is not proof of deletion.
     const deleted = new Set((current.graphDeletedIDs || current.deletedIDs || []).map(String));
     if (deleted.size) for (const field of ['tasks', 'posts', 'feedback', 'grades']) {
-      for (const row of previous[field] || []) if ([...deleted].some(id => row.id === id || row.id.startsWith(id + ':reply:'))) {
+      for (const row of previous[field] || []) if (isDeletedRecord(row.id, deleted)) {
         rows.push({ id: 'change-' + hash(source + '|removed|' + row.id + '|' + capturedAt), source, kind: 'removed', category: field === 'tasks' ? '作业' : field === 'posts' ? '消息' : field === 'grades' ? '成绩' : '反馈',
           title: row.title || row.name || '记录', course: row.course || '', detail: '来源已明确移除此记录', capturedAt, url: row.url || current.url });
       }
@@ -1711,39 +1732,58 @@
     const value = Math.max(0, Math.ceil(seconds)), h = Math.floor(value / 3600), m = Math.floor(value / 60) % 60, s = value % 60;
     return h ? h + ':' + String(m).padStart(2, '0') + ':' + String(s).padStart(2, '0') : String(m).padStart(2, '0') + ':' + String(s).padStart(2, '0');
   }
-  function getClassClock(state, date) {
-    const now = date === undefined ? Date.now() : new Date(date).valueOf();
-    if (!Number.isFinite(now)) fail('查询时间无效');
-    // School slots use Beijing civil time regardless of the computer/display time zone.
-    const key = today(now, 'Asia/Shanghai');
+  function prepareClassClockDay(state, key, now) {
     const rows = getSchedule(state, key, true).map(row => Object.assign({}, row, {
       startAt: Date.parse(row.date + 'T' + row.start + ':00+08:00'), endAt: Date.parse(row.date + 'T' + row.end + ':00+08:00')
     })).sort((a, b) => a.startAt - b.startAt || a.endAt - b.endAt);
     const status = getSourceStatus(state, 'seiue', now);
     const ageLimit = Math.max(30, state.settings.refreshMinutes * 2) * 60000;
-    const relevantSnapshots = entries(state, 'seiue').filter(s => (s.calendarDates || []).includes(key) || (s.schedule || []).some(r => r.date === key));
-    const relevant = relevantSnapshots[0];
-    const stale = !relevant || now - Date.parse(relevant.capturedAt) > ageLimit || !!relevant.lastAttemptFailed || status.loginRequired || status.failed || rows.some(row => now - Date.parse(row.capturedAt) > ageLimit);
-    const output = { phase: 'empty', current: null, next: null, previous: null, remainingSeconds: 0, remainingLabel: '00:00', stale };
-    if (!rows.length) return output;
-    const current = rows.filter(row => row.startAt <= now && now < row.endAt).sort((a, b) => b.endAt - a.endAt || b.startAt - a.startAt)[0] || null;
-    const next = rows.find(row => row.startAt > now) || null;
-    const previous = rows.filter(row => row.endAt <= now).sort((a, b) => b.endAt - a.endAt)[0] || null;
-    output.current = current; output.next = next; output.previous = previous;
+    const relevant = entries(state, 'seiue').find(s => (s.calendarDates || []).includes(key) || (s.schedule || []).some(r => r.date === key));
+    let freshThrough = -Infinity;
+    if (relevant && !relevant.lastAttemptFailed && !status.loginRequired && !status.failed) {
+      let oldestCapture = Date.parse(relevant.capturedAt);
+      for (const row of rows) {
+        const capturedAt = Date.parse(row.capturedAt);
+        if (capturedAt < oldestCapture) oldestCapture = capturedAt;
+      }
+      freshThrough = oldestCapture + ageLimit;
+    }
+    return { key, rows, noon: Date.parse(key + 'T12:00:00+08:00'), freshThrough, lastCapturedAt: status.lastCapturedAt };
+  }
+  function classClockAt(day, now) {
+    let current = null, next = null, previous = null;
+    for (const row of day.rows) {
+      if (row.startAt <= now && now < row.endAt && (!current || row.endAt > current.endAt ||
+        (row.endAt === current.endAt && row.startAt > current.startAt))) current = row;
+      if (!next && row.startAt > now) next = row;
+      if (row.endAt <= now && (!previous || row.endAt > previous.endAt)) previous = row;
+    }
+    const output = { phase: 'empty', current, next, previous, remainingSeconds: 0, remainingLabel: '00:00',
+      stale: now > day.freshThrough, lastCapturedAt: day.lastCapturedAt };
     let target = now;
     if (current) { output.phase = 'class'; target = current.endAt; }
     else if (!previous && next) { output.phase = 'before'; target = next.startAt; }
     else if (previous && !next) output.phase = 'after';
     else if (previous && next) {
-      const noon = Date.parse(key + 'T12:00:00+08:00');
       // Lunch is a display heuristic: an internal gap >=45 minutes containing noon.
-      output.phase = next.startAt - previous.endAt >= 45 * 60000 && previous.endAt <= noon && next.startAt > noon ? 'lunch' : 'break';
+      output.phase = next.startAt - previous.endAt >= 45 * 60000 && previous.endAt <= day.noon && next.startAt > day.noon ? 'lunch' : 'break';
       target = next.startAt;
     }
     output.remainingSeconds = Math.max(0, Math.ceil((target - now) / 1000));
     output.remainingLabel = remainingLabel(output.remainingSeconds);
     return output;
   }
+  // The dashboard retains one reader until a sync or local edit invalidates its state.
+  function createClassClockReader(state) {
+    let day;
+    return date => {
+      const now = date === undefined ? Date.now() : new Date(date).valueOf();
+      const key = today(now, 'Asia/Shanghai');
+      if (!day || key !== day.key) day = prepareClassClockDay(state, key, now);
+      return classClockAt(day, now);
+    };
+  }
+  function getClassClock(state, date) { return createClassClockReader(state)(date); }
   function getSourceStatus(state, source, date) {
     if (!SOURCES.includes(source)) fail('来源无效');
     const all = entries(state, source), now = date === undefined ? Date.now() : new Date(date).valueOf();
@@ -1922,7 +1962,6 @@
       } else if (item.source === 'teams' && previous && !(item.coverage === 'graph' && item.graphComplete)) {
         // Browser views and individual Graph pages are partial; absence is not deletion.
         const deleted = new Set((item.graphDeletedIDs || []).concat(item.browserExcludedIDs || []));
-        const removed = row => [...deleted].some(key => row.id === key || row.id.startsWith(key + ':reply:'));
         for (const field of ['tasks', 'posts', 'feedback', 'grades']) {
           const noLongerTasks = new Set(item.coverage === 'browser' && field === 'tasks' ? item.posts.filter(post => post.kind !== 'assignment').map(post => post.id) : []);
           if (field === 'tasks' && item.coverage === 'graph') {
@@ -1967,7 +2006,7 @@
             });
           }
           const merged = item[field].concat(previous[field] || []).filter(row => {
-            if (seen.has(row.id) || removed(row) || noLongerTasks.has(row.id)) return false;
+            if (seen.has(row.id) || isDeletedRecord(row.id, deleted) || noLongerTasks.has(row.id)) return false;
             seen.add(row.id); return true;
           });
           const limit = item.coverage === 'visible' ? MAX_TEAMS_ROWS : MAX_GRAPH_ROWS;
@@ -2040,5 +2079,5 @@
   }
   return Object.freeze({ VERSION, GPA_BANDS, GPA_BANDED_METHOD: METHOD, configureSchools, schoolHomes, normalizeSchoolHome, emptyState, defaultState: emptyState, validateState, normalizeState: validateState, validateAssistantConversations, assistantHistoryHasCapacity, exportBackup, importBackup,
     mergeSnapshot, resetTeamsData, clearTeamsData: resetTeamsData, today, clock, getSchedule, getCourses, getTasks, resolveTaskDeadline, parseManualDeadline, normalizePersonalEvent: personalEventRow, getFeedback, getGradeUpdates, markGradeUpdatesRead, getOfficialGPA, estimateGPA, estimateLinearGPA, semesterGPAForecast,
-    getNextClass, getClassClock, getSchedulePeriods, getTeamsPosts, getTeamsEC, getTeamsGrades, getSourceStatus, buildView, getSchoolCalendarEvents, schoolCalendarScheduleRule, schoolCalendarScheduleConflict, parseSchoolCalendarICS, parseSchoolCalendarPDFText, safeURL, safeAttachmentURL, gradePoints: points, linearGradePoints: linearPoints });
+    getNextClass, getClassClock, createClassClockReader, getSchedulePeriods, getTeamsPosts, getTeamsEC, getTeamsGrades, getSourceStatus, buildView, getSchoolCalendarEvents, schoolCalendarScheduleRule, schoolCalendarScheduleConflict, parseSchoolCalendarICS, parseSchoolCalendarPDFText, safeURL, safeAttachmentURL, gradePoints: points, linearGradePoints: linearPoints });
 });

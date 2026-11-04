@@ -10,6 +10,18 @@ const snapshot = (changes = {}) => Object.assign({ source: 'teams', url: URL, ti
   coverage: 'browser', snapshotId: 'team-1/channel-1', accountId: 'student@example.test', warnings: [], tasks: [], posts: [], feedback: [], grades: [],
   coverageMetadata: { discovered: 5, read: 2, unread: 3, errors: 0, historyComplete: false, status: 'partial', reason: 'History not reached', warnings: ['Remaining channels'] } }, changes);
 const only = state => Object.values(state.snapshots.teams)[0];
+test('missing legacy IDs retain their task and message identities while blank IDs still fail', () => {
+  const legacy = snapshot({ posts: [post(null, { title: 'Legacy' })], tasks: [{ title: 'Essay', course: 'English', url: URL }] });
+  const merged = Core.mergeSnapshot(Core.emptyState(), legacy);
+  assert.equal(only(merged).posts[0].id, 'teams:1d1jt09');
+  assert.equal(only(merged).tasks[0].id, 'teams:1swyc46');
+  assert.deepEqual(Core.validateState(merged), merged);
+  for (const collection of [legacy.tasks, legacy.posts]) {
+    collection[0].id = '';
+    assert.throws(() => Core.mergeSnapshot(Core.emptyState(), legacy), /ID/);
+    delete collection[0].id;
+  }
+});
 test('confirmed browser system records are removed only from their source and acknowledgements cease to be tasks', () => {
   const initial=snapshot({posts:[post('system'),post('ack',{kind:'assignment'})],tasks:[{id:'system',title:'Control record',url:URL},{id:'ack',title:'OK',url:URL}]});
   let state=Core.mergeSnapshot(Core.emptyState(),initial);

@@ -21,8 +21,33 @@ function fixture(options={}) {
     readResource:()=>'',pageEval:script=>vm.runInNewContext(script,{window}),now:()=>clock,sleep:seconds=>{clock+=seconds*1000;},deadline:()=>{},progress:()=>{},warn:value=>warnings.push(value),
     emit:event=>events.push(event),publish:snapshot=>snapshots.push(snapshot),recordCoverage:()=>{}};
   context.readResource=()=> '/* Test uses a preinstalled fake API. */';
-  return {context,events,snapshots,warnings,requests};
+  return {context,events,snapshots,warnings,requests,api};
 }
+test('a pending message page crosses the browser bridge only when polling ends',t=>{
+  for(const timeout of [false, true]) {
+    const f=fixture({messageResponse:{status:'running',jobId:'message-job'}});
+    const page={accountId:'account-one',conversationId:f.context.scope.id,messages:
+      Array.from({length:100},(_,i)=>({nativeID:'m'+i,text:'history'.repeat(1000)}))};
+    let polls=0, clock=0;
+    f.api.status=()=>({status:++polls>5 && !timeout?'complete':'running',result:page});
+    if(timeout) {
+      f.context.now=()=>clock;
+      f.context.sleep=()=>{clock=45001;};
+    }
+    const transfer=[],evaluate=f.context.pageEval;
+    f.context.pageEval=script=>{
+      const raw=evaluate(script);
+      if(script.includes('CampusDeskTeamsAPI.status('))transfer.push(Buffer.byteLength(raw));
+      return raw;
+    };
+    assert.equal(runTeamsAPI(f.context).read,100);
+    assert.equal(f.snapshots.flatMap(s=>s.posts).length,100);
+    t.diagnostic((timeout?'runner deadline':'five pending polls')+' transferred '+transfer.reduce((sum,n)=>sum+n,0)+' response bytes');
+    const pageBytes=Buffer.byteLength(JSON.stringify(page));
+    assert.ok(transfer.at(-1)>=pageBytes,'the final response carries the full page');
+    assert.ok(transfer.slice(0,-1).every(bytes=>bytes<100),'earlier polls return only progress');
+  }
+});
 test('matching message and binary scopes publish one partial snapshot and one bounded attachment',()=>{
   const f=fixture(),result=runTeamsAPI(f.context);
   assert.equal(result.handled,true);assert.equal(result.historyComplete,false);

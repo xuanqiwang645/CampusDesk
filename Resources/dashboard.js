@@ -359,7 +359,10 @@
     // An import replaces the entire state. Never send the previous dashboard
     // state back while native validation/commit/acknowledgement is in flight.
     if (native && pendingImportRequestID) return false;
-    const details = { state: state };
+    // A single string avoids bridging every cached row through WebKit as a
+    // Foundation object. The native host still validates the full JSON.
+    const details = native && window.CampusDeskJSONStateSaves && !options?.imported
+      ? { stateJSON: JSON.stringify(state) } : { state };
     if (options && options.imported === true) details.imported = true;
     if (!send('saveState', details)) {
       try { localStorage.setItem(storageKey, JSON.stringify(state)); }
@@ -394,7 +397,10 @@
     timedDerivedCache.set(key, { state, second, value });
     return value;
   }
-  function classClockForState() { return timedMemoized('class-clock', () => Core.getClassClock(state)); }
+  function classClockForState() {
+    const read = memoized('class-clock-reader', () => Core.createClassClockReader(state));
+    return timedMemoized('class-clock', read);
+  }
   function dashboardHidden() { return document.hidden || document.documentElement.dataset.windowVisible === 'false'; }
   function backgroundRenderBlocked() {
     if (dashboardHidden()) return true;
@@ -783,18 +789,19 @@
     };
   }
   function renderClassClock() {
-    const clock = classClockForState(), copy = clockCopy(clock), status = sourceStatus('seiue');
-    return '<section id="class-clock" class="class-clock phase-' + esc(clock.phase) + '" aria-label="' + esc(t('今日课程倒计时')) + '"><div class="clock-mark">' + icon('clock') + '</div><div class="clock-primary"><span id="class-clock-label" class="clock-label">' + esc(copy.label) + '</span><span id="class-clock-time" class="clock-value" role="timer" aria-live="off">' + esc(copy.time) + '</span></div><div class="clock-secondary"><p id="class-clock-detail">' + esc(copy.detail) + '</p><small id="class-clock-cache">' + esc(t(clock.stale ? '课表缓存待更新 · ' : '基于已读取课表 · ') + lastUpdated(status.lastCapturedAt)) + '</small></div></section>';
+    const clock = classClockForState(), copy = clockCopy(clock);
+    return '<section id="class-clock" class="class-clock phase-' + esc(clock.phase) + '" aria-label="' + esc(t('今日课程倒计时')) + '"><div class="clock-mark">' + icon('clock') + '</div><div class="clock-primary"><span id="class-clock-label" class="clock-label">' + esc(copy.label) + '</span><span id="class-clock-time" class="clock-value" role="timer" aria-live="off">' + esc(copy.time) + '</span></div><div class="clock-secondary"><p id="class-clock-detail">' + esc(copy.detail) + '</p><small id="class-clock-cache">' + esc(t(clock.stale ? '课表缓存待更新 · ' : '基于已读取课表 · ') + lastUpdated(clock.lastCapturedAt)) + '</small></div></section>';
   }
   function updateClock() {
-    const clock = classClockForState(), copy = clockCopy(clock), root = document.getElementById('class-clock');
+    const clock = classClockForState(), root = document.getElementById('class-clock');
     if (root) {
+      const copy = clockCopy(clock);
       const className = 'class-clock phase-' + clock.phase;
       if (root.className !== className) root.className = className;
       setText('class-clock-label', copy.label);
       setText('class-clock-time', copy.time);
       setText('class-clock-detail', copy.detail);
-      setText('class-clock-cache', t(clock.stale ? '课表缓存待更新 · ' : '基于已读取课表 · ') + lastUpdated(sourceStatus('seiue').lastCapturedAt));
+      setText('class-clock-cache', t(clock.stale ? '课表缓存待更新 · ' : '基于已读取课表 · ') + lastUpdated(clock.lastCapturedAt));
     }
     return clock;
   }

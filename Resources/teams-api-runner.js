@@ -27,11 +27,16 @@ function runTeamsAPI(ctx) {
     try {
     var initial=evaluate('(function(){'+source+'\nreturn JSON.stringify(window.CampusDeskTeamsAPI.start('+JSON.stringify(request)+'));})();');
     if (!initial || !initial.jobId) return initial || {status:'error'};
-    var end=ctx.now()+Math.min(65000,Number(request.timeoutMs)||45000), latest=initial, polls=0;
-    while(ctx.now()<end) {
-      ctx.sleep(0.35);
-      latest=evaluate('JSON.stringify(window.CampusDeskTeamsAPI.status('+JSON.stringify(initial.jobId)+'))');
-      if(latest.status!=='running' && latest.status!=='pending') break;
+    var end=ctx.now()+Math.min(65000,Number(request.timeoutMs)||45000), latest, polls=0;
+    var statusCall='window.CampusDeskTeamsAPI.status('+JSON.stringify(initial.jobId)+')';
+    // Serialize in the tab. A running job can already hold megabytes of messages.
+    var progressPoll='(function(s){return JSON.stringify(s.status==="running"||s.status==="pending"?{status:s.status}:s);})('+statusCall+')';
+    while(true) {
+      if(ctx.now()<end)ctx.sleep(0.35);
+      var expired=ctx.now()>=end;
+      // At the runner deadline retain the last page even if the tab's own timer has not fired.
+      latest=evaluate(expired?'JSON.stringify('+statusCall+')':progressPoll);
+      if(expired || (latest.status!=='running' && latest.status!=='pending')) break;
       if(++polls%25===0)ctx.progress('api','正在读取 '+ctx.item.label+' 的接口数据…');
     }
     try{ctx.pageEval('window.CampusDeskTeamsAPI.forget('+JSON.stringify(initial.jobId)+'); "ok";');}catch(_){}

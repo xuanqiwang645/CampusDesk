@@ -133,6 +133,36 @@ struct CampusStateBridgeBoundary {
         action != "ready" && action != "importResultApplied" && !action.hasPrefix("assistant")
     }
 
+    /// Only this fixed-size header can rely on prepare() to check the size and
+    /// schema of the payload. Imports and messages with extra fields still
+    /// require a byte limit on the entire envelope.
+    static func isPlainStateSave(_ body: [String: Any]) -> Bool {
+        body.count == 3 && body["action"] as? String == "saveState" &&
+            body["stateGeneration"] is Int && (body["state"] is [String: Any] || body["stateJSON"] is String)
+    }
+
+    static func importRequestID(_ body: [String: Any]) -> String? {
+        guard body["action"] as? String == "saveState", body["imported"] as? Bool == true,
+              let id = body["importRequestId"] as? String, (1...100).contains(id.utf8.count),
+              id.range(of: #"^[A-Za-z0-9-]+\z"#, options: .regularExpression) != nil else { return nil }
+        return id
+    }
+
+    static func acceptsEnvelope(_ body: [String: Any], maximumBytes: Int, currentState: [String: Any],
+                                onImportFailure: ([String: Any]) -> Void) -> Bool {
+        if isPlainStateSave(body) { return true }
+        guard JSONSerialization.isValidJSONObject(body),
+              let data = try? JSONSerialization.data(withJSONObject: body),
+              data.count <= maximumBytes else {
+            if let requestID = importRequestID(body) {
+                onImportFailure(["type": "importResult", "requestId": requestID, "success": false,
+                                 "state": currentState, "message": "备份数据格式无效或超出大小限制，原数据保持不变。"])
+            }
+            return false
+        }
+        return true
+    }
+
     static func isolatesEvent(_ type: String) -> Bool {
         ["state", "snapshot", "graphBatch", "graphReset", "teamsAttachment", "teamsAttachmentUnchanged",
          "pinTeamsPage", "schoolConfiguration", "schoolConfigurationError", "schoolCalendarFile",

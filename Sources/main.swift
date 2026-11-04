@@ -536,7 +536,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         config.userContentController.add(self, name: "campus")
         let themeEdition = campusDeskBundleIdentifier == "local.campusdesk.mac.themeedition"
         let appVersion = ["version": Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "", "name": Bundle.main.object(forInfoDictionaryKey: "CampusDeskReleaseName") as? String ?? ""]
-        let bootstrap = "window.CampusSchoolConfig = " + (json(schoolEndpoints.frontend) ?? "{}") + ";window.CampusDeskThemeEdition = " + (themeEdition ? "true" : "false") + ";window.CampusDeskAppVersion = " + (json(appVersion) ?? "{}") + ";"
+        let bootstrap = "window.CampusDeskJSONStateSaves = true;window.CampusSchoolConfig = " + (json(schoolEndpoints.frontend) ?? "{}") + ";window.CampusDeskThemeEdition = " + (themeEdition ? "true" : "false") + ";window.CampusDeskAppVersion = " + (json(appVersion) ?? "{}") + ";"
         config.userContentController.addUserScript(WKUserScript(source: bootstrap, injectionTime: .atDocumentStart, forMainFrameOnly: true))
         dashboard = WKWebView(frame: .zero, configuration: config)
         dashboard.navigationDelegate = self
@@ -1152,12 +1152,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         guard message.webView === dashboard, message.frameInfo.isMainFrame,
               let url = message.frameInfo.request.url, CampusSecurity.isDashboardResourceURL(url, resources: resources),
               let body = message.body as? [String: Any], let action = body["action"] as? String else { return }
-        // Leave room for the IPC wrapper; the state itself retains its 25 MiB cap.
-        guard action.utf8.count <= 80, let bodyJSON = json(body), bodyJSON.utf8.count <= CampusSecurity.maximumStateBytes + 4096 else { return }
+        guard action.utf8.count <= 80 else { return }
+        guard CampusStateBridgeBoundary.acceptsEnvelope(body, maximumBytes: CampusSecurity.maximumStateBytes + 4096,
+                                                        currentState: state, onImportFailure: emit) else { return }
         if CampusStateBridgeBoundary.requiresCurrentState(action), !stateBridge.acceptsMutation(body["stateGeneration"]) {
-            if action == "saveState", body["imported"] as? Bool == true,
-               let requestID = body["importRequestId"] as? String,
-               requestID.range(of: "^[A-Za-z0-9-]{1,100}$", options: .regularExpression) != nil {
+            if let requestID = CampusStateBridgeBoundary.importRequestID(body) {
                 emit(["type": "importResult", "requestId": requestID, "success": false, "state": state,
                       "message": "当前数据已更新，请重新选择备份后导入。"])
             }
@@ -1351,8 +1350,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
             }
         case "saveState":
             if body["imported"] as? Bool == true {
-                guard let requestID = body["importRequestId"] as? String,
-                      requestID.range(of: "^[A-Za-z0-9-]{1,100}$", options: .regularExpression) != nil else {
+                guard let requestID = CampusStateBridgeBoundary.importRequestID(body) else {
                     status("app", "导入请求标识无效，请重新选择备份。", false); return
                 }
                 guard let candidate = body["state"] as? [String: Any] else {
@@ -1361,47 +1359,51 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
                 commitStateImport(candidate, requestID: requestID)
                 return
             }
-            if let rawCandidate = body["state"] as? [String: Any] {
-                let candidate: CampusStateValidator.PreparedState
-                do { candidate = try nativeStateValidator.get().prepare(rawCandidate, schools: schoolEndpoints.frontend) }
-                catch {
-                    flushPendingStateWrites()
-                    stateDurable = false; graphSaveFailed = true
-                    cancelGraphSync(); stopTeamsAuto(message: "数据格式校验失败，自动读取已暂停")
-                    emit(["type": "state", "state": state])
-                    status("app", "数据未能保存，已保留上次可恢复数据：" + error.localizedDescription, false)
-                    return
-                }
-                // Keep current edits exportable even if this session cannot write its state file.
-                let previousTeamsMode = teamsMode
-                let previousIncludeChats = graphIncludeChats
-                let previousTeamsBrowser = teamsBrowserChoice
-                let wasReadingTeams = teamsBrowserAutomation
-                let wasAutoDiscovering = teamsAutoDiscover
-                let previousTeamsPages = json(teamsPages)
-                state = candidate.state; configureTimer()
-                if previousTeamsMode != teamsMode || previousIncludeChats != graphIncludeChats {
-                    cancelGraphSync()
-                    if graphSigningIn { graphAuth.signOut(); graphSigningIn = false }
-                    teamsBrowserBridge.cancel()
-                    stopTeamsAuto(message: "Teams 同步方式已更改，已保留读取缓存")
-                    removeGraphCheckpoint()
-                    graphProgress = [:]
-                    emitGraphStatus()
-                }
-                // A removed page also revokes the scope of an in-flight reading run.
-                if wasReadingTeams && (!teamsBrowserAutomation || previousTeamsBrowser != teamsBrowserChoice || previousTeamsPages != json(teamsPages)) {
-                    let interrupted = teamsBrowserBridge.isRunning
-                    teamsBrowserBridge.cancel()
-                    if interrupted { status("teams", "浏览器或关注页面设置已更改，当前读取已停止；缓存保留", false) }
-                }
-                if (wasReadingTeams && (!teamsBrowserAutomation || previousTeamsBrowser != teamsBrowserChoice)) || (wasAutoDiscovering && !teamsAutoDiscover) {
-                    stopTeamsAuto(message: "浏览器自动读取设置已更改，已保留读取缓存")
-                }
-                let startTeamsOnSuccess = teamsMode == "browser" && teamsAutoDiscover && teamsBrowserAutomation
-                    && (!wasReadingTeams || !wasAutoDiscovering || previousTeamsMode != teamsMode || previousTeamsBrowser != teamsBrowserChoice)
-                queueStatePersistence(candidate, startTeamsOnSuccess: startTeamsOnSuccess)
+            let candidate: CampusStateValidator.PreparedState
+            do {
+                let validator = try nativeStateValidator.get()
+                if let serialized = body["stateJSON"] as? String, body["state"] == nil {
+                    candidate = try validator.prepare(json: serialized, schools: schoolEndpoints.frontend)
+                } else if let object = body["state"] as? [String: Any], body["stateJSON"] == nil {
+                    candidate = try validator.prepare(object, schools: schoolEndpoints.frontend)
+                } else { return }
+            } catch {
+                flushPendingStateWrites()
+                stateDurable = false; graphSaveFailed = true
+                cancelGraphSync(); stopTeamsAuto(message: "数据格式校验失败，自动读取已暂停")
+                emit(["type": "state", "state": state])
+                status("app", "数据未能保存，已保留上次可恢复数据：" + error.localizedDescription, false)
+                return
             }
+            // Keep current edits exportable even if this session cannot write its state file.
+            let previousTeamsMode = teamsMode
+            let previousIncludeChats = graphIncludeChats
+            let previousTeamsBrowser = teamsBrowserChoice
+            let wasReadingTeams = teamsBrowserAutomation
+            let wasAutoDiscovering = teamsAutoDiscover
+            let previousTeamsPages = json(teamsPages)
+            state = candidate.state; configureTimer()
+            if previousTeamsMode != teamsMode || previousIncludeChats != graphIncludeChats {
+                cancelGraphSync()
+                if graphSigningIn { graphAuth.signOut(); graphSigningIn = false }
+                teamsBrowserBridge.cancel()
+                stopTeamsAuto(message: "Teams 同步方式已更改，已保留读取缓存")
+                removeGraphCheckpoint()
+                graphProgress = [:]
+                emitGraphStatus()
+            }
+            // A removed page also revokes the scope of an in-flight reading run.
+            if wasReadingTeams && (!teamsBrowserAutomation || previousTeamsBrowser != teamsBrowserChoice || previousTeamsPages != json(teamsPages)) {
+                let interrupted = teamsBrowserBridge.isRunning
+                teamsBrowserBridge.cancel()
+                if interrupted { status("teams", "浏览器或关注页面设置已更改，当前读取已停止；缓存保留", false) }
+            }
+            if (wasReadingTeams && (!teamsBrowserAutomation || previousTeamsBrowser != teamsBrowserChoice)) || (wasAutoDiscovering && !teamsAutoDiscover) {
+                stopTeamsAuto(message: "浏览器自动读取设置已更改，已保留读取缓存")
+            }
+            let startTeamsOnSuccess = teamsMode == "browser" && teamsAutoDiscover && teamsBrowserAutomation
+                && (!wasReadingTeams || !wasAutoDiscovering || previousTeamsMode != teamsMode || previousTeamsBrowser != teamsBrowserChoice)
+            queueStatePersistence(candidate, startTeamsOnSuccess: startTeamsOnSuccess)
         case "openSource": if let source = body["source"] as? String { openSource(source, raw: body["url"] as? String) }
         case "pinTeamsBrowserPage": runTeamsBrowser("pin")
         case "captureTeamsBrowserPage": runTeamsBrowser("capture", selectionOnly: body["selectionOnly"] as? Bool ?? false)

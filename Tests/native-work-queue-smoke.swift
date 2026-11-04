@@ -89,6 +89,39 @@ import Foundation
         check(deliveredValidJSON && eventNumbers == expected, "Different-sized events retain FIFO order and valid Unicode JSON")
 
         var boundary = CampusStateBridgeBoundary()
+        let save: [String: Any] = ["action": "saveState", "stateGeneration": 0, "state": ["version": 1]]
+        check(CampusStateBridgeBoundary.isPlainStateSave(save), "An ordinary save checks its payload size during preparation")
+        let jsonSave: [String: Any] = ["action": "saveState", "stateGeneration": 0, "stateJSON": "{}"]
+        check(CampusStateBridgeBoundary.isPlainStateSave(jsonSave), "A serialized ordinary save uses the same bounded preparation")
+        check(!CampusStateBridgeBoundary.isPlainStateSave(jsonSave.merging(["state": [:]], uniquingKeysWith: { _, new in new })),
+              "An ambiguous save with both payload representations still checks the entire envelope")
+        for field in ["imported", "importRequestId", "extra"] {
+            var other = save; other[field] = true
+            check(!CampusStateBridgeBoundary.isPlainStateSave(other), "A save with an extra field must check the whole envelope")
+        }
+        for (key, value) in [("state", "unexpected"), ("stateGeneration", "0"), ("action", "sync")] {
+            var other = save; other[key] = value
+            check(!CampusStateBridgeBoundary.isPlainStateSave(other), "A malformed or unrelated message cannot use the ordinary-save path")
+        }
+        let currentState = ["title": "Before import"]
+        var importEnvelope: [String: Any] = ["action": "saveState", "stateGeneration": boundary.generation,
+            "imported": true, "importRequestId": "import-limit", "state": ["title": "新课程"]]
+        let exactLimit = try JSONSerialization.data(withJSONObject: importEnvelope).count
+        var rejections = [[String: Any]]()
+        func accepts(_ body: [String: Any]) -> Bool {
+            CampusStateBridgeBoundary.acceptsEnvelope(body, maximumBytes: exactLimit, currentState: currentState) {
+                rejections.append($0)
+            }
+        }
+        check(accepts(importEnvelope) && rejections.isEmpty, "An import exactly at the envelope limit can proceed")
+        importEnvelope["state"] = ["title": "新课程!"]
+        check(!accepts(importEnvelope) && rejections.count == 1, "An import one byte over the limit produces one failure reply")
+        let failure = rejections[0]
+        check(failure["type"] as? String == "importResult" && failure["requestId"] as? String == "import-limit" &&
+              failure["success"] as? Bool == false && failure["state"] as? [String: String] == currentState,
+              "The pending dashboard import receives its original authoritative state on size rejection")
+        importEnvelope["importRequestId"] = "import-limit\n"
+        check(!accepts(importEnvelope) && rejections.count == 1, "Do not acknowledge an invalid request ID")
         check(boundary.acceptsMutation(0) && !boundary.acceptsMutation(nil), "Native mutations require the dashboard's known generation")
         let oldGeneration = boundary.generation
         boundary.beginImport("import-success")
