@@ -447,8 +447,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
     var graphSaveFailed = false
     var stateDurable = true
     var pendingStateSave: UInt64?
-    var stateSaveNeedsTeamsAutoStart = false
-    var stateSaveTeamsAutoFocus = "all"
+    var pendingTeamsAutoStart: (focus: String, allowProvision: Bool)?
     var stateBridge = CampusStateBridgeBoundary()
     var resumeAfterImportAcknowledgement = false
     var pendingAgendaDay: String?
@@ -724,16 +723,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
     var teamsAutoDiscover: Bool { (state["settings"] as? [String: Any])?["teamsAutoDiscover"] as? Bool ?? true }
     var teamsMode: String { (state["settings"] as? [String: Any])?["teamsMode"] as? String == "browser" ? "browser" : "graph" }
     var graphIncludeChats: Bool { (state["settings"] as? [String: Any])?["graphIncludeChats"] as? Bool ?? true }
-    @objc func sync() {
+    func sync(allowProvision: Bool = false) {
         guard !freshThemeSetupInProgress, !importFailurePaused, stateBridge.awaitingImportRequestID == nil else { return }
         for worker in workers.values { worker.start() }
-        syncTeams()
+        syncTeams(allowProvision: allowProvision)
     }
-    @objc func manualSync() { importFailurePaused = false; sync() }
-    func syncTeams() {
+    @objc func manualSync() { importFailurePaused = false; sync(allowProvision: true) }
+    func syncTeams(allowProvision: Bool = false) {
         guard !importFailurePaused, stateBridge.awaitingImportRequestID == nil else { return }
         if teamsMode == "graph" { syncGraph() }
-        else if teamsAutoDiscover { startTeamsAuto() }
+        else if teamsAutoDiscover { startTeamsAuto(allowProvision: allowProvision) }
         else { runTeamsBrowser("sync") }
     }
     @objc func willSleep() {
@@ -911,7 +910,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         }
         return result
     }
-    func startTeamsAuto(loginOnly: Bool = false, focus: String = "all") {
+    func startTeamsAuto(loginOnly: Bool = false, focus: String = "all", allowProvision: Bool = false) {
         guard !importFailurePaused, stateBridge.awaitingImportRequestID == nil else { return }
         guard teamsMode == "browser" else { emitGraphStatus(); return }
         guard !teamsAutoBridge.isRunning, !teamsBrowserBridge.isRunning else { return }
@@ -925,8 +924,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         if !loginOnly, pendingStateSave != nil {
             // A just-edited setting may still be in the short write window.
             // Resume this request after its real durable acknowledgement.
-            stateSaveNeedsTeamsAutoStart = true
-            stateSaveTeamsAutoFocus = focus
+            if pendingTeamsAutoStart == nil || allowProvision { pendingTeamsAutoStart = (focus, allowProvision) }
             return
         }
         if !loginOnly && (!canSaveState || !stateDurable) {
@@ -941,7 +939,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
               "coverage": "partial", "message": teamsAutoProgress["message"]!])
         var expectedStateGeneration = stateBridge.generation
         teamsAutoBridge.run(browser: teamsBrowserChoice, operation: loginOnly ? "login" : "sync", checkpointPath: teamsAutoCheckpointURL.path,
-                            includeChats: graphIncludeChats, maximumSeconds: loginOnly ? 45 : 1200, focus: focus, attachmentCache: teamsAttachmentCache(),
+                            allowProvision: allowProvision, includeChats: graphIncludeChats, maximumSeconds: loginOnly ? 45 : 1200, focus: focus, attachmentCache: teamsAttachmentCache(),
                             onEvent: { [weak self] event in
             guard let self, self.stateBridge.generation == expectedStateGeneration else { return }
             switch event["type"] as? String {
@@ -977,6 +975,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
             self.teamsAutoProgress["running"] = false
             self.emitTeamsAutoStatus()
             let phase = (self.teamsAutoProgress["phase"] as? String ?? "").lowercased()
+            if loginOnly && phase != "login_required" {
+                // Opening a sign-in page remains possible when Apple Events are denied.
+                self.openTeamsBrowser(raw: nil)
+            }
             if loginOnly || ["need_login", "needs_login", "login_required", "auth_required", "login"].contains(phase) {
                 self.scheduleTeamsLoginRetry()
             } else if phase == "waiting", let retry = self.teamsAutoProgress["retry"] as? [String: Any],
@@ -1071,9 +1073,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
     }
     func stopTeamsAuto(message: String = "自动读取已停止，已保留成功读取的内容") {
         attachmentGeneration = UUID()
-        let wasRunning = teamsAutoBridge.isRunning || teamsLoginRetryTimer != nil || stateSaveNeedsTeamsAutoStart
-        stateSaveNeedsTeamsAutoStart = false
-        stateSaveTeamsAutoFocus = "all"
+        let wasRunning = teamsAutoBridge.isRunning || teamsLoginRetryTimer != nil || pendingTeamsAutoStart != nil
+        pendingTeamsAutoStart = nil
         teamsLoginRetryTimer?.invalidate(); teamsLoginRetryTimer = nil
         teamsAutoBridge.cancel()
         if wasRunning {
@@ -1407,16 +1408,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         case "openSource": if let source = body["source"] as? String { openSource(source, raw: body["url"] as? String) }
         case "pinTeamsBrowserPage": runTeamsBrowser("pin")
         case "captureTeamsBrowserPage": runTeamsBrowser("capture", selectionOnly: body["selectionOnly"] as? Bool ?? false)
-        case "syncTeams": syncTeams()
-        case "teams-auto-start": startTeamsAuto(focus: body["focus"] as? String == "ec" ? "ec" : "all")
+        case "syncTeams": syncTeams(allowProvision: true)
+        case "teams-auto-start": startTeamsAuto(focus: body["focus"] as? String == "ec" ? "ec" : "all", allowProvision: true)
         case "teams-auto-stop": stopTeamsAuto()
         case "connectSchool": if let source = body["source"] as? String { connectSchool(source) }
         case "syncSchool":
             if let source = body["source"] as? String, CampusSchoolConfiguration.sources.contains(source) { workers[source]?.start() }
         case "teams-auto-login":
-            // Opening sign-in remains available while a long sync is in progress.
-            openTeamsBrowser(raw: nil)
-            if !teamsAutoBridge.isRunning && !teamsBrowserBridge.isRunning { scheduleTeamsLoginRetry() }
+            if teamsBrowserAutomation && !teamsAutoBridge.isRunning && !teamsBrowserBridge.isRunning {
+                startTeamsAuto(loginOnly: true, allowProvision: true)
+            } else {
+                openTeamsBrowser(raw: nil)
+            }
         case "requestTeamsAutoStatus": emitTeamsAutoStatus()
         case "teamsAutoSnapshotFailed":
             stopTeamsAuto()
@@ -1458,7 +1461,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
                 graphProgress["message"] = "Teams 同步已暂停：部分数据未能转换，已保留现有内容和上次同步进度。请更新应用后重试。"
                 emitGraphStatus()
             }
-        case "sync": sync()
+        case "sync": manualSync()
         case "setMenuTitle":
             if let title = body["title"] as? String {
                 normalMenuTitle = String(title.prefix(32))
@@ -1679,9 +1682,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
     }
     func queueStatePersistence(_ candidate: CampusStateValidator.PreparedState, startTeamsOnSuccess: Bool) {
         stateDurable = false
-        stateSaveNeedsTeamsAutoStart = stateSaveNeedsTeamsAutoStart || startTeamsOnSuccess
+        if startTeamsOnSuccess { pendingTeamsAutoStart = (pendingTeamsAutoStart?.focus ?? "all", true) }
         guard canSaveState else {
-            stateSaveNeedsTeamsAutoStart = false
+            pendingTeamsAutoStart = nil
             handleStateSaveFailure("本次无法保存到磁盘，请导出备份并检查数据目录权限")
             return
         }
@@ -1693,10 +1696,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         // receipt may make only the latest submitted snapshot durable.
         guard pendingStateSave == receipt.revision else { return }
         pendingStateSave = nil
-        let shouldStartTeams = stateSaveNeedsTeamsAutoStart && resumeTeams
-        let teamsFocus = stateSaveTeamsAutoFocus
-        stateSaveNeedsTeamsAutoStart = false
-        stateSaveTeamsAutoFocus = "all"
+        let requestedSync = resumeTeams ? pendingTeamsAutoStart : nil
+        pendingTeamsAutoStart = nil
         switch receipt.result {
         case .success:
             stateDurable = true; graphSaveFailed = false
@@ -1704,11 +1705,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
             persistGraphCheckpointIfReady()
             if teamsMode == "graph", pendingGraphBatches.isEmpty,
                graphProgress["status"] as? String == "complete" { emitGraphStatus() }
-            if shouldStartTeams, teamsMode == "browser", teamsAutoDiscover, teamsBrowserAutomation {
+            if let requestedSync, teamsMode == "browser", teamsAutoDiscover, teamsBrowserAutomation {
                 let expected = attachmentGeneration
                 DispatchQueue.main.async { [weak self] in
                     guard let self, self.attachmentGeneration == expected else { return }
-                    self.startTeamsAuto(focus: teamsFocus)
+                    self.startTeamsAuto(focus: requestedSync.focus, allowProvision: requestedSync.allowProvision)
                 }
             }
         case .failure(let error): handleStateSaveFailure("保存失败：" + error.localizedDescription)

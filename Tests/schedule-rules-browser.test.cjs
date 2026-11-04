@@ -1,4 +1,5 @@
 'use strict';
+const { launchChromium } = require('./launch-chromium.cjs');
 // Synthetic schedule layout checks; never load a school account or real data.
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -7,8 +8,7 @@ const { pathToFileURL } = require('node:url');
 const Core = require('../Resources/core.js');
 
 test('holiday help and adjustment fields never overlap across widths, languages and dashboard styles', { skip: !process.env.PLAYWRIGHT_MODULE }, async () => {
-  const { chromium } = require(process.env.PLAYWRIGHT_MODULE);
-  const browser = await chromium.launch({ headless: true, executablePath: process.env.CHROME_EXECUTABLE || undefined });
+  const browser = await launchChromium();
   try {
     const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
     const errors = [];

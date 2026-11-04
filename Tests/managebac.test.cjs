@@ -1,4 +1,5 @@
 'use strict';
+const { launchChromium } = require('./launch-chromium.cjs');
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const mb = require('../Resources/managebac.js');
@@ -251,7 +252,7 @@ test('only explicitly ungraded score blocks establish pending assignment evidenc
 
 test('rendered grade roster distinguishes pending, zero, hidden and loading marks', {skip:!process.env.PLAYWRIGHT_MODULE}, async () => {
   const fs=require('node:fs');
-  const browser=await require(process.env.PLAYWRIGHT_MODULE).chromium.launch({headless:true,executablePath:process.env.CHROME_EXECUTABLE || undefined});
+  const browser=await launchChromium();
   try {
     const page=await browser.newPage();
     const card=(id,title,score)=>`<div class="short-assignment"><div class="title"><a href="${COURSE}/${id}">${title}</a></div>${score}</div>`;

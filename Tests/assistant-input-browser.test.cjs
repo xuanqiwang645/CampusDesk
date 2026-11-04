@@ -1,4 +1,5 @@
 'use strict';
+const { launchChromium } = require('./launch-chromium.cjs');
 // Real pointer/focus ordering with a synthetic native bridge; no API or school access.
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -7,8 +8,7 @@ const { pathToFileURL } = require('node:url');
 const optional = { skip: !process.env.PLAYWRIGHT_MODULE };
 
 async function fixture(run, patchDOM = true) {
-  const { chromium } = require(process.env.PLAYWRIGHT_MODULE);
-  const browser = await chromium.launch({ headless: true, executablePath: process.env.CHROME_EXECUTABLE || undefined });
+  const browser = await launchChromium();
   try {
     const page = await browser.newPage({ viewport: { width: 1280, height: 1100 } });
     const errors = []; page.on('pageerror', error => errors.push(error.message));

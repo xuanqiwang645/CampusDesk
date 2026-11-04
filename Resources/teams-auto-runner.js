@@ -264,13 +264,91 @@ function allowedTeamsURL(value) {
   for(var i=0;i<pieces.length;i++){var key;try{key=decodeURIComponent(pieces[i].split('=')[0]);}catch(_){return false;}if(/^(?:token|access_token|id_token|refresh_token|code|sig|signature|authkey|client_secret|assertion|authorization|password|session_token)$/i.test(key))return false;}
   return true;
 }
-if(typeof module==='object' && module.exports)module.exports={createRunner:createDOMRunner,allowedURL:allowedTeamsURL};
+function teamsSetupError(code, message) {
+  var error = new Error(message); error.code = code; return error;
+}
+
+function savedTeamsTab(reader, session) {
+  var tab, winID = String(session.windowId), tabID = String(session.tabId);
+  function resolve() {
+    tab = reader.tab(winID, tabID);
+    return {tab:tab, owner:winID, url:tab.url()};
+  }
+  try { return resolve(); }
+  catch (error) { if (error.code !== 'TAB_MISSING') throw error; }
+  // A moved tab retains its ID. Rebind by ID so subsequent reads cannot jump
+  // to a user's tab when another tab closes or the strip is reordered.
+  var windows = reader.windows();
+  for (var w = 0; w < windows.length; w++) {
+    var tabs = windows[w].tabs();
+    if (tabs.some(function(item) { return String(item.id()) === tabID; })) {
+      winID = String(windows[w].id());
+      return resolve();
+    }
+  }
+  return null;
+}
+
+function prepareTeamsTab(config, session, makeApp, makeReader, save) {
+  var login = config.operation === 'login', provision = login || config.allowProvision === true;
+  var reader = makeReader(config.browser), app, target, owner;
+  if (!reader.running()) {
+    if (!provision) throw teamsSetupError('BROWSER_NOT_RUNNING', '浏览器已退出。点击「立即同步」可打开专用 Teams 标签页。');
+    app = makeApp();
+    app.launch();
+    reader = makeReader(config.browser);
+  }
+  if (session.tabId && session.windowId && (!session.browser || session.browser === config.browser)) {
+    var saved = savedTeamsTab(reader, session);
+    if (saved) {
+      var needsLogin = /^https:\/\/(?:login\.microsoftonline\.com|login\.live\.com|login\.windows\.net)\//i.test(saved.url);
+      if (needsLogin && !login) throw teamsSetupError('NEED_LOGIN', '正在等待专用 Teams 标签页完成登录。');
+      if (allowedTeamsURL(saved.url) || needsLogin) { target = saved.tab; owner = saved.owner; }
+    }
+  }
+  if (!target && !provision) throw teamsSetupError('SYNC_TAB_REQUIRED', '专用 Teams 标签页未打开。点击「立即同步」可重新建立，已读取的内容保留。');
+  if ((!target || login) && !app) app = makeApp();
+  if (!target) {
+    // Chromium selects a newly inserted tab. Only explicit user actions may
+    // provision one; a timer or sign-in retry must not change the user's tab.
+    var visible = app.windows();
+    if (!visible.length) { app.windows.push(app.Window()); visible = app.windows(); }
+    var win = visible[0], previous = win.tabs().map(function(item) { return String(item.id()); });
+    var selected = !login && previous.length ? String(win.activeTab().id()) : '';
+    win.tabs.push(app.Tab({url:'https://teams.cloud.microsoft/'}));
+    var after = win.tabs(), added = after.filter(function(item) { return previous.indexOf(String(item.id())) < 0; });
+    if (added.length !== 1) throw teamsSetupError('SYNC_TAB_REQUIRED', '无法确认新建的 Teams 标签页，请重新点击「立即同步」。');
+    owner = String(win.id());
+    var newID = String(added[0].id());
+    if (selected && String(win.activeTab().id()) === newID) {
+      var restoreIndex = after.findIndex(function(item) { return String(item.id()) === selected; });
+      if (restoreIndex >= 0) win.activeTabIndex = restoreIndex + 1;
+    }
+    target = reader.tab(owner, newID);
+  } else if (login) {
+    // An explicit sign-in may reveal its existing tab in a different window.
+    var loginWindow = app.windows().find(function(win) { return String(win.id()) === owner; });
+    var index = loginWindow ? loginWindow.tabs().findIndex(function(item) { return String(item.id()) === String(session.tabId); }) : -1;
+    if (index < 0) throw teamsSetupError('SYNC_TAB_REQUIRED', '专用 Teams 标签页已关闭，请重新打开登录。');
+    loginWindow.activeTabIndex = index + 1;
+    loginWindow.index = 1;
+  }
+  var tabID = String(target.id());
+  if (session.browser !== config.browser || session.windowId !== owner || session.tabId !== tabID) {
+    session.browser = config.browser; session.windowId = owner; session.tabId = tabID;
+    save(session);
+  }
+  if (login) app.activate();
+  return target;
+}
+
+if(typeof module==='object' && module.exports)module.exports={createRunner:createDOMRunner,allowedURL:allowedTeamsURL,prepareTab:prepareTeamsTab};
 
 // Native entry point. Foundation is deliberately initialized here, not when
 // node:test imports the portable orchestration above.
 function run(argv) {
   ObjC.import('Foundation');
-  var output=$.NSFileHandle.fileHandleWithStandardOutput,config,session={},tab,app;
+  var output=$.NSFileHandle.fileHandleWithStandardOutput,config,session={},tab;
   function emit(value){output.writeData($(JSON.stringify(value)+'\n').dataUsingEncoding($.NSUTF8StringEncoding));}
   function read(path){var value=$.NSString.stringWithContentsOfFileEncodingError(path,$.NSUTF8StringEncoding,null);return value && !value.isNil()?ObjC.unwrap(value):'';}
   function save(value){session=value;if(!config.checkpointPath)return;$(JSON.stringify(value)).writeToFileAtomicallyEncodingError(config.checkpointPath,true,$.NSUTF8StringEncoding,null);$.NSFileManager.defaultManager.setAttributesOfItemAtPathError($({NSFilePosixPermissions:384}),config.checkpointPath,null);}
@@ -282,16 +360,19 @@ function run(argv) {
     var source=helpers+'\n'+adapter,apiCode=read(config.resources+'/teams-api-runner.js');
     var apiHooks=apiCode?eval(apiCode+'\n;({capture:typeof runTeamsAPI==="function"?runTeamsAPI:null,index:typeof runTeamsAPIIndex==="function"?runTeamsAPIIndex:null});'):{};
     if(config.checkpointPath)try{session=JSON.parse(read(config.checkpointPath)||'{}');}catch(_){session={};}
-    app=Application(config.browser==='edge'?'Microsoft Edge':'Google Chrome');if(!app.running())app.launch();
-    var windows=app.windows();
-    for(var w=0;w<windows.length && !tab;w++){var tabs=windows[w].tabs();for(var t=0;t<tabs.length;t++)if(String(tabs[t].id())===String(session.tabId) && allowedTeamsURL(tabs[t].url())){tab=tabs[t];break;}}
-    if(!tab && config.reuseActive && windows.length && allowedTeamsURL(windows[0].activeTab().url()))tab=windows[0].activeTab();
-    if(!tab){if(!windows.length){app.windows.push(app.Window());windows=app.windows();}windows[0].tabs.push(app.Tab({url:'https://teams.cloud.microsoft/'}));var fresh=windows[0].tabs();tab=fresh[fresh.length-1];windows[0].activeTabIndex=fresh.length;session=Object.assign({},session,{windowId:String(windows[0].id()),tabId:String(tab.id())});save(session);}
-    if(config.operation==='login'){app.activate();emit({type:'done',status:{running:false,phase:'login_required',message:'请在浏览器登录 Teams。',coverage:'partial',historyComplete:false}});return;}
+    var quietCode=read(config.resources+'/teams-quiet-browser.js');
+    if (!quietCode) throw new Error('RESOURCES_MISSING');
+    var makeReader=eval(quietCode+'\n;createQuietTeamsBrowser;');
+    tab=prepareTeamsTab(config,session,function(){return Application(config.browser==='edge'?'Microsoft Edge':'Google Chrome');},makeReader,save);
+    if(config.operation==='login'){emit({type:'done',status:{running:false,phase:'login_required',message:'请在浏览器登录 Teams。',coverage:'partial',historyComplete:false}});return;}
     function pageEval(script){if(!allowedTeamsURL(tab.url())){var changed=new Error('同步标签已离开 Teams，请重新登录。');changed.code='TAB_CHANGED';throw changed;}return tab.execute({javascript:script});}
     createDOMRunner(config,{session:session,now:Date.now,sleep:delay,emit:emit,saveCheckpoint:save,captureHook:apiHooks.capture,indexHook:apiHooks.index,pageEval:pageEval,readResource:function(name){return read(config.resources+'/'+name);},execute:function(request){
       var script='(function(){'+source+'\nreturn JSON.stringify(window.CampusTeamsAuto.run('+JSON.stringify(request)+'));})();',raw=pageEval(script);
       if(typeof raw!=='string' || raw.length>4000000){var invalid=new Error('页面内容超出单次读取上限。');invalid.code='INVALID_RESULT';throw invalid;}return JSON.parse(raw);
     }}).start();
-  }catch(error){emit({type:'error',code:'BRIDGE_SETUP_ERROR',message:'无法启动 Teams 自动读取：'+String(error.message || error).slice(0,200)});emit({type:'done',status:{running:false,phase:'partial',message:'Teams 读取未启动，已保留缓存。',coverage:'partial',historyComplete:false}});}
+  }catch(error){
+    var code=error.code || 'BRIDGE_SETUP_ERROR', message=error.code?String(error.message).slice(0,200):'无法启动 Teams 自动读取，请检查浏览器和自动化权限。';
+    emit({type:'error',code:code,message:message});
+    emit({type:'done',status:{running:false,phase:code==='NEED_LOGIN'?'login_required':'paused',errorCode:code,message:message,coverage:'partial',historyComplete:false}});
+  }
 }

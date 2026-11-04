@@ -2,8 +2,7 @@
    Reads only existing Teams tabs in a running, explicitly chosen Chrome/Edge.
    Never opens a tab, navigates, enables browser permissions, or reads credentials.
    Browser AppleEvents JavaScript permission must be enabled manually by the user.
-   Chromium API: https://www.chromium.org/developers/applescript/
-   This bridge has mocked API coverage, not a claim of macOS live verification. */
+   Chromium API: https://www.chromium.org/developers/applescript/ */
 var CampusTeamsBrowser = (function () {
   'use strict';
   var MAX_PAGES = 20, MAX_INPUT = 250000, MAX_EXTRACTOR = 150000, MAX_SNAPSHOT = 1000000, MAX_OUTPUT = 2000000;
@@ -200,6 +199,6 @@ var CampusTeamsBrowser = (function () {
   return {runInput:runInput,perform:perform,safeURL:safeURL,matchRoute:matchRoute,hasSpecificRoute:hasSpecificRoute,injectionScript:injectionScript,validateInput:validateInput,errorCode:errorCode};
 })();
 function run(argv) {
-  return CampusTeamsBrowser.runInput(argv,function(name){return Application(name);});
+  return CampusTeamsBrowser.runInput(argv,function(name){return createQuietTeamsBrowser(name === 'Microsoft Edge' ? 'edge' : 'chrome');});
 }
 if(typeof module==='object'&&module.exports)module.exports=CampusTeamsBrowser;

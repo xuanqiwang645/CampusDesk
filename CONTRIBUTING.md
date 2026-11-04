@@ -3,6 +3,8 @@
 同时，感谢https://github.com/gediz/teams-web-chat-exporter，https://github.com/Maxim-Mazurok/teams-api，https://github.com/microsoftgraph提供了Microsoft TeamsAPI的代码和思路指导
 欢迎针对现有问题提交 Issue 或 Pull Request。请先运行 `node --test Tests/*.test.cjs`；修改 Swift、附件或消息桥接时，还需在 macOS 运行 `bash test-native.sh` 和 `bash build.sh`。
 
+macOS 浏览器测试使用 Playwright 的独立 Chromium Headless Shell。先用同一版本的 Playwright 运行 `playwright install --only-shell chromium`，再将 `PLAYWRIGHT_MODULE` 指向该模块并运行 `node Tests/run-macos.cjs`。这样连续运行测试时不会反复启动桌面版 Chrome。
+
 请保留以下约束：
 
 - 只读访问，不增加自动发送消息、提交作业或修改学校记录的行为。

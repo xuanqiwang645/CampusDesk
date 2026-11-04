@@ -1,4 +1,5 @@
 'use strict';
+const { launchChromium } = require('./launch-chromium.cjs');
 // Persistent synthetic native state only: no real keys, school data, or model calls.
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -16,8 +17,7 @@ function initialState() {
 }
 
 async function fixture(run, initial = initialState()) {
-  const { chromium } = require(process.env.PLAYWRIGHT_MODULE);
-  const browser = await chromium.launch({ headless: true, executablePath: process.env.CHROME_EXECUTABLE || undefined });
+  const browser = await launchChromium();
   try {
     const page = await browser.newPage({ viewport: { width: 1280, height: 1100 } });
     const errors = [], remoteAttempts = [];

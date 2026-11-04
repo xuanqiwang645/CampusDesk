@@ -1,4 +1,5 @@
 'use strict';
+const { launchChromium } = require('./launch-chromium.cjs');
 // Synthetic, isolated Chromium checks: no school login or student data is read.
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -7,8 +8,7 @@ const { pathToFileURL } = require('node:url');
 const optional = { skip: !process.env.PLAYWRIGHT_MODULE };
 
 async function fixture(run) {
-  const { chromium } = require(process.env.PLAYWRIGHT_MODULE);
-  const browser = await chromium.launch({ headless: true, executablePath: process.env.CHROME_EXECUTABLE || undefined });
+  const browser = await launchChromium();
   try {
     const page = await browser.newPage();
     const errors = [];

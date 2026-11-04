@@ -1,10 +1,10 @@
 'use strict';
+const { launchChromium } = require('./launch-chromium.cjs');
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
 test('Liquid Glass renders beneath the selected opaque color theme and its transparent base fallback', { skip: !process.env.PLAYWRIGHT_MODULE || !process.env.CAMPUSDESK_TEST_URL }, async () => {
-  const { chromium } = require(process.env.PLAYWRIGHT_MODULE);
-  const browser = await chromium.launch({ headless: true, executablePath: process.env.CHROME_EXECUTABLE || undefined });
+  const browser = await launchChromium();
   try {
     const page = await browser.newPage({ viewport: { width: 1400, height: 900 }, deviceScaleFactor: 1 });
     const errors = [];
@@ -55,8 +55,7 @@ test('Liquid Glass renders beneath the selected opaque color theme and its trans
 });
 
 test('real WebGL drawing pauses for hidden windows and low-power mode, then resumes on demand', { skip: !process.env.PLAYWRIGHT_MODULE || !process.env.CAMPUSDESK_TEST_URL }, async () => {
-  const { chromium } = require(process.env.PLAYWRIGHT_MODULE);
-  const browser = await chromium.launch({ headless:true, executablePath:process.env.CHROME_EXECUTABLE || undefined });
+  const browser = await launchChromium();
   try {
     const page = await browser.newPage({viewport:{width:1400,height:900},deviceScaleFactor:2});
     const errors=[]; page.on('pageerror',error=>errors.push(error.message));

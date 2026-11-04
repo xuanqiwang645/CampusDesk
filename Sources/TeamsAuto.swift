@@ -75,7 +75,7 @@ final class TeamsAutoBridge {
         if let invocation = active { stop(invocation) }
         active = nil
     }
-    func run(browser: String, operation: String = "sync", checkpointPath: String? = nil,
+    func run(browser: String, operation: String = "sync", checkpointPath: String? = nil, allowProvision: Bool = false,
              includeChats: Bool = true, maximumSeconds: Int = 1200, focus: String = "all", attachmentCache: [[String: String]] = [],
              onEvent: @escaping ([String: Any]) -> Void,
              completion: @escaping ([String: Any]?) -> Void) {
@@ -97,7 +97,7 @@ final class TeamsAutoBridge {
         }
         let duration = max(30, min(1200, maximumSeconds))
         var config: [String: Any] = ["browser": browser, "operation": operation, "resources": resources.path,
-                                     "includeChats": includeChats, "maxSeconds": duration, "focus": focus == "ec" ? "ec" : "all"]
+                                     "allowProvision": allowProvision, "includeChats": includeChats, "maxSeconds": duration, "focus": focus == "ec" ? "ec" : "all"]
         if let checkpointPath = checkpointPath { config["checkpointPath"] = checkpointPath }
         config["attachmentCache"] = Array(attachmentCache.prefix(300))
         guard let argument = json(config) else { failure("invalid_request", "无法准备 Teams 读取配置"); return }

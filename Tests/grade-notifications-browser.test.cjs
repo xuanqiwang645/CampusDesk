@@ -1,4 +1,5 @@
 'use strict';
+const { launchChromium } = require('./launch-chromium.cjs');
 // Real browser coverage with synthetic grades; never reads school accounts.
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -8,7 +9,6 @@ const Core = require('../Resources/core.js');
 const optional = { skip: !process.env.PLAYWRIGHT_MODULE };
 const school = 'https://example-school.managebac.cn/';
 const courseURL = school + 'student/classes/7001/core_tasks';
-const launch = () => require(process.env.PLAYWRIGHT_MODULE).chromium.launch({ headless: true, executablePath: process.env.CHROME_EXECUTABLE || undefined });
 function snapshot(score, percentage, timestamp) {
   return { source: 'managebac', url: courseURL, title: 'Synthetic Physics', capturedAt: timestamp, gradesCaptured: true, warnings: [], feedback: [], tasks: [], courses: [{ id: '7001', name: 'Synthetic Physics', percentage, term: 'Term 1 (current)', isCurrentTerm: true, isCourseGrade: true, url: courseURL }], grades: [{ id: '9001', assignmentId: '9001', title: '<img src=x onerror=alert(1)> Lab report', course: 'Synthetic Physics', courseId: '7001', term: 'Term 1 (current)', score, maxScore: 100, percentage: score, gradeLabel: '', url: courseURL + '/9001' }] };
 }
@@ -23,7 +23,7 @@ async function seed(page, initial) {
   await page.locator('#assistant-question').waitFor();
 }
 test('grade notification drawer persists unread state, contains untrusted text, supports keyboard/outside close and keeps drafts during live sync', optional, async () => {
-  const browser = await launch();
+  const browser = await launchChromium();
   try {
     const page = await browser.newPage({ viewport: { width: 1280, height: 1000 } }), errors = [];
     page.on('pageerror', error => errors.push(error.message));
@@ -76,7 +76,7 @@ test('grade notification drawer persists unread state, contains untrusted text, 
   } finally { await browser.close(); }
 });
 test('grade notifications handle unknown impacts and zero marks in English without horizontal overflow at 390px, 760px and 1280px', optional, async () => {
-  const browser = await launch();
+  const browser = await launchChromium();
   try {
     const page = await browser.newPage({ viewport: { width: 1280, height: 1000 } }), errors = [];
     page.on('pageerror', error => errors.push(error.message));

@@ -130,3 +130,16 @@ test('foreign local index cannot grant conversation scope',()=>{
   const f=fixture({indexAccount:'foreign'});assert.equal(runTeamsAPIIndex(f.context),false);
   assert.equal(f.snapshots.length,0);assert.equal(f.events.length,0);assert.equal(f.requests.length,1);
 });
+test('loss of the managed tab or browser permission stops the index before another conversation',()=>{
+  for (const code of ['TAB_MISSING','BROWSER_NOT_RUNNING','AUTOMATION_DENIED','JAVASCRIPT_DISABLED']) {
+    const f=fixture({conversations:['a','b'].map(id=>({id:'19:'+id,name:'English Corner '+id,type:'channel'}))});
+    const evaluate=f.context.pageEval; let reads=0;
+    f.context.pageEval=script=>{
+      if (script.includes('"op":"messages"')) { reads++; throw Object.assign(new Error('browser unavailable'),{code}); }
+      return evaluate(script);
+    };
+    assert.throws(()=>runTeamsAPIIndex(f.context), {code});
+    assert.equal(reads,1);
+    assert.equal(f.snapshots.length,0);
+  }
+});

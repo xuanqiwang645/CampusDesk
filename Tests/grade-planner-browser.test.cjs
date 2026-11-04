@@ -1,4 +1,5 @@
 'use strict';
+const { launchChromium } = require('./launch-chromium.cjs');
 // Isolated synthetic browser fixture; no school accounts or user browser data.
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -8,9 +9,8 @@ const { pathToFileURL } = require('node:url');
 const Core = require('../Resources/core.js');
 const P = require('../Resources/grade-planner.js');
 const optional = { skip: !process.env.PLAYWRIGHT_MODULE };
-const launch = () => require(process.env.PLAYWRIGHT_MODULE).chromium.launch({headless:true,executablePath:process.env.CHROME_EXECUTABLE || undefined});
 test('category plans support typing, background refresh, save, reload, import, English and narrow layouts', optional, async () => {
-  const browser = await launch();
+  const browser = await launchChromium();
   try {
     const page = await browser.newPage({viewport:{width:1280,height:1000}}), errors=[];
     page.on('pageerror',e=>errors.push(e.message));
@@ -74,7 +74,7 @@ test('category plans support typing, background refresh, save, reload, import, E
   } finally { await browser.close(); }
 });
 test('ManageBac information icon survives adapter reinjection and reads the category popup',optional,async()=>{
-  const browser=await launch();
+  const browser=await launchChromium();
   try {
     const page=await browser.newPage();
     await page.setContent('<main><h1>Synthetic course</h1><h2>All Tasks</h2><select id="term"><option selected>Term 1 (current)</option></select><span title="Task information" data-toggle="popover">ⓘ</span></main>');

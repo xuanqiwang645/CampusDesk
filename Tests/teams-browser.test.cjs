@@ -2,6 +2,7 @@
 const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm');
 const bridge=require('../Resources/teams-browser.js');
 const bridgeSource=fs.readFileSync(require.resolve('../Resources/teams-browser.js'),'utf8');
+const quietSource=fs.readFileSync(require.resolve('../Resources/teams-quiet-browser.js'),'utf8');
 const home='https://teams.microsoft.com/v2/';
 const ec='https://teams.microsoft.com/l/channel/example/EC?tenantId=example';
 const work='https://teams.microsoft.com/l/channel/example/HOMEWORK?tenantId=example';
@@ -27,7 +28,8 @@ function tab(url,extra={}){
 }
 function invoke(input,windows,extra={}){
   const seen={factory:0,running:0,windows:0,name:null};
-  const context={Application(name){
+  const context={createQuietTeamsBrowser(browser){
+    const name=browser==='edge'?'Microsoft Edge':'Google Chrome';
     seen.factory++;seen.name=name;
     return {running(){seen.running++;return extra.running!==false;},windows(){seen.windows++;if(extra.error)throw extra.error;return windows;}};
   }};
@@ -37,6 +39,33 @@ function invoke(input,windows,extra={}){
 }
 const input=(operation='capture',overrides={})=>Object.assign({operation,browser:'chrome',pages:[],extractor},overrides);
 const windowFor=(active,tabs=[active])=>({activeTab:()=>active,tabs:()=>tabs});
+test('macOS reads target one running PID with interaction disabled and retain tab identity on reorder',()=>{
+  const nil={isNil:()=>true}, process={processIdentifier:19,terminated:false,isNil:()=>false};
+  const calls=[], app={isNil:()=>false,lastError:nil};
+  const tab=id=>({valueForKey:key=>key==='id'?id:'https://teams.microsoft.com/'+id,lastError:nil,
+    performSelectorWithObject(selector,script){calls.push([app.sendMode,selector,script,id]);return 'fixture';}});
+  const tabs=[tab('first'),tab('second')];
+  const elements=rows=>({
+    arrayByApplyingSelector(selector){assert.equal(selector,'id');const ids=rows.map(row=>row.valueForKey('id'));return {count:ids.length,objectAtIndex:i=>ids[i]};},
+    objectWithID(id){return rows.find(row=>row.valueForKey('id')===id);}
+  });
+  const win={lastError:nil,valueForKey:key=>key==='tabs'?elements(tabs):key==='activeTab'?tabs[0]:'window'};
+  app.valueForKey=key=>{assert.equal(key,'windows');assert.equal(app.sendMode,0x13);return elements([win]);};
+  const $=Object.assign(value=>value,{
+    NSRunningApplication:{runningApplicationsWithBundleIdentifier(bundle){assert.equal(bundle,'com.google.Chrome');return {firstObject:process};}},
+    SBApplication:{applicationWithProcessIdentifier(pid){assert.equal(pid,19);return app;}}
+  });
+  const context=vm.createContext({$,ObjC:{import(){},unwrap:value=>value}});
+  vm.runInContext(quietSource,context);
+  const reader=context.createQuietTeamsBrowser('chrome'),w=reader.windows()[0],t=w.tabs()[0];
+  tabs.reverse();
+  assert.equal(t.id(),'first'); assert.equal(w.activeTab().id(),'second');
+  assert.equal(reader.tab('window','first').execute({javascript:'"fixture"'}),'fixture');
+  assert.deepEqual(calls,[[0x13,'executeJavascript:','"fixture"','first']]);
+  process.terminated=true;
+  assert.throws(()=>t.execute({javascript:'"again"'}),error=>error.code==='BROWSER_NOT_RUNNING');
+  assert.equal(calls.length,1);
+});
 test('pin reads only active Teams URL/title and executes no browser JavaScript',()=>{
   const active=tab(ec),other=tab('https://other.example/');
   const {output,seen}=invoke(input('pin'),[windowFor(active,[active,other])]);

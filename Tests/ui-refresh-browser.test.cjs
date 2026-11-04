@@ -1,4 +1,5 @@
 'use strict';
+const { launchChromium } = require('./launch-chromium.cjs');
 // Exercise the rendered UI using an isolated browser and synthetic school data.
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -24,8 +25,7 @@ function stateFor(dashboardTheme = 'board', colorTheme = 'sage', language = 'zh-
 }
 
 async function fixture(run) {
-  const { chromium } = require(process.env.PLAYWRIGHT_MODULE);
-  const browser = await chromium.launch({ headless: true, executablePath: process.env.CHROME_EXECUTABLE || undefined });
+  const browser = await launchChromium();
   try {
     const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
     const errors = [];

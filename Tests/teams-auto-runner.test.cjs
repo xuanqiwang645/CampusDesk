@@ -1,7 +1,75 @@
 'use strict';
 const test=require('node:test');
 const assert=require('node:assert/strict');
-const {createRunner,allowedURL}=require('../Resources/teams-auto-runner.js');
+const {createRunner,allowedURL,prepareTab}=require('../Resources/teams-auto-runner.js');
+
+function quietBrowserFixture() {
+  const teamsURL = 'https://teams.cloud.microsoft/';
+  const tabs = [{id: 1, url: teamsURL + 'my-channel'}, {id: 2, url: teamsURL}];
+  const calls = {native: 0, activate: 0, launch: 0, discovery: 0, reads: []};
+  let running = true, selected = 1;
+  const win = {id: () => '9', tabs: () => tabs.map(t => ({id: () => t.id})), activeTab: () => ({id: () => selected}),
+    set activeTabIndex(index) { selected = tabs[index - 1].id; }};
+  win.tabs.push = tab => { tabs.push(tab); selected = tab.id; };
+  const app = {windows: () => [win], Tab: ({url}) => ({id: 3, url}), launch() { calls.launch++; running = true; }, activate() { calls.activate++; }};
+  const reader = {running: () => running, windows() { calls.discovery++; return [win]; }, tab(windowID, tabID) {
+    return {id: () => tabID, url() {
+      const tab = windowID === '9' && tabs.find(t => String(t.id) === tabID);
+      if (!tab) throw Object.assign(new Error('Missing tab'), {code: 'TAB_MISSING'});
+      calls.reads.push(tab.id); return tab.url;
+    }};
+  }};
+  return {calls, tabs, selected: () => selected, stop() { running = false; },
+    prepare(config, session = {}) { return prepareTab({operation: 'sync', browser: 'chrome', ...config}, session,
+      () => { calls.native++; return app; }, () => reader, () => {}); }};
+}
+
+test('routine sync uses the saved tab by ID without foreground browser events or discovery', () => {
+  const f = quietBrowserFixture(), session = {windowId:'9', tabId:'2'};
+  const tab = f.prepare({}, session);
+  f.tabs.reverse();
+  assert.equal(tab.url(), 'https://teams.cloud.microsoft/');
+  assert.deepEqual(f.calls, {native:0, activate:0, launch:0, discovery:0, reads:[2,2]});
+  assert.equal(f.selected(), 1);
+  assert.equal(session.browser, 'chrome', 'a Build 89 checkpoint can be reused');
+});
+
+test('a moved managed tab is rediscovered by ID and never replaced with a user tab', () => {
+  const f = quietBrowserFixture(), session = {browser:'chrome', windowId:'8', tabId:'2'};
+  const tab = f.prepare({}, session);
+  assert.equal(tab.id(), '2');
+  assert.equal(session.windowId, '9');
+  assert.deepEqual(f.calls, {native:0, activate:0, launch:0, discovery:1, reads:[2]});
+});
+
+test('scheduled reads never launch, provision, hijack an active Teams tab or open authentication', () => {
+  const f = quietBrowserFixture();
+  assert.throws(() => f.prepare({reuseActive:true}), {code:'SYNC_TAB_REQUIRED'});
+  assert.throws(() => f.prepare({}, {browser:'edge',windowId:'9',tabId:'2'}), {code:'SYNC_TAB_REQUIRED'});
+  f.tabs[1].url = 'https://login.microsoftonline.com/example';
+  assert.throws(() => f.prepare({}, {windowId:'9', tabId:'2'}), {code:'NEED_LOGIN'});
+  f.tabs[1].url = 'https://other.example/';
+  assert.throws(() => f.prepare({}, {windowId:'9', tabId:'2'}), {code:'SYNC_TAB_REQUIRED'});
+  f.stop();
+  assert.throws(() => f.prepare({}, {windowId:'9', tabId:'2'}), {code:'BROWSER_NOT_RUNNING'});
+  assert.equal(f.calls.native, 0);
+  assert.equal(f.selected(), 1);
+});
+
+test('explicit sync provisions once, restores selection, and explicit login can reveal the same managed tab', () => {
+  const f = quietBrowserFixture(), session = {accountId:'existing'};
+  assert.equal(f.prepare({allowProvision:true}, session).id(), '3');
+  assert.deepEqual(session, {accountId:'existing', browser:'chrome', windowId:'9', tabId:'3'});
+  assert.equal(f.selected(), 1);
+  assert.equal(f.calls.activate, 0);
+  f.prepare({}, session);
+  assert.equal(f.calls.native, 1);
+  f.tabs[2].url = 'https://login.microsoftonline.com/example';
+  f.prepare({operation:'login'}, session);
+  assert.equal(f.tabs.length, 3);
+  assert.equal(f.selected(), 3);
+  assert.equal(f.calls.activate, 1);
+});
 function fixture(options={}) {
   let clock=0,state='home',team=null,channel=null,chat=null,hidden=false,navIndex=0,timeline=2;
   const events=[],requests=[],checkpoints=[];

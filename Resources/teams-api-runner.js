@@ -12,7 +12,8 @@ function teamsAPIRetry(ctx, response) {
   var stop=new Error('服务暂时限流或不可用，已停止本轮请求并保留缓存；最早 '+retry.retryAt+' 后重试。');
   stop.code='RATE_LIMITED';stop.retry=retry;throw stop;
 }
-function teamsAPITerminal(error) {return error && ['RATE_LIMITED','TIME_LIMIT','account_changed','ACCOUNT_CHANGED','TAB_CHANGED'].includes(error.code);}
+function teamsAPITerminal(error) {return error && ['RATE_LIMITED','TIME_LIMIT','account_changed','ACCOUNT_CHANGED','TAB_CHANGED',
+  'TAB_MISSING','BROWSER_NOT_RUNNING','AUTOMATION_DENIED','JAVASCRIPT_DISABLED'].includes(error.code);}
 function runTeamsAPI(ctx) {
   var scope=ctx.scope, source=ctx.readResource('teams-api.js'), url='https://teams.cloud.microsoft/';
   if (!source || !scope || !scope.strong || !scope.id || !ctx.identity) return false;

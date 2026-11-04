@@ -74,7 +74,8 @@ final class TeamsBrowserBridge {
             failure("browser_not_running", "请先打开 \(name)，登录 Teams 并保留所需频道标签页"); return
         }
         let bridgeURL = resources.appendingPathComponent("teams-browser.js")
-        guard FileManager.default.fileExists(atPath: bridgeURL.path),
+        guard let bridge = try? String(contentsOf: bridgeURL, encoding: .utf8),
+              let quietReader = try? String(contentsOf: resources.appendingPathComponent("teams-quiet-browser.js"), encoding: .utf8),
               let extractor = try? String(contentsOf: resources.appendingPathComponent("teams.js"), encoding: .utf8), !extractor.isEmpty else {
             failure("resources_missing", "缺少 Teams 读取组件，请重新安装应用"); return
         }
@@ -83,7 +84,7 @@ final class TeamsBrowserBridge {
         let invocation = Invocation()
         invocation.process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
         // Process arguments are passed directly. Page text never becomes shell code.
-        invocation.process.arguments = ["-l", "JavaScript", bridgeURL.path, argument]
+        invocation.process.arguments = ["-l", "JavaScript", "-e", quietReader, "-e", bridge, argument]
         invocation.process.standardOutput = invocation.output
         invocation.process.standardError = invocation.errors
         active = invocation; generation = UUID()

@@ -1,4 +1,5 @@
 'use strict';
+const { launchChromium } = require('./launch-chromium.cjs');
 // Real browser regression for the add-to-do dialog; no school accounts or user data.
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -18,8 +19,7 @@ async function selectTime(page, time) {
 }
 
 test('rewritten form previews typed deadlines, supports shortcuts, and preserves drafts on invalid submission', optional, async () => {
-  const { chromium } = require(process.env.PLAYWRIGHT_MODULE);
-  const browser = await chromium.launch({ headless: true, executablePath: process.env.CHROME_EXECUTABLE || undefined });
+  const browser = await launchChromium();
   try {
     const page = await browser.newPage({ viewport: { width: 1000, height: 800 } });
     await page.goto(pathToFileURL(path.resolve(__dirname, '../Resources/index.html')).href + '#overview');
@@ -57,8 +57,7 @@ test('rewritten form previews typed deadlines, supports shortcuts, and preserves
 });
 
 test('time wheels support keys and boundaries without accidental submission, and persist Beijing deadline', optional, async () => {
-  const { chromium } = require(process.env.PLAYWRIGHT_MODULE);
-  const browser = await chromium.launch({ headless: true, executablePath: process.env.CHROME_EXECUTABLE || undefined });
+  const browser = await launchChromium();
   try {
     const page = await browser.newPage({ viewport: { width: 900, height: 700 } });
     const errors = [];
@@ -94,8 +93,7 @@ test('time wheels support keys and boundaries without accidental submission, and
 });
 
 test('personal tasks retain optional deadlines across reload and stay above Teams in the left overview column', optional, async () => {
-  const { chromium } = require(process.env.PLAYWRIGHT_MODULE);
-  const browser = await chromium.launch({ headless: true, executablePath: process.env.CHROME_EXECUTABLE || undefined });
+  const browser = await launchChromium();
   try {
     const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
     const errors = [];
@@ -158,8 +156,7 @@ test('personal tasks retain optional deadlines across reload and stay above Team
 });
 
 test('mouse scrolling and clicking select the centre value, with no stale save while scrolling', optional, async () => {
-  const { chromium } = require(process.env.PLAYWRIGHT_MODULE);
-  const browser = await chromium.launch({ headless: true, executablePath: process.env.CHROME_EXECUTABLE || undefined });
+  const browser = await launchChromium();
   try {
     const page = await browser.newPage({ viewport: { width: 1000, height: 800 } });
     await page.goto(pathToFileURL(path.resolve(__dirname, '../Resources/index.html')).href + '#overview');
@@ -204,8 +201,7 @@ test('mouse scrolling and clicking select the centre value, with no stale save w
 });
 
 test('wheel layout stays inside a narrow viewport and footer remains reachable', optional, async () => {
-  const { chromium } = require(process.env.PLAYWRIGHT_MODULE);
-  const browser = await chromium.launch({ headless: true, executablePath: process.env.CHROME_EXECUTABLE || undefined });
+  const browser = await launchChromium();
   try {
     const page = await browser.newPage({ viewport: { width: 360, height: 640 } });
     await page.goto(pathToFileURL(path.resolve(__dirname, '../Resources/index.html')).href + '#overview');

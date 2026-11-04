@@ -1,6 +1,7 @@
 'use strict';
+const { launchChromium } = require('./launch-chromium.cjs');
 // Optional real-canvas regression suite. No school accounts or live data used.
-// PLAYWRIGHT_MODULE=/path/to/playwright CHROME_EXECUTABLE=/path/to/chrome node --test Tests/kline-browser.test.cjs
+// PLAYWRIGHT_MODULE=/path/to/playwright node --test Tests/kline-browser.test.cjs
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('node:path');
@@ -8,8 +9,7 @@ const { pathToFileURL } = require('node:url');
 const Core = require('../Resources/core.js');
 
 test('GPA MA legends match the real chart indicator across intervals and missing records', { skip: !process.env.PLAYWRIGHT_MODULE }, async () => {
-  const { chromium } = require(process.env.PLAYWRIGHT_MODULE);
-  const browser = await chromium.launch({ headless: true, executablePath: process.env.CHROME_EXECUTABLE || undefined });
+  const browser = await launchChromium();
   try {
     const page = await browser.newPage({ viewport: { width: 1400, height: 1000 }, deviceScaleFactor: 2 });
     const errors = [];
@@ -63,8 +63,7 @@ test('GPA MA legends match the real chart indicator across intervals and missing
 });
 
 test('GPA chart stays readable under repeated zoom, pan, aggregation and refresh', { skip: !process.env.PLAYWRIGHT_MODULE }, async () => {
-  const { chromium } = require(process.env.PLAYWRIGHT_MODULE);
-  const browser = await chromium.launch({ headless: true, executablePath: process.env.CHROME_EXECUTABLE || undefined });
+  const browser = await launchChromium();
   try {
     const page = await browser.newPage({ viewport: { width: 1400, height: 1000 }, deviceScaleFactor: 2 });
     const errors = [];
@@ -192,7 +191,9 @@ test('GPA chart stays readable under repeated zoom, pan, aggregation and refresh
     // Real slider change: a 30-day bucket leaves one valid record; 1h restores four.
     for (const [value, count] of [['10', 1], ['0', 4]]) {
       await page.locator('#gpa-kline-interval').evaluate((el, value) => { el.value = value; el.dispatchEvent(new Event('change', { bubbles: true })); }, value);
-      await page.waitForTimeout(100);
+      // Both plots retain their prior data until the dashboard's idle mount runs.
+      await page.waitForFunction(expected => ['gpa-kline-chart', 'gpa-kline-linear-chart']
+        .every(id => klinecharts.init(id).getDataList().length === expected), count);
       assert.equal((await inspect()).count, count);
       assert.equal((await inspectLinear()).count, count, 'shared interval updates both methods');
       await hover(0, 0);

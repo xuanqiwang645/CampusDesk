@@ -1,4 +1,5 @@
 'use strict';
+const { launchChromium } = require('./launch-chromium.cjs');
 // Real Chromium DOM/IME regressions. All fixtures are synthetic and isolated.
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -7,8 +8,7 @@ const optional = { skip: !process.env.PLAYWRIGHT_MODULE };
 const script = path.resolve(__dirname, '../Resources/dom-patch.js');
 
 async function fixture(run) {
-  const { chromium } = require(process.env.PLAYWRIGHT_MODULE);
-  const browser = await chromium.launch({ headless: true, executablePath: process.env.CHROME_EXECUTABLE || undefined });
+  const browser = await launchChromium();
   try {
     const page = await browser.newPage();
     const errors = []; page.on('pageerror', error => errors.push(error.message));
