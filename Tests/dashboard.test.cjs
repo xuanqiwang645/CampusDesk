@@ -1171,6 +1171,29 @@ test('interface language setting persists and translates the application chrome 
   assert.equal(app.node('breadcrumb-page').textContent, '连接与设置');
 });
 
+test('schedule follows the local date after a hidden refresh and preserves a manually selected day', () => {
+  const app = harness({ hash: '#schedule' });
+  const localDate = () => {
+    const d = new app.ctx.Date();
+    return [d.getFullYear(), String(d.getMonth() + 1).padStart(2, '0'), String(d.getDate()).padStart(2, '0')].join('-');
+  };
+  const refreshOvernight = () => {
+    app.receive({ type: 'windowVisibility', visible: false });
+    app.tick(24 * 60 * 60 * 1000);
+    app.receive({ type: 'state', state: app.ctx.CampusCore.emptyState() });
+    app.receive({ type: 'windowVisibility', visible: true });
+  };
+  assert.equal(app.node('schedule-date').value, localDate());
+  refreshOvernight();
+  assert.equal(app.node('schedule-date').value, localDate());
+  app.click({ action: 'prev-day' });
+  const selected = app.node('schedule-date').value;
+  refreshOvernight();
+  assert.equal(app.node('schedule-date').value, selected);
+  app.click({ action: 'today' });
+  assert.equal(app.node('schedule-date').value, localDate());
+});
+
 test('estimated GPA is always presented with two decimal places', () => {
   const app = harness();
   app.receive({ type: 'snapshot', snapshot: { source: 'managebac', url: 'https://example-school.managebac.cn/academics', capturedAt: '2026-09-19T00:40:00Z', warnings: [], courses: [
@@ -1447,6 +1470,16 @@ test('Teams reminder subjects can be filtered and restored without changing assi
   app.change('reminder-subject-choice-0', { checked: false });
   assert.deepEqual(app.last('saveState').state.settings.reminderSubjects, ['English']);
   assert.deepEqual(app.last('syncReminders').items.map(item => item.title), ['English essay']);
+  app.change('reminder-subject-choice-1', { checked: false });
+  assert.deepEqual(app.last('syncReminders').items, []);
+  const reopened = harness({ hash: '#settings' });
+  reopened.receive({ type: 'state', state: app.last('saveState').state });
+  assert.equal(reopened.node('teams-notifications').checked, true);
+  assert.equal(reopened.node('reminder-subject-choice-0').checked, false);
+  assert.equal(reopened.node('reminder-subject-choice-1').checked, false);
+  assert.deepEqual(reopened.last('syncReminders').items, []);
+  reopened.change('reminder-subject-choice-0', { checked: true });
+  assert.deepEqual(reopened.last('syncReminders').items.map(item => item.title), ['Chemistry lab']);
   app.click({ action: 'reminder-subjects-all' });
   assert.deepEqual(app.last('saveState').state.settings.reminderSubjects, []);
   assert.equal(app.last('syncReminders').items.length, 2);

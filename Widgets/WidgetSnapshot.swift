@@ -41,14 +41,16 @@ struct CampusWidgetItem: Decodable, Identifiable {
     let kind: String
     let source: String
     let date: String
-    let startAt: String?
-    let endAt: String?
+    let start: Date?
+    let end: Date?
     let allDay: Bool
     let completed: Bool
     let location: String?
 
-    var start: Date? { startAt.flatMap(CampusWidgetSnapshot.timestamp) }
-    var end: Date? { endAt.flatMap(CampusWidgetSnapshot.timestamp) }
+    enum CodingKeys: String, CodingKey {
+        case id, title, kind, source, date, allDay, completed, location
+        case start = "startAt", end = "endAt"
+    }
     var isTask: Bool { kind == "task" }
 
     func isOngoing(at now: Date) -> Bool {
@@ -81,7 +83,7 @@ struct CampusWidgetItem: Decodable, Identifiable {
 struct CampusWidgetSnapshot: Decodable {
     struct Counts: Decodable { let today: Int; let upcoming: Int; let overdue: Int }
     let schemaVersion: Int
-    let generatedAt: String
+    let generatedAt: Date
     let day: String
     let timezone: String
     let items: [CampusWidgetItem]
@@ -99,6 +101,21 @@ struct CampusWidgetSnapshot: Decodable {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         return formatter.date(from: value) ?? ISO8601DateFormatter().date(from: value)
+    }
+
+    static func decode(_ data: Data) throws -> Self {
+        let fractional = ISO8601DateFormatter(), wholeSeconds = ISO8601DateFormatter()
+        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .custom { decoder in
+            let container = try decoder.singleValueContainer()
+            let text = try container.decode(String.self)
+            guard let date = fractional.date(from: text) ?? wholeSeconds.date(from: text) else {
+                throw DecodingError.dataCorruptedError(in: container, debugDescription: "Invalid widget timestamp")
+            }
+            return date
+        }
+        return try decoder.decode(Self.self, from: data)
     }
 
     static func dayString(_ date: Date) -> String {
@@ -136,16 +153,15 @@ struct CampusWidgetSnapshot: Decodable {
         guard fstat(descriptor, &info) == 0, (info.st_mode & S_IFMT) == S_IFREG,
               info.st_size > 0, info.st_size <= maximumBytes,
               let data = try? handle.read(upToCount: maximumBytes + 1), data.count <= maximumBytes,
-              let snapshot = try? JSONDecoder().decode(Self.self, from: data),
+              let snapshot = try? decode(data),
               snapshot.schemaVersion == 1, snapshot.timezone == "Asia/Shanghai",
-              snapshot.items.count <= 100, timestamp(snapshot.generatedAt) != nil,
+              snapshot.items.count <= 100,
               snapshot.counts.today >= 0, snapshot.counts.upcoming >= 0, snapshot.counts.overdue >= 0,
               validDay(snapshot.day), Set(snapshot.items.map(\.id)).count == snapshot.items.count,
               snapshot.items.allSatisfy({ item in
                   !item.id.isEmpty && item.id.count <= 700 && !item.title.isEmpty && item.title.count <= 180 &&
                   ["course", "task", "school", "personal"].contains(item.kind) && validDay(item.date) &&
                   (item.location?.count ?? 0) <= 160 && item.source.count <= 100 &&
-                  (item.startAt == nil || item.start != nil) && (item.endAt == nil || item.end != nil) &&
                   (item.start == nil || item.end == nil || item.end! >= item.start!)
               }) else { return .init(snapshot: nil, issue: .invalid) }
         return .init(snapshot: snapshot, issue: nil)
@@ -164,14 +180,13 @@ struct CampusWidgetSnapshot: Decodable {
     }
 
     func isStale(at now: Date) -> Bool {
-        guard let generated = Self.timestamp(generatedAt) else { return true }
-        return now.timeIntervalSince(generated) > 24 * 60 * 60 || generated.timeIntervalSince(now) > 300
+        return now.timeIntervalSince(generatedAt) > 24 * 60 * 60 || generatedAt.timeIntervalSince(now) > 300
     }
 
     func isExpired(at now: Date) -> Bool {
-        guard let generated = Self.timestamp(generatedAt), let firstDay = Self.timestamp(day + "T00:00:00+08:00"),
+        guard let firstDay = Self.timestamp(day + "T00:00:00+08:00"),
               let coverageEnd = Self.beijing.date(byAdding: .day, value: 8, to: firstDay) else { return true }
-        return now >= coverageEnd || generated.timeIntervalSince(now) > 300
+        return now >= coverageEnd || generatedAt.timeIntervalSince(now) > 300
     }
 
     func courses(now: Date) -> [CampusWidgetItem] {

@@ -31,7 +31,7 @@ import WidgetKit
         ]
         let document: [String: Any] = ["schemaVersion": 1, "generatedAt": stamp.string(from: now), "day": day,
             "timezone": "Asia/Shanghai", "counts": ["today": 5, "upcoming": 9, "overdue": 1], "items": items]
-        let snapshot = try JSONDecoder().decode(CampusWidgetSnapshot.self, from: JSONSerialization.data(withJSONObject: document))
+        let snapshot = try CampusWidgetSnapshot.decode(JSONSerialization.data(withJSONObject: document))
         let entry = CampusWidgetEntry(date: now, snapshot: snapshot, preview: false)
         var renderedCount = 0
         func render<V: View>(_ view: V, name: String, width: CGFloat, height: CGFloat) throws {
@@ -75,8 +75,7 @@ import WidgetKit
             copy["items"] = values
             copy["generatedAt"] = stamp.string(from: generated)
             copy["day"] = firstDay
-            return .init(date: now, snapshot: try JSONDecoder().decode(CampusWidgetSnapshot.self,
-                from: JSONSerialization.data(withJSONObject: copy)), preview: false)
+            return .init(date: now, snapshot: try CampusWidgetSnapshot.decode(JSONSerialization.data(withJSONObject: copy)), preview: false)
         }
         let stressEntry = try fixture(stressItems)
         let undated: [String: Any] = ["id": "undated", "title": "阅读与课堂准备：截止时间待老师确认", "kind": "task", "source": "managebac", "date": day,

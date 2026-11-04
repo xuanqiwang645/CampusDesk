@@ -56,6 +56,51 @@ const idleStep = page => page.evaluate(() => {
   return Boolean(callback);
 });
 
+test('minute ticks leave unchanged board cards alone and preserve their board-specific labels', optional, async () => fixture(async page => {
+  const result = await page.evaluate(() => {
+    let now = Date.parse('2026-11-04T02:00:00Z');
+    Date.now = () => now;
+    const state = CampusCore.emptyState();
+    state.settings.dashboardTheme = 'board';
+    state.settings.language = 'en-US';
+    state.manualTasks = Array.from({ length: 6 }, (_, i) => ({
+      id: 'distant-' + i, title: 'Distant task ' + i, status: 'open',
+      dueAt: new Date(now + (10 * 24 + 2) * 3600000 + 1800000).toISOString()
+    }));
+    CampusDesk.receive({ type: 'state', state });
+    document.querySelector('#nav [data-page="overview"]').click();
+    const grid = document.querySelector('.board-task-grid');
+    const observer = new MutationObserver(() => {});
+    observer.observe(grid, { subtree: true, attributes: true, childList: true, characterData: true });
+    now += 60000;
+    CampusDesk.receive({ type: 'windowVisibility', visible: true });
+    const writes = observer.takeRecords().length;
+    observer.disconnect();
+    return { writes, labels: [...grid.querySelectorAll('.todo-urgency')].map(el => el.textContent) };
+  });
+  assert.deepEqual(result, { writes: 0, labels: Array(6).fill('On track') });
+}));
+
+test('a task crossing its deadline enters the active overdue filter without navigation or sync', optional, async () => fixture(async page => {
+  await page.evaluate(() => {
+    window.__taskNow = Date.parse('2026-11-04T02:00:00Z');
+    Date.now = () => window.__taskNow;
+    const state = CampusCore.emptyState();
+    state.manualTasks.push({ id: 'near', title: 'Due shortly', status: 'open', dueAt: new Date(__taskNow + 60000).toISOString() });
+    CampusDesk.receive({ type: 'state', state });
+    document.querySelector('#nav [data-page="tasks"]').click();
+    document.querySelector('[data-action="task-filter"][data-filter="overdue"]').click();
+  });
+  assert.equal(await page.locator('.todo-deadline-card').count(), 0);
+  await page.evaluate(() => {
+    __taskNow += 60000;
+    CampusDesk.receive({ type: 'windowVisibility', visible: true });
+  });
+  await page.locator('.todo-band-overdue').waitFor({ timeout: 3000 });
+  assert.match(await page.locator('.todo-band-overdue').innerText(), /Due shortly/);
+  assert.equal(await page.locator('.task-tools .pill.active').first().getAttribute('data-filter'), 'overdue');
+}));
+
 async function finishIdle(page) {
   let slices = 0;
   while (await idleStep(page)) assert.ok(++slices < 30, 'bounded index work must complete');

@@ -468,7 +468,7 @@
     const state = { version: VERSION, settings: { timezone: 'Asia/Shanghai', refreshMinutes: 15, selfStudy: true,
       seiueURL: configuredSchools.seiue, managebacURL: configuredSchools.managebac, teamsPages: [], teamsNotifications: false,
       teamsBrowser: 'chrome', teamsBrowserAutomation: false, teamsMode: 'browser', teamsAutoDiscover: true, graphIncludeChats: true,
-      reminderMinutes: 30, reminderSubjects: [], teamsDueOverrides: {}, dashboardTheme: 'classic', colorTheme: 'sage', gpaCandleColors: 'red-up', language: 'zh-CN', focusSubjects: [], focusTeamsChannels: [], customLessons: [],
+      reminderMinutes: 30, reminderSubjects: [], reminderSubjectsMuted: false, teamsDueOverrides: {}, dashboardTheme: 'classic', colorTheme: 'sage', gpaCandleColors: 'red-up', language: 'zh-CN', focusSubjects: [], focusTeamsChannels: [], customLessons: [],
       scheduleHolidays: [], scheduleWeekAnchor: '', scheduleOverrides: [], focusMode: false, graphicsMode: 'auto', planOrder: [], taskMinutes: {}, taskPriority: {}, gradeGoals: {}, gradePlans: {}, gpaTermDates: {}, ecIdentityNames: [] }, snapshots: { seiue: {}, managebac: {}, teams: {} },
       manualTasks: [], personalEvents: [], taskChecks: {}, feedbackRead: {}, gradeHistory: [], gradeUpdates: [], gradeUpdateRead: {}, gradeUpdateBaselines: [], gradeUpdateCaptures: [], changeLog: [], schoolCalendar: { fileName: '', importedAt: '', events: [] } };
     if (themeEdition) {
@@ -953,6 +953,9 @@
     s.settings.reminderMinutes = settings.reminderMinutes === undefined ? 30 : finite(settings.reminderMinutes, 0, 10080, false);
     if (!Number.isInteger(s.settings.reminderMinutes)) fail('提醒分钟数必须为整数');
     s.settings.reminderSubjects = settings.reminderSubjects === undefined ? [] : [...new Set(array(settings.reminderSubjects, '提醒学科', 100).map(value => str(value, 120)).filter(Boolean))];
+    // Older saves use an empty list for all subjects. Keep an explicit opt-out distinct.
+    s.settings.reminderSubjectsMuted = bool(settings.reminderSubjectsMuted, false);
+    if (s.settings.reminderSubjectsMuted) s.settings.reminderSubjects = [];
     s.settings.dashboardTheme = settings.dashboardTheme === undefined ? 'classic' : settings.dashboardTheme;
     if (!['classic', 'board'].includes(s.settings.dashboardTheme)) fail('面板样式无效');
     s.settings.graphicsMode = settings.graphicsMode === undefined ? 'auto' : settings.graphicsMode;

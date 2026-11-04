@@ -157,11 +157,16 @@ test('history titles and bodies remain plain text and fit narrow screens while t
   const state = initialState(), contextKey = JSON.stringify(['deepseek', false, []]);
   state.assistantConversations = Array.from({ length: 15 }, (_, index) => ({ id: 'safe-chat-' + index, title: '<img src=x onerror=alert(1)> ' + 'LongTitle'.repeat(12), createdAt: '2026-10-15T01:00:00Z', updatedAt: '2026-10-15T01:00:00Z', draft: '', messages: [{ role: 'user', content: 'UnbrokenSearchableText'.repeat(80), contextKey }, { role: 'assistant', content: '<script>window.syntheticAttack=true</script>', contextKey }], provider: 'deepseek', contextCategories: [] }));
   state.assistantActiveConversationId = 'safe-chat-0';
+  state.assistantConversations[0].messages[1].display = 'Reply text with a DISPLAY_ONLY_NOTE';
   await fixture(async page => {
+    assert.equal(await page.locator('#assistant-history-results .assistant-history-item').count(), 0, 'a collapsed history does not mount archived conversations at startup');
     await openHistory(page);
     assert.match(await page.locator('#assistant-history-results').innerText(), /<img src=x onerror=alert\(1\)>/);
     assert.equal(await page.locator('#assistant-history-results img, #assistant-history-results script').count(), 0);
     assert.equal(await page.evaluate(() => window.syntheticAttack), undefined);
+    await page.locator('#assistant-history-search').fill('display_only_note');
+    assert.equal(await page.locator('.assistant-history-item').count(), 1);
+    assert.match(await page.locator('.assistant-history-item small').innerText(), /DISPLAY_ONLY_NOTE/);
     await page.locator('#assistant-history-search').fill('UnbrokenSearchableText');
     assert.equal(await page.locator('[data-action="assistant-open-conversation"]').count(), 15);
     for (const width of [1280, 760, 390]) {

@@ -141,7 +141,7 @@ struct CampusWidgetView: View {
             else if stale { Text("缓存待更新").font(.system(size: 9)) }
             else if mode == .today { Text("点按查看全部").font(.system(size: 9)) }
             else if mode != .nextClass && items.count > limit { Text("还有 \(items.count - limit) 项").font(.system(size: 9)) }
-            else if let generated = entry.snapshot.flatMap({ CampusWidgetSnapshot.timestamp($0.generatedAt) }) {
+            else if let generated = entry.snapshot?.generatedAt {
                 Text("更新 " + timeString(generated)).font(.system(size: 9)).accessibilityLabel("数据更新于 " + timeString(generated))
             }
         }.foregroundStyle(.secondary).lineLimit(1)
@@ -410,9 +410,8 @@ struct CampusWidgetView: View {
     private var sampleItems: [CampusWidgetItem] {
         func sample(_ id: String, _ title: String, _ kind: String, offset: TimeInterval, duration: TimeInterval? = nil, location: String? = nil) -> CampusWidgetItem {
             let start = entry.date.addingTimeInterval(offset)
-            let formatter = ISO8601DateFormatter()
             return CampusWidgetItem(id: id, title: title, kind: kind, source: "preview", date: CampusWidgetSnapshot.dayString(start),
-                startAt: formatter.string(from: start), endAt: duration.map { formatter.string(from: start.addingTimeInterval($0)) },
+                start: start, end: duration.map { start.addingTimeInterval($0) },
                 allDay: false, completed: false, location: location)
         }
         switch mode {

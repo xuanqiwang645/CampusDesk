@@ -94,6 +94,15 @@ import Foundation
         check(CampusWidgetSnapshot.read(from: url) == nil, "reject incompatible schema")
         document["schemaVersion"] = 1; document["items"] = [item("duplicate", "task", nil), item("duplicate", "task", nil)]; try save()
         check(CampusWidgetSnapshot.read(from: url) == nil, "reject duplicate row identities")
+        document["items"] = [item("offset", "course", "2026-10-10T10:00:00.125+08:00", "2026-10-10T03:00:00Z")]; try save()
+        check(CampusWidgetSnapshot.read(from: url)?.items.first?.start == now.addingTimeInterval(0.125), "preserve fractional seconds and time zone offsets")
+        for (start, end) in [("bad", "2026-10-10T03:00:00Z"), ("2026-10-10T02:00:00Z", "bad"), ("2026-10-10T04:00:00Z", "2026-10-10T03:00:00Z")] {
+            document["items"] = [item("malformed", "course", start, end)]; try save()
+            check(CampusWidgetSnapshot.load(from: url).issue == .invalid, "reject malformed or reversed item times")
+        }
+        document["items"] = []; document["generatedAt"] = "bad"; try save()
+        check(CampusWidgetSnapshot.load(from: url).issue == .invalid, "reject a malformed generation timestamp")
+        document["generatedAt"] = "2026-10-10T01:00:00.000Z"
         document["items"] = Array(repeating: item("too-many", "task", nil), count: 101); try save()
         check(CampusWidgetSnapshot.read(from: url) == nil, "reject oversized row count")
         try Data(repeating: 0x20, count: CampusWidgetSnapshot.maximumBytes + 1).write(to: url)

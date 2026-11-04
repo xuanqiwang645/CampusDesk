@@ -13,7 +13,13 @@
   const storageKey = 'campusdesk.browser.v1';
   let state = Core.emptyState();
   let page = (['overview', 'learning', 'schedule', 'calendar', 'grades', 'tasks', 'feedback', 'teams', 'ec', 'settings'].includes(location.hash.slice(1)) || (themeEdition && location.hash.slice(1) === 'assistant')) ? location.hash.slice(1) : 'overview';
-  let selectedDate = Core.today();
+  // The schedule is a school calendar, but its "today" navigation follows
+  // the Mac's local calendar day. Course start/end times remain school time.
+  function localDayKey(date = new Date()) {
+    return [date.getFullYear(), String(date.getMonth() + 1).padStart(2, '0'), String(date.getDate()).padStart(2, '0')].join('-');
+  }
+  let selectedDate = localDayKey();
+  let selectedDateFollowsToday = true;
   let calendarDay = Core.today(), calendarMonth = calendarDay.slice(0, 7);
   const calendarKinds = new Set(['course', 'task', 'school', 'personal']);
   let widgetsStatus = { supported: false, updatedAt: null, busy: false, error: null };
@@ -21,6 +27,7 @@
   let taskSubjectFilter = 'all';
   let taskOverdueOpen = true;
   let lastTodoCountdownMinute = -1;
+  let nextTaskDeadline = Infinity;
   let customScheduleMode = 'period';
   let customScheduleDays = [];
   let customScheduleKind = 'weekly';
@@ -55,6 +62,7 @@
   const MESSAGE_PAGE_SIZE = 40;
   let lastReminderSignature = '';
   let lastRenderedDay = Core.today();
+  let lastScheduleDay = localDayKey();
   let lastClockBoundary = '';
   let statuses = {};
   // Authentication stays in the native layer; only display-safe status lives here.
@@ -148,7 +156,7 @@
     '未完成': 'Open', '已逾期': 'Overdue', '已完成': 'Completed', '全部': 'All', '全部学科': 'All subjects', '全部频道': 'All channels', '全部消息': 'All messages', '作业消息': 'Assignment messages', '其他通知': 'Other notifications',
     '打开 Teams': 'Open Teams', '登录／打开 Teams': 'Sign in / Open Teams', '打开 ManageBac': 'Open ManageBac', '打开希悦课表': 'Open schedule', '查看要求': 'View requirements', '查看原文 ↗': 'View original ↗', '查看 Teams 原文 ↗': 'View Teams original ↗',
     '前一天': 'Previous day', '后一天': 'Next day', '今天': 'Today', '保存页面': 'Save page', '导出备份': 'Export backup', '导入备份': 'Import backup',
-    '为每一节课，留好位置。': 'Make room for every class.', '以北京时间展示课程。空白课节按你的设置显示为自习。': 'Classes use Beijing time. Open periods follow your self-study preference.',
+    '为每一节课，留好位置。': 'Make room for every class.', '按本地日期切换课表，上课时间按北京时间显示。空白课节按你的设置显示为自习。': 'The schedule follows your local date. Class times use Beijing time. Open periods follow your self-study preference.',
     '看见积累，也看见进步。': 'See the progress you have made.', '先确认成绩来自哪一门课、哪一个学期，再理解 GPA。': 'Confirm the course and term before interpreting GPA.',
     '一件一件，慢慢完成。': 'One task at a time.', '先分 Teams 与 ManageBac，再在各自来源内按学科整理。': 'Teams and ManageBac are separated first, then grouped by subject.',
     '认真读懂，每一次反馈。': 'Read every piece of feedback carefully.', '把老师的建议带回下一次学习。': 'Bring each teacher suggestion into your next study session.',
@@ -746,6 +754,9 @@
     if (!Number.isFinite(time)) return { label: task.dueLabel || '截止日期待核对', overdue: false };
     return { label: fmtDate(task.dueAt, { hour: '2-digit', minute: '2-digit', hour12: false }), overdue: !task.completed && time < Date.now() };
   }
+  function trackUpcomingDeadline(dueAt, now) {
+    if (dueAt > now && dueAt < nextTaskDeadline) nextTaskDeadline = dueAt;
+  }
   function taskRows(tasks, limit) {
     return '<div class="task-list">' + tasks.slice(0, limit || tasks.length).map(task => {
       const local = state.manualTasks.some(t => t.id === task.id), source = task.source === 'teams' ? 'teams' : 'managebac';
@@ -1007,7 +1018,7 @@
     if (!validCalendarDay(day)) return;
     const item = calendarItems(day, day).find(event => event.id === id);
     if (!item) return;
-    if (item.kind === 'course') { selectedDate = day; navigate('schedule'); return; }
+    if (item.kind === 'course') { selectedDate = day; selectedDateFollowsToday = day === localDayKey(); navigate('schedule'); return; }
     detailTaskId = null;
     document.getElementById('detail-content').innerHTML = '<div class="dialog-heading"><h2 id="detail-title">' + esc(item.title) + '</h2><button type="button" class="icon-button" data-action="close-detail" aria-label="' + calendarCopy('关闭', 'Close') + '">×</button></div><p class="subtle">' + esc(day + ' · ' + calendarTime(item)) + '</p>' + (item.location ? '<p>' + esc(item.location) + '</p>' : '') + '<p class="agenda-event-description">' + esc(item.description || calendarCopy('来自已导入的校历。', 'From your imported school calendar.')) + '</p>';
     showDialog('detail-dialog');
@@ -1037,11 +1048,14 @@
   function renderClassicOverview() {
     const today = Core.today(), classes = scheduleRowsForState(today), tasks = taskRowsForState(), feedback = feedbackRowsForState(), openTasks = [];
     let overdue = 0, dueToday = 0;
+    const now = Date.now();
     for (const task of tasks) {
       if (task.completed) continue;
       openTasks.push(task);
-      if (taskDue(task).overdue) overdue++;
-      if (task.dueAt && Core.today(new Date(task.dueAt)) === today) dueToday++;
+      const dueAt = Date.parse(task.dueAt);
+      trackUpcomingDeadline(dueAt, now);
+      if (dueAt <= now) overdue++;
+      if (Number.isFinite(dueAt) && Core.today(new Date(dueAt)) === today) dueToday++;
     }
     const gpa = getGpaView(), displayGpa = gpa.official || gpa.estimate;
     const course = Core.getNextClass(state);
@@ -1067,7 +1081,7 @@
     const now = Date.now();
     const cards = visible.map(task => {
       const source = task.source === 'teams' ? 'teams' : task.source === 'managebac' ? 'managebac' : 'manual';
-      const urgency = todoCardUrgency(task, now);
+      const urgency = todoCardUrgency(Date.parse(task.dueAt), now);
       const labels = isEnglish()
         ? { overdue: 'Overdue', urgent: 'Urgent', soon: 'Due soon', blue: 'On track', ok: 'Plenty of time', unknown: 'Check due date' }
         : { overdue: '已逾期', urgent: '紧急', soon: '较急', blue: '正常', ok: '充裕', unknown: '待核对' };
@@ -1098,9 +1112,10 @@
     for (const task of tasks) {
       if (task.completed) { completed++; continue; }
       openTasks.push(task);
-      if (taskDue(task).overdue) overdue++;
       const dueAt = task.dueAt ? Date.parse(task.dueAt) : NaN;
-      if (Number.isFinite(dueAt) && dueAt >= now && dueAt <= weekEnd) nextWeek++;
+      trackUpcomingDeadline(dueAt, now);
+      if (dueAt <= now) overdue++;
+      if (dueAt > now && dueAt <= weekEnd) nextWeek++;
     }
     const gpa = getGpaView(), displayGpa = gpa.official || gpa.estimate;
     const classes = scheduleRowsForState(today), course = Core.getNextClass(state);
@@ -1117,8 +1132,11 @@
     return state.settings.dashboardTheme === 'board' ? renderBoardOverview() : renderClassicOverview();
   }
   function renderSchedule() {
+    lastScheduleDay = localDayKey();
+    if (selectedDateFollowsToday) selectedDate = lastScheduleDay;
     const rows = scheduleRowsForState(selectedDate);
-    return heading('为每一节课，留好位置。', '以北京时间展示课程。空白课节按你的设置显示为自习。') + (selectedDate === Core.today() ? renderClassClock() : '') + '<div class="page-tools"><div class="date-control"><button class="icon-button" type="button" data-action="prev-day" aria-label="前一天">' + icon('back') + '</button><label class="visually-hidden" for="schedule-date">课表日期</label><input id="schedule-date" type="date" value="' + esc(selectedDate) + '"><button class="icon-button" type="button" data-action="next-day" aria-label="后一天">' + icon('arrow') + '</button><span class="date-day">' + esc(dayLabel(selectedDate)) + '</span>' + button('今天', 'today') + '</div>' + button(icon('link') + '打开希悦课表', 'open-source', 'data-source="seiue"') + '</div>' + renderScheduleConflicts(rows, selectedDate) + '<section class="card schedule-full">' + cardHeader('schedule', selectedDate === Core.today() ? '今日课程' : esc(selectedDate) + ' 的课程', '<span class="card-kicker">' + rows.length + ' 节已读取课程</span>') + (rows.length ? scheduleRows(rows, selectedDate) : noSchedule(selectedDate)) + sourceFooter('seiue') + '</section>' + renderSchoolCalendar(selectedDate, true) + renderCustomSchedule() + '<p class="footer-note">自习仅补充学校页面中能确认时间的空白课节，不推测未读取的课表。</p>';
+    const isLocalToday = selectedDate === lastScheduleDay;
+    return heading('为每一节课，留好位置。', '按本地日期切换课表，上课时间按北京时间显示。空白课节按你的设置显示为自习。') + (selectedDate === Core.today() ? renderClassClock() : '') + '<div class="page-tools"><div class="date-control"><button class="icon-button" type="button" data-action="prev-day" aria-label="前一天">' + icon('back') + '</button><label class="visually-hidden" for="schedule-date">课表日期</label><input id="schedule-date" type="date" value="' + esc(selectedDate) + '"><button class="icon-button" type="button" data-action="next-day" aria-label="后一天">' + icon('arrow') + '</button><span class="date-day">' + esc(dayLabel(selectedDate)) + '</span>' + button('今天', 'today') + '</div>' + button(icon('link') + '打开希悦课表', 'open-source', 'data-source="seiue"') + '</div>' + renderScheduleConflicts(rows, selectedDate) + '<section class="card schedule-full">' + cardHeader('schedule', isLocalToday ? '今日课程' : esc(selectedDate) + ' 的课程', '<span class="card-kicker">' + rows.length + ' 节已读取课程</span>') + (rows.length ? scheduleRows(rows, selectedDate) : noSchedule(selectedDate)) + sourceFooter('seiue') + '</section>' + renderSchoolCalendar(selectedDate, true) + renderCustomSchedule() + '<p class="footer-note">自习仅补充学校页面中能确认时间的空白课节，不推测未读取的课表。</p>';
   }
   function renderScheduleConflicts(rows, date) {
     const timed = rows.filter(row => row.start && row.end && /^\d{2}:\d{2}$/.test(row.start) && /^\d{2}:\d{2}$/.test(row.end)).map(row => ({ row, start: row.start, end: row.end })).sort((a, b) => a.start.localeCompare(b.start));
@@ -1665,8 +1683,7 @@
   }
   // Adapt the task-card layout and urgency-bar behavior seen in ManageBac Buddy
   // to CampusDesk's existing task model and actions.
-  function todoCardUrgency(task, now) {
-    const dueAt = task.dueAt ? Date.parse(task.dueAt) : NaN;
+  function todoCardUrgency(dueAt, now) {
     if (!Number.isFinite(dueAt)) return { band: 'unknown', progress: 0, dueAt: 0, leftText: '' };
     const left = dueAt - now;
     if (left <= 0) {
@@ -1683,7 +1700,7 @@
     return { band, progress, dueAt, leftText };
   }
   function taskDeadlineCard(task, now) {
-    const urgency = todoCardUrgency(task, now), source = task.source === 'teams' ? 'teams' : task.source === 'managebac' ? 'managebac' : 'manual';
+    const urgency = todoCardUrgency(Date.parse(task.dueAt), now), source = task.source === 'teams' ? 'teams' : task.source === 'managebac' ? 'managebac' : 'manual';
     const course = task.course || (source === 'manual' ? (isEnglish() ? 'Personal task' : '个人待办') : sourceName(source));
     const tag = source === 'teams' ? 'Teams' : source === 'managebac' ? 'ManageBac' : (isEnglish() ? 'Personal' : '个人');
     const bandLabel = isEnglish() ? ({ overdue: 'Overdue', urgent: 'Urgent', soon: 'Soon', blue: 'Plenty of time', ok: 'Plenty of time', unknown: 'Check due date' }[urgency.band]) : ({ overdue: '已逾期', urgent: '紧急', soon: '较急', blue: '充裕', ok: '充裕', unknown: '待核对' }[urgency.band]);
@@ -1700,19 +1717,30 @@
       '<div class="todo-card-footer"><button class="todo-complete-button ' + (task.completed ? 'completed' : '') + '" type="button" data-action="toggle-task" data-id="' + esc(task.id) + '" aria-label="' + esc((isEnglish() ? (task.completed ? 'Mark incomplete: ' : 'Mark complete: ') : (task.completed ? '标为未完成：' : '标为已完成：')) + task.title) + '" aria-pressed="' + Boolean(task.completed) + '">' + icon('check') + '</button><span class="todo-due-date">' + icon('clock') + '<span>' + esc(dueLabel) + '</span></span><span class="todo-time-left ' + (urgency.band === 'unknown' ? 'unknown' : '') + '" data-todo-countdown data-band="' + urgency.band + '">' + esc(urgency.leftText) + '</span>' + (task.url ? '<button class="todo-open-source" type="button" data-action="open-source" data-source="' + openSource + '" data-url="' + esc(task.url) + '">' + icon('arrow') + '<span>' + (isEnglish() ? 'Open website' : '打开网页') + '</span></button>' : '') + '</div></div></article>';
   }
   function updateTaskCardCountdowns(now) {
-    const stamp = Number.isFinite(now) ? now : Date.now();
-    document.querySelectorAll('.todo-deadline-card[data-due-ms], .board-due-card[data-due-ms]').forEach(card => {
+    if (state.settings.focusMode || (page !== 'tasks' && page !== 'overview')) return;
+    if (now >= nextTaskDeadline) {
+      requestBackgroundRender();
+      return;
+    }
+    for (const card of document.querySelectorAll('.todo-deadline-card[data-due-ms], .board-due-card[data-due-ms]')) {
       const dueAt = Number(card.dataset.dueMs);
-      if (!dueAt) return;
-      const model = todoCardUrgency({ dueAt: new Date(dueAt).toISOString() }, stamp), countdown = card.querySelector('[data-todo-countdown]'), progress = card.querySelector('[data-todo-progress]'), bar = card.querySelector('.todo-urgency-bar');
-      if (countdown) { countdown.textContent = model.leftText; countdown.dataset.band = model.band; }
-      const badge = card.querySelector('.todo-urgency');
-      if (badge) badge.textContent = isEnglish() ? ({overdue:'Overdue',urgent:'Urgent',soon:'Soon',blue:'Plenty of time',ok:'Plenty of time'}[model.band]) : ({overdue:'已逾期',urgent:'紧急',soon:'较急',blue:'充裕',ok:'充裕'}[model.band]);
-      if (progress) progress.style.width = (model.progress * 100).toFixed(1) + '%';
-      if (bar) bar.setAttribute('aria-valuenow', String(Math.round(model.progress * 100)));
-      card.classList.remove('todo-band-overdue', 'todo-band-urgent', 'todo-band-soon', 'todo-band-blue', 'todo-band-ok');
-      card.classList.add('todo-band-' + model.band);
-    });
+      if (!dueAt) continue;
+      const model = todoCardUrgency(dueAt, now), countdown = card.querySelector('[data-todo-countdown]');
+      if (countdown.dataset.band !== model.band) {
+        // The band also determines card colors, labels and overview counts.
+        requestBackgroundRender();
+        return;
+      }
+      if (countdown.textContent !== model.leftText) {
+        countdown.textContent = model.leftText;
+        const badge = card.querySelector('.todo-urgency[aria-label]');
+        if (badge) badge.setAttribute('aria-label', (isEnglish() ? 'Deadline urgency: ' : '截止紧迫度：') + badge.textContent + ' · ' + model.leftText);
+      }
+      const progress = card.querySelector('[data-todo-progress]'), bar = card.querySelector('.todo-urgency-bar');
+      const percent = Number((model.progress * 100).toFixed(1)) + '%', rounded = String(Math.round(model.progress * 100));
+      if (progress.style.width !== percent) progress.style.width = percent;
+      if (bar.getAttribute('aria-valuenow') !== rounded) bar.setAttribute('aria-valuenow', rounded);
+    }
   }
   function todoCardGrid(tasks) {
     const now = Date.now();
@@ -1720,7 +1748,13 @@
   }
   function renderTasks() {
     const all = taskRowsForState(), focused = new Set(state.settings.focusSubjects || []), filtered = all.filter(task => taskSubjectFilter !== 'focus' || focused.has(task.course || '未分类'));
-    const overdue = filtered.filter(task => !task.completed && taskDue(task).overdue), overdueIds = new Set(overdue.map(task => task.id));
+    const now = Date.now();
+    const overdue = filtered.filter(task => {
+      if (task.completed) return false;
+      const dueAt = Date.parse(task.dueAt);
+      trackUpcomingDeadline(dueAt, now);
+      return dueAt <= now;
+    }), overdueIds = new Set(overdue.map(task => task.id));
     let tasks = filtered.filter(task => taskFilter === 'done' ? task.completed : taskFilter === 'overdue' ? overdueIds.has(task.id) : taskFilter === 'all' ? !overdueIds.has(task.id) : !task.completed && !overdueIds.has(task.id));
     const foldedOverdue = taskFilter === 'open' ? overdue : taskFilter === 'all' ? overdue : [];
     const count = taskFilter === 'open' || taskFilter === 'all' ? tasks.length + foldedOverdue.length : tasks.length;
@@ -1803,7 +1837,7 @@
   }
   function renderReminderSettings() {
     const subjects = [...new Set(openTasksForState('teams').map(task => task.course || '未分类'))].sort((a, b) => a.localeCompare(b, 'zh-CN'));
-    const selected = new Set(state.settings.reminderSubjects || []), allSubjects = selected.size === 0;
+    const selected = new Set(state.settings.reminderSubjects), allSubjects = !state.settings.reminderSubjectsMuted && selected.size === 0;
     const resetSubjects = '<button class="button-plain reminder-subject-reset" type="button" data-action="reminder-subjects-all">' + t('恢复全部学科') + '</button>';
     const subjectControls = subjects.length ? '<div class="reminder-subject-options">' + subjects.map((subject, index) => '<label class="reminder-subject-option" for="reminder-subject-choice-' + index + '"><input id="reminder-subject-choice-' + index + '" type="checkbox" data-reminder-subject="' + esc(subject) + '" ' + (allSubjects || selected.has(subject) ? 'checked' : '') + (!native ? ' disabled' : '') + '><span>' + esc(subject) + '</span></label>').join('') + resetSubjects + '</div>' : '<div class="reminder-subject-options reminder-no-subjects"><p class="subtle">' + t('暂无已读取学科；获取到 Teams 作业后会在这里列出。') + '</p>' + resetSubjects + '</div>';
     return '<section id="reminder-settings" class="card settings-section">' + cardHeader('bell', 'Teams 作业提醒') + '<div class="settings-fields"><div class="settings-field"><div><label for="teams-notifications">' + t('截止前系统通知') + '</label><p id="notification-status">' + esc(t(permissionCopy())) + '</p></div><label class="toggle" for="teams-notifications"><input id="teams-notifications" type="checkbox" ' + (state.settings.teamsNotifications ? 'checked' : '') + (!native ? ' disabled' : '') + ' aria-label="' + esc(t('Teams 作业截止提醒')) + '"><span></span></label></div><div class="settings-field"><div><label for="reminder-minutes">' + t('提前多久提醒') + '</label><p>' + t('如果提前提醒时间已过，将在截止时提醒。已逾期或已完成的作业不安排通知。') + '</p></div><select id="reminder-minutes">' + [[0, '截止时'], [10, '提前 10 分钟'], [30, '提前 30 分钟'], [60, '提前 1 小时'], [1440, '提前 1 天']].map(item => '<option value="' + item[0] + '" ' + (Number(state.settings.reminderMinutes) === item[0] ? 'selected' : '') + '>' + t(item[1]) + '</option>').join('') + '</select></div><div class="settings-field reminder-subject-setting"><div><label>' + t('提醒学科') + '</label><p>' + t('取消某科可暂停该科通知；默认所有学科都可提醒。') + '</p></div>' + subjectControls + '</div></div><p class="gpa-note">' + t('课表倒计时按北京时间每秒更新，依据已读取课节的结束和下一节开始时间计算。应用需定期运行并同步，才能发现新作业和截止时间变更；系统通知是否显示还受 Mac 通知和专注模式设置影响。') + '</p></section>';
@@ -2112,15 +2146,27 @@
     closeDialog('assistant-confirm-dialog');
   }
   function renderAssistantHistoryResults() {
+    if (!assistantHistoryOpen) return '';
     const query = assistantHistoryQuery.trim().toLocaleLowerCase();
-    const rows = assistantConversationRows().filter(item => !query || item.title.toLocaleLowerCase().includes(query) || item.messages.some(message => (message.content + '\n' + (message.display || '')).toLocaleLowerCase().includes(query)))
-      .slice().sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+    const rows = [];
+    for (const item of assistantConversationRows()) {
+      let matchingText = '';
+      if (query) {
+        for (const message of item.messages) {
+          if (message.content.toLocaleLowerCase().includes(query)) { matchingText = message.content; break; }
+          if (message.display && message.display.toLocaleLowerCase().includes(query)) { matchingText = message.display; break; }
+        }
+        if (!matchingText && !item.title.toLocaleLowerCase().includes(query)) continue;
+      }
+      rows.push({ item, matchingText });
+    }
     if (!rows.length) return '<p class="assistant-history-empty">' + assistantCopy(query ? '没有找到匹配的对话。' : '还没有历史对话。发送问题后会自动保存在本机。', query ? 'No conversations match your search.' : 'No conversations yet. Questions and replies are saved locally when you chat.') + '</p>';
-    return rows.map(item => {
-      const match = query && item.messages.find(message => (message.content + '\n' + (message.display || '')).toLocaleLowerCase().includes(query));
-      const preview = String(match ? match.content || match.display : item.messages.filter(message => message.role === 'user').at(-1)?.content || item.draft || '').replace(/\s+/g, ' ').slice(0, 140);
-      const date = new Intl.DateTimeFormat(isEnglish() ? 'en-US' : 'zh-CN', { timeZone: 'Asia/Shanghai', month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date(item.updatedAt));
-      return '<article class="assistant-history-item" data-active="' + (item.id === assistantConversationID) + '"><button type="button" class="assistant-history-open" data-action="assistant-open-conversation" data-id="' + esc(item.id) + '"' + (assistantBusy ? ' disabled' : '') + '><strong>' + esc(item.title) + '</strong><span class="assistant-history-meta">' + esc(date) + ' · ' + item.messages.filter(message => message.role === 'user').length + assistantCopy(' 个问题', ' questions') + '</span><small>' + esc(preview) + '</small></button><button type="button" class="assistant-history-delete" data-action="assistant-delete-conversation" data-id="' + esc(item.id) + '" aria-label="' + esc(assistantCopy('删除对话：', 'Delete conversation: ') + item.title) + '"' + (assistantBusy ? ' disabled' : '') + '>' + assistantCopy('删除', 'Delete') + '</button></article>';
+    rows.sort((a, b) => b.item.updatedAt.localeCompare(a.item.updatedAt));
+    return rows.map(({ item, matchingText }) => {
+      const questions = item.messages.filter(message => message.role === 'user');
+      const preview = (matchingText || questions.at(-1)?.content || item.draft || '').replace(/\s+/g, ' ').slice(0, 140);
+      const date = fmtDate(item.updatedAt, { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
+      return '<article class="assistant-history-item" data-active="' + (item.id === assistantConversationID) + '"><button type="button" class="assistant-history-open" data-action="assistant-open-conversation" data-id="' + esc(item.id) + '"' + (assistantBusy ? ' disabled' : '') + '><strong>' + esc(item.title) + '</strong><span class="assistant-history-meta">' + esc(date) + ' · ' + questions.length + assistantCopy(' 个问题', ' questions') + '</span><small>' + esc(preview) + '</small></button><button type="button" class="assistant-history-delete" data-action="assistant-delete-conversation" data-id="' + esc(item.id) + '" aria-label="' + esc(assistantCopy('删除对话：', 'Delete conversation: ') + item.title) + '"' + (assistantBusy ? ' disabled' : '') + '>' + assistantCopy('删除', 'Delete') + '</button></article>';
     }).join('');
   }
   function renderAssistantHistoryPanel() {
@@ -2787,6 +2833,7 @@
     const pageRenderers = { overview: renderOverview, learning: renderLearning, schedule: renderSchedule, calendar: renderAgenda, grades: renderGrades, tasks: renderTasks, feedback: renderFeedback, teams: renderTeams, ec: renderEC, settings: renderSettings };
     if (themeEdition) pageRenderers.assistant = renderAssistant;
     const content = document.getElementById('content');
+    nextTaskDeadline = Infinity;
     const contentHTML = localizedHTML(state.settings.focusMode ? renderFocusMode : pageRenderers[page]) + (page === 'settings' && !state.settings.focusMode ? renderGraphicsSettings() : '');
     if (window.CampusDOM && !pageChanged) window.CampusDOM.patch(content, contentHTML);
     else content.innerHTML = contentHTML;
@@ -2828,7 +2875,7 @@
   function shiftDate(direction) {
     const d = new Date(selectedDate + 'T12:00:00Z');
     d.setUTCDate(d.getUTCDate() + direction);
-    selectedDate = d.toISOString().slice(0, 10); render();
+    selectedDate = d.toISOString().slice(0, 10); selectedDateFollowsToday = selectedDate === localDayKey(); render();
   }
   let taskTimePicker = null;
   function openTaskDialog() {
@@ -2926,8 +2973,8 @@
     if (pendingImportRequestID) return;
     if (!native) return;
     const now = Date.now(), lead = Number(state.settings.reminderMinutes == null ? 30 : state.settings.reminderMinutes) * 60000;
-    const allowedSubjects = new Set(state.settings.reminderSubjects || []);
-    const items = state.settings.teamsNotifications ? openTasksForState('teams').filter(task => !allowedSubjects.size || allowedSubjects.has(task.course || '未分类')).map(task => {
+    const allowedSubjects = new Set(state.settings.reminderSubjects);
+    const items = state.settings.teamsNotifications && !state.settings.reminderSubjectsMuted ? openTasksForState('teams').filter(task => !allowedSubjects.size || allowedSubjects.has(task.course || '未分类')).map(task => {
       const due = new Date(task.dueAt || '').getTime(), url = Core.safeURL(task.url, 'teams');
       if (!Number.isFinite(due) || due <= now || !url) return null;
       const fire = due - lead > now ? due - lead : due;
@@ -3344,7 +3391,7 @@
     else if (action === 'feedback-filter') { feedbackFilter = target.dataset.filter; render(); }
     else if (action === 'prev-day') shiftDate(-1);
     else if (action === 'next-day') shiftDate(1);
-    else if (action === 'today') { selectedDate = Core.today(); render(); }
+    else if (action === 'today') { selectedDate = localDayKey(); selectedDateFollowsToday = true; render(); }
     else if (action === 'custom-day') {
       customCaptureDraft();
       const day = Number(target.dataset.day);
@@ -3400,7 +3447,7 @@
       if (target.dataset.source === 'teams') { toast('Teams 退出登录请在 ' + teamsBrowserName() + ' 中操作。'); return; }
       send('clearSession', { source: target.dataset.source });
     }
-    else if (action === 'reminder-subjects-all') { state.settings.reminderSubjects = []; persist(); render(); toast(t('已恢复所有学科提醒。')); }
+    else if (action === 'reminder-subjects-all') { state.settings.reminderSubjects = []; state.settings.reminderSubjectsMuted = false; persist(); render(); toast(t('已恢复所有学科提醒。')); }
   });
   document.addEventListener('change', event => {
     const el = event.target;
@@ -3455,7 +3502,7 @@
       if (!id || ![1, 2, 3].includes(value)) return;
       state.settings.taskPriority[id] = value; persist(); render();
     }
-    else if (el.id === 'schedule-date') { if (/^\d{4}-\d{2}-\d{2}$/.test(el.value)) { selectedDate = el.value; render(); } }
+    else if (el.id === 'schedule-date') { if (/^\d{4}-\d{2}-\d{2}$/.test(el.value)) { selectedDate = el.value; selectedDateFollowsToday = selectedDate === localDayKey(); render(); } }
     else if (el.id === 'gpa-kline-interval') setGpaKlineInterval(el.value);
     else if (el.id === 'app-language') {
       if (!['zh-CN', 'en-US'].includes(el.value)) return;
@@ -3500,9 +3547,10 @@
       const subject = el.dataset.reminderSubject;
       if (!subject || subject.length > 120) return;
       const available = [...new Set(openTasksForState('teams').map(task => task.course || '未分类'))];
-      const configured = state.settings.reminderSubjects || [];
-      const selected = new Set(configured.length ? configured : available);
+      const configured = state.settings.reminderSubjects;
+      const selected = new Set(configured.length || state.settings.reminderSubjectsMuted ? configured : available);
       if (el.checked) selected.add(subject); else selected.delete(subject);
+      state.settings.reminderSubjectsMuted = selected.size === 0;
       state.settings.reminderSubjects = available.length && available.every(value => selected.has(value)) && selected.size === available.length ? [] : [...selected].sort((a, b) => a.localeCompare(b, 'zh-CN'));
       persist(); render(); toast(t('提醒筛选已更新。'));
     }
@@ -4124,7 +4172,6 @@
     window.campusDesktop.onEvent(event => window.CampusDesk.receive(event));
   }
   render();
-  updateTaskCardCountdowns();
   send('ready');
   send('requestGraphStatus');
   send('requestTeamsAutoStatus');
@@ -4133,13 +4180,16 @@
     if (dashboardHidden()) { updateMenu(classClockForState()); return; }
     flushBackgroundRender();
     setText('sidebar-clock', Core.clock());
-    const todoMinute = Math.floor(Date.now() / 60000);
-    if (todoMinute !== lastTodoCountdownMinute) { lastTodoCountdownMinute = todoMinute; updateTaskCardCountdowns(); }
+    const now = Date.now(), todoMinute = Math.floor(now / 60000);
+    if (todoMinute !== lastTodoCountdownMinute) { lastTodoCountdownMinute = todoMinute; updateTaskCardCountdowns(now); }
     const clock = updateClock(); updateMenu(clock);
-    const today = Core.today(), boundary = clock.phase + ':' + (clock.current && clock.current.id || '') + ':' + (clock.next && clock.next.id || '');
     const dialogOpen = ['task-dialog', 'detail-dialog', 'agenda-event-dialog', 'teams-page-dialog'].some(id => document.getElementById(id).open);
+    if (!dialogOpen && page === 'schedule' && !state.settings.focusMode && localDayKey() !== lastScheduleDay) {
+      requestBackgroundRender();
+      return;
+    }
+    const today = Core.today(), boundary = clock.phase + ':' + (clock.current && clock.current.id || '') + ':' + (clock.next && clock.next.id || '');
     if (!dialogOpen && (page === 'overview' || page === 'schedule' || (page === 'calendar' && today !== lastRenderedDay)) && (today !== lastRenderedDay || boundary !== lastClockBoundary)) {
-      if (selectedDate === lastRenderedDay && today !== lastRenderedDay) selectedDate = today;
       if (calendarDay === lastRenderedDay && today !== lastRenderedDay) { calendarDay = today; calendarMonth = today.slice(0, 7); }
       lastRenderedDay = today; lastClockBoundary = boundary; render();
     }
