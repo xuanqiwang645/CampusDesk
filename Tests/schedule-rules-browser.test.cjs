@@ -7,6 +7,67 @@ const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 const Core = require('../Resources/core.js');
 
+test('board shows every captured class and opens the full schedule at today after browsing another date', { skip: !process.env.PLAYWRIGHT_MODULE }, async () => {
+  const browser = await launchChromium();
+  try {
+    const page = await browser.newPage({ timezoneId: 'Asia/Shanghai', viewport: { width: 1440, height: 1000 } });
+    const errors = [];
+    page.on('pageerror', error => errors.push(error.message));
+    const schools = { seiue: 'https://example-school.seiue.com/', managebac: '' };
+    const state = Core.emptyState();
+    Object.assign(state.settings, { dashboardTheme: 'board', setupWizardCompleted: true });
+    const classes = Array.from({ length: 8 }, (_, index) => ({ id: 'lesson-' + index, date: '2026-11-06',
+      start: String(index + 8).padStart(2, '0') + ':00', end: String(index + 8).padStart(2, '0') + ':45',
+      title: 'Synthetic lesson ' + (index + 1), room: 'Lab ' + (index + 1), isSelfStudy: false }));
+    const url = schools.seiue + 'timetable';
+    state.snapshots.seiue[url] = { source: 'seiue', url, capturedAt: '2026-11-06T00:00:00Z', warnings: [],
+      calendarDates: ['2026-11-05', '2026-11-06'], schedule: classes };
+    await page.addInitScript(({ state, schools }) => {
+      localStorage.setItem('campusdesk.browser.v1', JSON.stringify(state));
+      localStorage.setItem('campusdesk.school-config.v1', JSON.stringify(schools));
+    }, { state, schools });
+    await page.clock.setFixedTime(new Date('2026-11-06T02:00:00Z'));
+    await page.goto(pathToFileURL(path.resolve(__dirname, '../Resources/index.html')).href + '#overview');
+    await page.locator('.board-class-row').first().waitFor();
+    for (const language of ['zh-CN', 'en-US']) {
+      await page.clock.setFixedTime(new Date('2026-11-06T02:00:00Z'));
+      state.settings.language = language;
+      await page.evaluate(state => CampusDesk.receive({ type: 'state', state }), state);
+      await page.locator('[data-page="overview"]').click();
+      assert.deepEqual(await page.locator('.board-class-row strong').allTextContents(), classes.map(row => row.title));
+      for (const width of [1440, 390]) {
+        await page.setViewportSize({ width, height: 1000 });
+        const layout = await page.locator('.board-class-row').evaluateAll(rows => rows.map(row => {
+          const box = row.getBoundingClientRect(), card = row.parentElement.getBoundingClientRect();
+          return { height: box.height, top: box.top, bottom: box.bottom, cardTop: card.top, cardBottom: card.bottom,
+            scrollWidth: row.scrollWidth, clientWidth: row.clientWidth };
+        }));
+        assert.equal(layout.length, 8);
+        for (const row of layout) {
+          assert.ok(row.height > 0 && row.top >= row.cardTop && row.bottom <= row.cardBottom, 'all classes fit in the card at ' + width);
+          assert.ok(row.scrollWidth <= row.clientWidth + 1, 'class rows do not overflow at ' + width);
+        }
+      }
+      if (process.env.SCHEDULE_PREVIEW_SCREENSHOT && language === 'zh-CN') {
+        await page.setViewportSize({ width: 1440, height: 1000 });
+        await page.locator('.board-side-column .board-mini-card').first().screenshot({ path: process.env.SCHEDULE_PREVIEW_SCREENSHOT });
+      }
+      await page.locator('[data-page="schedule"]').click();
+      await page.locator('#schedule-date').fill('2026-11-05');
+      await page.locator('#schedule-date').dispatchEvent('change');
+      assert.equal(await page.locator('#schedule-date').inputValue(), '2026-11-05');
+      await page.locator('[data-page="overview"]').click();
+      await page.getByRole('button', { name: language === 'zh-CN' ? '查看完整课表' : 'View full schedule', exact: true }).click();
+      assert.equal(new URL(page.url()).hash, '#schedule');
+      assert.equal(await page.locator('#schedule-date').inputValue(), '2026-11-06');
+      assert.equal(await page.locator('.schedule-full .schedule-row').count(), 8);
+      await page.clock.setFixedTime(new Date('2026-11-07T00:00:00+08:00'));
+      await page.waitForFunction(() => document.getElementById('schedule-date')?.value === '2026-11-07');
+    }
+    assert.deepEqual(errors, []);
+  } finally { await browser.close(); }
+});
+
 test('holiday help and adjustment fields never overlap across widths, languages and dashboard styles', { skip: !process.env.PLAYWRIGHT_MODULE }, async () => {
   const browser = await launchChromium();
   try {

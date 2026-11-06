@@ -103,6 +103,7 @@
     const periods = parsePeriods(model.periods);
     if (!periods) warnings.push('未能确认完整课时列表，暂不推断自习课。');
     const schedule = [];
+    let incomplete = false;
     model.days.forEach((day, index) => {
       const date = dates[index];
       const events = [];
@@ -114,7 +115,10 @@
         const details = parseDetails(event.details);
         events.push({ id: identifier([date, range.start, range.end, title, details.room]), date, ...range, title, ...details, isSelfStudy: /^(?:自习(?:课)?|self[ -]?study)$/i.test(title) });
       });
-      if (!complete) warnings.push(date + ' 部分课程无法识别，未推断该日自习课。');
+      if (!complete) {
+        incomplete = true;
+        warnings.push(date + ' 部分课程无法识别，暂不更新课表；请等待加载完成后重试。');
+      }
       const weekday = new Date(date + 'T12:00:00Z').getUTCDay();
       // Empty whole days can be holidays or days without school. Never fill them.
       if (periods && complete && events.length && weekday >= 1 && weekday <= 5 && !day.holiday) {
@@ -127,7 +131,10 @@
     });
     const unique = new Map(schedule.map(event => [event.id, event]));
     return { schedule: [...unique.values()].sort((a, b) => (a.date + a.start + a.title).localeCompare(b.date + b.start + b.title)),
-      periods: (periods || []).map(period => ({ period: 'P' + period.number, start: period.start, end: period.end })), calendarDates: dates, warnings };
+      periods: (periods || []).map(period => ({ period: 'P' + period.number, start: period.start, end: period.end })), calendarDates: dates, warnings,
+      // A partial render is not an authoritative empty day. The host retries
+      // parse errors, and merging a failed snapshot preserves the last good week.
+      ...(incomplete ? { parseError: true, success: false } : {}) };
   }
 
   function readDOM(doc) {
@@ -182,7 +189,7 @@
     if (result.loginRequired) { result.warnings.push('请在希悦页面登录，登录成功后会自动读取周课表。'); return result; }
     if (!model) { result.warnings.push('当前页面没有周课表，请打开希悦首页并选择“周”。'); return result; }
     const parsed = parseCalendar(model);
-    return { ...result, ...parsed, ...(parsed.calendarDates.length === 7 ? { success: true } : {}) };
+    return { ...result, ...parsed, ...(parsed.calendarDates.length === 7 && !parsed.parseError && parsed.success !== false ? { success: true } : {}) };
   }
 
   return { extract, parseTimeRange, parseMonth, parseDayHeader, resolveWeekDates, parseDetails, parsePeriods, parseCalendar, readDOM };

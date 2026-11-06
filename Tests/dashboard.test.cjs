@@ -1187,6 +1187,23 @@ test('interface language setting persists and translates the application chrome 
   assert.equal(app.node('breadcrumb-page').textContent, '连接与设置');
 });
 
+test('English schedule warnings distinguish deferred updates from legacy self-study warnings', () => {
+  const app = harness(), snapshot = schedule();
+  const warnings = [
+    ['2026-09-19 部分课程无法识别，暂不更新课表；请等待加载完成后重试。', '2026-09-19: Some classes could not be recognized, so the schedule was not updated. Wait for loading to finish, then retry.'],
+    ['2026-09-19 部分课程无法识别，未推断该日自习课。', '2026-09-19: Some classes could not be recognized; no self-study periods were inferred for this day.']
+  ];
+  snapshot.warnings = warnings.map(([source]) => source);
+  app.receive({ type: 'snapshot', snapshot });
+  app.click({ page: 'settings' });
+  app.change('app-language', { value: 'en-US' });
+  for (const [message, expected] of warnings) {
+    assert.ok(app.node('content').innerHTML.includes(expected), 'cached warnings remain readable in English');
+    app.receive({ type: 'status', source: 'seiue', busy: false, message });
+    assert.equal(app.node('connection-message-seiue').textContent, expected, 'live status has the same meaning');
+  }
+});
+
 test('schedule follows the local date after a hidden refresh and preserves a manually selected day', () => {
   const app = harness({ hash: '#schedule' });
   const localDate = () => {

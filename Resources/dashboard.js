@@ -262,6 +262,8 @@
     if (match) return 'Checked ' + match[1] + ' pages; open the source page to read more.';
     match = text.match(/^(.+?) 部分课程无法识别，未推断该日自习课。$/);
     if (match) return match[1] + ': Some classes could not be recognized; no self-study periods were inferred for this day.';
+    match = text.match(/^(.+?) 部分课程无法识别，暂不更新课表；请等待加载完成后重试。$/);
+    if (match) return match[1] + ': Some classes could not be recognized, so the schedule was not updated. Wait for loading to finish, then retry.';
     match = text.match(/^需要登录或打开原页：请打开\s*(.+)$/);
     if (match) return 'Sign in or open the source page: open ' + (match[1] === '希悦' ? 'Seiue' : match[1]) + '.';
     match = text.match(/^正在核对 EC 附件\s*(\d+)；本轮新下载\s*(\d+)\s*\/\s*(\d+)…$/);
@@ -1128,7 +1130,7 @@
     const classes = scheduleRowsForState(today);
     const dateLabel = fmtDate(now, { month: 'long', day: 'numeric', weekday: 'long' });
     const classCount = classes.length ? ' · ' + classes.length + (isEnglish() ? (classes.length === 1 ? ' class' : ' classes') : ' 节课') : '';
-    const classPreview = classes.slice(0, 3).map(item => '<div class="board-class-row"><span>' + esc(item.start || '—') + '</span><strong>' + esc(item.title || '自习课') + '</strong><small>' + esc(item.room || '地点待确认') + '</small></div>').join('');
+    const classPreview = classes.map(item => '<div class="board-class-row"><span>' + esc(item.start || '—') + '</span><strong>' + esc(item.title || '自习课') + '</strong><small>' + esc(item.room || '地点待确认') + '</small></div>').join('');
     const boardClock = '<div class="board-header-clock">' + renderClassClock() + '</div>';
     const en = isEnglish();
     const metric = (label, value, suffix = '') => '<div><dt>' + esc(label) + '</dt><dd>' + esc(value) + (suffix ? '<small> / ' + esc(suffix) + '</small>' : '') + '</dd></div>';
@@ -1141,7 +1143,7 @@
       gradeMetric(en ? 'Linear GPA estimate' : '线性参考 GPA', gpa.linear) + '</dl></div>';
     const boardTasks = boardTaskSourceColumns(openTasks, rows => boardTaskCards(rows, 6));
     const taskSection = '<section class="board-task-section"><div class="board-section-heading"><h2>' + (en ? 'To-do' : '待办事项') + ' <small>' + openTasks.length + '</small></h2><div>' + button(icon('plus') + '添加待办', 'add-task', '', 'button-primary') + button('查看全部', 'go-tasks', '', 'button-light') + '</div></div><div class="board-source-groups">' + (openTasks.length ? boardTasks : boardTaskCards(openTasks)) + '</div></section>';
-    const side = '<aside class="board-side-column"><section class="board-mini-card"><p>今日课程</p><h2>' + (classes.length ? classes.length + ' 节已读取课程' : '等待课表同步') + '</h2>' + (classPreview || '<p class="board-muted">登录希悦并打开课表后，这里会显示当天课程。</p>') + '</section>' + renderSchoolCalendar(today, false) + '<section class="board-mini-card board-tip"><p>今日提示</p><h2>信息以原平台为准</h2><span>卡片只整理已经读取到的课程、成绩和作业；点击学校任务可查看原文要求。</span></section></aside>';
+    const side = '<aside class="board-side-column"><section class="board-mini-card"><p>今日课程</p><h2>' + (classes.length ? classes.length + ' 节已读取课程' : '等待课表同步') + '</h2>' + (classPreview || '<p class="board-muted">登录希悦并打开课表后，这里会显示当天课程。</p>') + button((en ? 'View full schedule' : '查看完整课表') + icon('arrow'), 'go-today-schedule', '', 'button-plain') + '</section>' + renderSchoolCalendar(today, false) + '<section class="board-mini-card board-tip"><p>今日提示</p><h2>信息以原平台为准</h2><span>卡片只整理已经读取到的课程、成绩和作业；点击学校任务可查看原文要求。</span></section></aside>';
     const header = '<header class="board-hero"><div><h1>今日概览</h1><p><time datetime="' + esc(today) + '">' + esc(dateLabel) + '</time>' + classCount + '</p></div>' +
       button(icon('settings') + '面板样式', 'appearance-settings', '', 'button-light') + '</header>';
     return '<section class="board-panel">' + header + boardClock + metrics + '<div class="board-layout">' + taskSection + side + '</div></section>';
@@ -3428,7 +3430,10 @@
     else if (action === 'feedback-filter') { feedbackFilter = target.dataset.filter; render(); }
     else if (action === 'prev-day') shiftDate(-1);
     else if (action === 'next-day') shiftDate(1);
-    else if (action === 'today') { selectedDate = localDayKey(); selectedDateFollowsToday = true; render(); }
+    else if (action === 'today' || action === 'go-today-schedule') {
+      selectedDate = localDayKey(); selectedDateFollowsToday = true;
+      if (action === 'go-today-schedule') navigate('schedule'); else render();
+    }
     else if (action === 'custom-day') {
       customCaptureDraft();
       const day = Number(target.dataset.day);
