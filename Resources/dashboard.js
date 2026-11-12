@@ -73,6 +73,7 @@
   let graphConfigurationDraft = null;
   const gpaTermDateDrafts = new Map();
   let schoolConfigurationDraft = null, schoolSavePending = false;
+  let settingsEasterEggUnlocked = false, settingsEasterEggError = false;
   let setupWizardDismissedThisSession = false;
   let setupWizardNameDraft = '';
   let setupWizardMode = 'setup', setupWizardRequestSequence = 0, setupWizardHandledSequence = 0;
@@ -1877,6 +1878,18 @@
   function renderGraphicsSettings() {
     return '<section class="card settings-section"><div class="settings-field"><div><label for="graphics-mode">' + assistantCopy('动效与耗电', 'Effects and energy') + '</label><p>' + assistantCopy('自动：操作时流畅，闲置时降频；低功耗：仅在界面变化时绘制静态玻璃。窗口不可见时暂停。', 'Automatic: smooth while interacting and slower when idle. Low power: redraw static glass only when needed. Rendering pauses while hidden.') + '</p></div><select id="graphics-mode"><option value="auto"' + (state.settings.graphicsMode !== 'low-power' ? ' selected' : '') + '>' + assistantCopy('自动', 'Automatic') + '</option><option value="low-power"' + (state.settings.graphicsMode === 'low-power' ? ' selected' : '') + '>' + assistantCopy('低功耗', 'Low power') + '</option></select></div></section>';
   }
+  function renderSettingsEasterEgg() {
+    if (!settingsEasterEggUnlocked) return '<section class="card settings-easter-egg" aria-labelledby="settings-easter-egg-title">' +
+      '<div><h2 id="settings-easter-egg-title">' + assistantCopy('一个小彩蛋', 'A little surprise') + '</h2><p>' + assistantCopy('输入密码后查看。', 'Enter the password to reveal it.') + '</p></div>' +
+      '<form id="settings-easter-egg-form" novalidate><label for="settings-easter-egg-password">' + assistantCopy('密码', 'Password') + '</label>' +
+      '<div class="settings-easter-egg-controls"><input id="settings-easter-egg-password" type="password" maxlength="64" autocomplete="off" autocapitalize="off" spellcheck="false" aria-describedby="settings-easter-egg-error" aria-invalid="' + settingsEasterEggError + '">' +
+      '<button class="button button-light" type="submit">' + assistantCopy('解锁彩蛋', 'Unlock') + '</button></div>' +
+      '<p id="settings-easter-egg-error" role="status" aria-live="polite">' + (settingsEasterEggError ? assistantCopy('密码不正确，再试一次。', 'Incorrect password. Try again.') : '') + '</p></form></section>';
+    return '<section class="card settings-easter-egg" lang="zh-CN" translate="no" aria-labelledby="settings-easter-egg-title">' +
+      '<div><h2 id="settings-easter-egg-title" tabindex="-1">你居然看到这里了？！</h2>' +
+      '<p>在这里，我十分感谢曹明选和张蕴然。</p><p>同时请记住：曹明选非常😋😋😋！！！</p></div>' +
+      '<img src="images/settings-easter-egg.png" width="351" height="388" alt="双手竖起大拇指的图片" loading="lazy" decoding="async"></section>';
+  }
   function renderLanguageSettings() {
     const language = state.settings.language || 'zh-CN';
     return '<section id="language-settings" class="card settings-section">' + cardHeader('settings', '界面语言') + '<p class="settings-intro">选择 CampusDesk 的界面语言。课程、作业、消息、附件和学校原文保持原样，不会被翻译。</p><div class="settings-fields"><div class="settings-field"><div><label for="app-language">界面语言</label><p>更改会立即应用到导航、页面标题、按钮与固定说明文字。</p></div><select id="app-language" aria-label="界面语言"><option value="zh-CN"' + (language === 'zh-CN' ? ' selected' : '') + '>简体中文</option><option value="en-US"' + (language === 'en-US' ? ' selected' : '') + '>English</option></select></div></div></section>';
@@ -2848,6 +2861,7 @@
     const retainedPlanForm = renderedPage === page && page === 'grades' && gradePlanner ? gradePlanner.retain() : null;
     const retainedSchoolInputs = renderedPage === page && page === 'settings' && schoolConfigurationDraft ? ['seiue-url', 'managebac-url'].map(id => document.getElementById(id)).filter(Boolean) : [];
     const retainedAssistantKey = renderedPage === page && page === 'settings' && document.activeElement?.id === 'assistant-deepseek-key' ? document.activeElement : null;
+    const retainedEasterEggInput = renderedPage === page && page === 'settings' && !settingsEasterEggUnlocked ? document.getElementById('settings-easter-egg-password') : null;
     const graphConfigOpen = page === 'settings' && document.getElementById('graph-configuration') && document.getElementById('graph-configuration').open;
     const shell = document.getElementById('app-shell');
     // Unrelated sync/status renders must not throw away the user's chart view.
@@ -2873,10 +2887,14 @@
     if (themeEdition) pageRenderers.assistant = renderAssistant;
     const content = document.getElementById('content');
     nextTaskDeadline = Infinity;
-    const contentHTML = localizedHTML(state.settings.focusMode ? renderFocusMode : pageRenderers[page]) + (page === 'settings' && !state.settings.focusMode ? renderGraphicsSettings() : '');
+    const contentHTML = localizedHTML(state.settings.focusMode ? renderFocusMode : pageRenderers[page]) + (page === 'settings' && !state.settings.focusMode ? renderGraphicsSettings() + renderSettingsEasterEgg() : '');
     if (window.CampusDOM && !pageChanged) window.CampusDOM.patch(content, contentHTML);
     else content.innerHTML = contentHTML;
     if (retainedAssistantKey) document.getElementById('assistant-deepseek-key')?.replaceWith(retainedAssistantKey);
+    if (retainedEasterEggInput) {
+      retainedEasterEggInput.setAttribute('aria-invalid', String(settingsEasterEggError));
+      document.getElementById('settings-easter-egg-password')?.replaceWith(retainedEasterEggInput);
+    }
     ensureAssistantModels();
     resizeAssistantQuestionField(document.getElementById('assistant-question'));
     if (page === 'assistant') updateAssistantSendControls();
@@ -3743,6 +3761,17 @@
   });
   document.addEventListener('submit', event => {
     if (!event.target) return;
+    if (event.target.id === 'settings-easter-egg-form') {
+      event.preventDefault();
+      const input = document.getElementById('settings-easter-egg-password');
+      settingsEasterEggUnlocked = Boolean(input && input.value === '101id');
+      settingsEasterEggError = !settingsEasterEggUnlocked;
+      if (input && settingsEasterEggUnlocked) input.value = '';
+      render();
+      if (settingsEasterEggUnlocked) document.getElementById('settings-easter-egg-title')?.focus({ preventScroll: true });
+      else { input?.focus({ preventScroll: true }); input?.select(); }
+      return;
+    }
     if (event.target.id === 'quick-connect-form') { event.preventDefault(); submitQuickConnection(); return; }
     if (event.target.id === 'grade-plan-form') { event.preventDefault(); getGradePlanner().submit(event.target); return; }
     if (event.target.id === 'school-configuration-form') {

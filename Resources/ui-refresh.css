@@ -245,3 +245,24 @@ button.board-more { margin: 5px 0; font-size: 12px; }
   }
 }
 html[data-native-toolbar="true"] .topbar .toolbar > button { display: none !important; }
+
+
+.settings-easter-egg {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  margin-top: 20px;
+}
+.settings-easter-egg > div { flex: 1 1 300px; min-width: 0; }
+.settings-easter-egg h2 { margin: 0 0 12px; color: var(--ink); font-size: 20px; font-weight: 600; line-height: 1.45; }
+.settings-easter-egg p { margin: 8px 0 0; color: var(--ink); font-size: 15px; line-height: 1.7; overflow-wrap: anywhere; }
+.settings-easter-egg img { display: block; width: 210px; max-width: 100%; height: auto; border-radius: 12px; }
+.settings-easter-egg form { flex: 1 1 280px; max-width: 360px; }
+.settings-easter-egg label { display: block; margin-bottom: 8px; color: var(--ink); font-size: 14px; }
+.settings-easter-egg-controls { display: flex; align-items: center; gap: 8px; }
+.settings-easter-egg-controls input { width: 100%; min-width: 0; }
+.settings-easter-egg-controls button { flex-shrink: 0; }
+.settings-easter-egg #settings-easter-egg-error { font-size: 13px; }
+.settings-easter-egg #settings-easter-egg-error:empty { margin: 0; }
