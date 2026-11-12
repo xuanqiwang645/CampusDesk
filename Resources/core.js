@@ -267,12 +267,20 @@
       return out;
     }, []);
     const events = [], props = [];
-    let inEvent = false;
+    let inEvent = false, componentDepth = 0;
     for (const line of lines) {
-      if (line === 'BEGIN:VEVENT') { inEvent = true; props.length = 0; continue; }
+      if (/^METHOD(?:;[^:]*)?:CANCEL$/i.test(line)) fail('校历包含暂不支持的取消通知（METHOD:CANCEL），未导入；请在原日历核对。');
+      if (line === 'BEGIN:VEVENT') { inEvent = true; componentDepth = 0; props.length = 0; continue; }
       if (line === 'END:VEVENT') {
         inEvent = false;
         const read = name => props.find(item => item.name === name);
+        // These properties change the event set or its duration. Silently
+        // dropping one can fabricate a holiday or erase a real occurrence.
+        const unsupported = props.find(item => ['DURATION', 'RDATE', 'RECURRENCE-ID', 'EXRULE'].includes(item.name));
+        if (unsupported) fail('校历包含暂不支持的事件时长或重复例外（' + unsupported.name + '），未导入；请导出含明确起止时间的独立事件。');
+        if (String((read('STATUS') || {}).value || '').trim().toUpperCase() === 'CANCELLED') {
+          fail('校历包含暂不支持的已取消事件（STATUS:CANCELLED），未导入；请在原日历核对。');
+        }
         const startProp = read('DTSTART'), endProp = read('DTEND');
         if (!startProp) continue;
         const allDay = startProp.params.VALUE === 'DATE' || /^\d{8}$/.test(startProp.value);
@@ -301,6 +309,10 @@
         continue;
       }
       if (!inEvent) continue;
+      // Alarm properties belong to VALARM, not to the enclosing event.
+      if (line.startsWith('BEGIN:')) { componentDepth++; continue; }
+      if (line.startsWith('END:')) { componentDepth = Math.max(0, componentDepth - 1); continue; }
+      if (componentDepth) continue;
       const colon = line.indexOf(':'); if (colon < 0) continue;
       const left = line.slice(0, colon).split(';'), name = left.shift().toUpperCase(), params = {};
       for (const part of left) { const i = part.indexOf('='); if (i > 0) params[part.slice(0, i).toUpperCase()] = part.slice(i + 1).replace(/^"|"$/g, ''); }
@@ -1724,18 +1736,36 @@
       members: pick(/(?:成员|参加人员|名单|participants?|attendees?)\s*[:：]?\s*([^\n。；;]{2,240})/i)
     };
   }
+  function scheduleInterval(row) {
+    if (!row.date || !row.start || !row.end) return null;
+    const startAt = Date.parse(row.date + 'T' + row.start + ':00+08:00');
+    const endDate = row.end < row.start ? addDays(row.date, 1) : row.date;
+    const endAt = Date.parse(endDate + 'T' + row.end + ':00+08:00');
+    return Number.isFinite(startAt) && Number.isFinite(endAt) && endAt > startAt ? { startAt, endAt } : null;
+  }
+  function classClockRows(state, key, includeSelfStudy) {
+    const midnight = Date.parse(key + 'T00:00:00+08:00');
+    const previous = getSchedule(state, addDays(key, -1), includeSelfStudy)
+      .filter(row => row.start && row.end && row.end < row.start && row.end !== '00:00');
+    return getSchedule(state, key, includeSelfStudy).concat(previous).flatMap(row => {
+      const interval = scheduleInterval(row);
+      return interval && interval.endAt > midnight ? [Object.assign({}, row, interval)] : [];
+    }).sort((a, b) => a.startAt - b.startAt || a.endAt - b.endAt);
+  }
   function getNextClass(state, date) {
-    const rows = getSchedule(state, date), time = clock(date, state.settings.timezone);
-    return { current: rows.find(r => r.start <= time && time < r.end) || null, next: rows.find(r => r.start > time) || null };
+    const now = date === undefined ? Date.now() : new Date(date).valueOf();
+    const rows = classClockRows(state, today(now, 'Asia/Shanghai'));
+    return { current: rows.find(row => row.startAt <= now && now < row.endAt) || null,
+      next: rows.find(row => row.startAt > now) || null };
   }
   function remainingLabel(seconds) {
     const value = Math.max(0, Math.ceil(seconds)), h = Math.floor(value / 3600), m = Math.floor(value / 60) % 60, s = value % 60;
     return h ? h + ':' + String(m).padStart(2, '0') + ':' + String(s).padStart(2, '0') : String(m).padStart(2, '0') + ':' + String(s).padStart(2, '0');
   }
   function prepareClassClockDay(state, key, now) {
-    const rows = getSchedule(state, key, true).map(row => Object.assign({}, row, {
-      startAt: Date.parse(row.date + 'T' + row.start + ':00+08:00'), endAt: Date.parse(row.date + 'T' + row.end + ':00+08:00')
-    })).sort((a, b) => a.startAt - b.startAt || a.endAt - b.endAt);
+    // A default 45-minute custom lesson can cross midnight. Keep its original
+    // start date and include its continuation when preparing the following day.
+    const rows = classClockRows(state, key, true);
     const status = getSourceStatus(state, 'seiue', now);
     const ageLimit = Math.max(30, state.settings.refreshMinutes * 2) * 60000;
     const relevant = entries(state, 'seiue').find(s => (s.calendarDates || []).includes(key) || (s.schedule || []).some(r => r.date === key));
@@ -2079,5 +2109,5 @@
   }
   return Object.freeze({ VERSION, GPA_BANDS, GPA_BANDED_METHOD: METHOD, configureSchools, schoolHomes, normalizeSchoolHome, emptyState, defaultState: emptyState, validateState, normalizeState: validateState, validateAssistantConversations, assistantHistoryHasCapacity, exportBackup, importBackup,
     mergeSnapshot, resetTeamsData, clearTeamsData: resetTeamsData, today, clock, getSchedule, getCourses, getTasks, resolveTaskDeadline, parseManualDeadline, normalizePersonalEvent: personalEventRow, getFeedback, getGradeUpdates, markGradeUpdatesRead, getOfficialGPA, estimateGPA, estimateLinearGPA, semesterGPAForecast,
-    getNextClass, getClassClock, createClassClockReader, getSchedulePeriods, getTeamsPosts, getTeamsEC, getTeamsGrades, getSourceStatus, buildView, getSchoolCalendarEvents, schoolCalendarScheduleRule, schoolCalendarScheduleConflict, parseSchoolCalendarICS, parseSchoolCalendarPDFText, safeURL, safeAttachmentURL, gradePoints: points, linearGradePoints: linearPoints });
+    getNextClass, getClassClock, createClassClockReader, scheduleInterval, getSchedulePeriods, getTeamsPosts, getTeamsEC, getTeamsGrades, getSourceStatus, buildView, getSchoolCalendarEvents, schoolCalendarScheduleRule, schoolCalendarScheduleConflict, parseSchoolCalendarICS, parseSchoolCalendarPDFText, safeURL, safeAttachmentURL, gradePoints: points, linearGradePoints: linearPoints });
 });

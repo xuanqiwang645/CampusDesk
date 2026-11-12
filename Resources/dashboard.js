@@ -37,6 +37,8 @@
   let customSchedulePattern = 'all';
   let customScheduleOneDate = '';
   let customScheduleDraft = { title: '', room: '', period: '', start: '', end: '' };
+  let scheduleOverrideDraft = {};
+  const scheduleOverrideFields = ['date', 'action', 'target-period', 'period', 'title', 'room', 'start', 'end'];
   let feedbackFilter = 'all';
   let gradeNotificationsFilter = 'all', gradeNotificationsLimit = 40;
   let teamsFilter = 'all';
@@ -664,12 +666,33 @@
     const hit = customBestPeriod(customScheduleDraft.start, customScheduleDraft.end);
     hint.textContent = hit ? t('将归入 ') + hit.period + (hit.start ? ' · ' + hit.start + '–' + hit.end : '') : t('未匹配节次，将按开始时间插入');
   }
+  function captureScheduleOverrideDraft(input) {
+    if (!input || typeof input.id !== 'string' || !input.id.startsWith('override-')) return false;
+    const field = input.id.slice('override-'.length);
+    if (!scheduleOverrideFields.includes(field)) return false;
+    scheduleOverrideDraft[field] = input.value;
+    return true;
+  }
+  function renderSavedScheduleForm(formID, firstFieldID) {
+    // A successful submission intentionally clears the draft. Do not restore
+    // the submitting editor's old value through the normal reading-state path.
+    const active = document.activeElement;
+    if (active && document.getElementById(formID)?.contains(active)) active.blur();
+    render();
+    document.getElementById(firstFieldID)?.focus({ preventScroll: true });
+  }
   function renderScheduleRules() {
     const holidays = state.settings.scheduleHolidays || [], overrides = state.settings.scheduleOverrides || [];
-    const periods = customPeriods();
+    const periods = customPeriods(), draft = scheduleOverrideDraft;
     const holidayRows = holidays.map(date => '<span class="schedule-rule-chip">' + esc(date) + '<button type="button" data-action="remove-holiday" data-date="' + esc(date) + '" aria-label="' + esc(t('移除')) + '">×</button></span>').join('');
     const overrideRows = overrides.map(item => '<div class="custom-lesson-row"><div><strong>' + esc(item.date + ' · ' + (item.action === 'cancel' ? t('取消当天课程') : item.title)) + '</strong><small>' + esc((item.targetPeriod || item.targetStart || '') + (item.period ? ' → ' + item.period : '') + (item.start ? ' · ' + item.start + (item.end ? '–' + item.end : '') : '') + (item.room ? ' · ' + item.room : '')) + '</small></div><button class="icon-button" type="button" data-action="remove-schedule-override" data-id="' + esc(item.id) + '" aria-label="' + esc(t('移除')) + '" title="' + esc(t('移除')) + '">' + icon('trash') + '</button></div>').join('');
-    const periodOptions = '<option value="">—</option>' + periods.map(item => '<option value="' + esc(item.period) + '">' + esc(item.period) + '</option>').join('');
+    const periodOptions = selected => {
+      const names = periods.map(item => item.period);
+      // A new snapshot may list fewer periods while this form is being edited.
+      // Keep the user's explicit selection without inventing any period times.
+      if (selected && !names.includes(selected)) names.push(selected);
+      return '<option value="">—</option>' + names.map(period => '<option value="' + esc(period) + '"' + (period === selected ? ' selected' : '') + '>' + esc(period) + '</option>').join('');
+    };
     return `<section class="card custom-schedule-card schedule-rules-card">
       <div class="card-header"><h2 class="card-title"><span class="icon">${icon('settings')}</span>${t('节假日与临时调课')}</h2></div>
       <div class="custom-schedule-grid">
@@ -680,14 +703,14 @@
       <form id="schedule-override-form" class="custom-schedule-form" aria-labelledby="schedule-override-heading">
         <div class="schedule-rules-heading"><h3 id="schedule-override-heading">${t('临时调课')}</h3><p>${isEnglish() ? 'Applies only to the selected date; weekly rules stay unchanged.' : '仅对指定日期生效，不改变每周课程规则。'}</p></div>
         <div class="custom-schedule-grid">
-          <label><span>${t('临时调课日期')}</span><input id="override-date" type="date" required></label>
-          <label><span>${t('操作')}</span><select id="override-action"><option value="replace">${t('替换当天课程')}</option><option value="cancel">${t('取消当天课程')}</option></select></label>
-          <label><span>${t('原课程节次')}</span><select id="override-target-period">${periodOptions}</select></label>
-          <label><span>${t('新课程节次')}</span><select id="override-period">${periodOptions}</select></label>
-          <label><span>${t('课程名称')}</span><input id="override-title" maxlength="300" placeholder="${t('如：调课后的课程')}"></label>
-          <label><span>${t('教室（可选）')}</span><input id="override-room" maxlength="200"></label>
-          <label><span>${t('开始时间')}</span><input id="override-start" type="time"></label>
-          <label><span>${t('结束时间')}</span><input id="override-end" type="time"></label>
+          <label><span>${t('临时调课日期')}</span><input id="override-date" type="date" value="${esc(draft.date || '')}" required></label>
+          <label><span>${t('操作')}</span><select id="override-action"><option value="replace"${draft.action !== 'cancel' ? ' selected' : ''}>${t('替换当天课程')}</option><option value="cancel"${draft.action === 'cancel' ? ' selected' : ''}>${t('取消当天课程')}</option></select></label>
+          <label><span>${t('原课程节次')}</span><select id="override-target-period">${periodOptions(draft['target-period'])}</select></label>
+          <label><span>${t('新课程节次')}</span><select id="override-period">${periodOptions(draft.period)}</select></label>
+          <label><span>${t('课程名称')}</span><input id="override-title" maxlength="300" value="${esc(draft.title || '')}" placeholder="${t('如：调课后的课程')}"></label>
+          <label><span>${t('教室（可选）')}</span><input id="override-room" maxlength="200" value="${esc(draft.room || '')}"></label>
+          <label><span>${t('开始时间')}</span><input id="override-start" type="time" value="${esc(draft.start || '')}"></label>
+          <label><span>${t('结束时间')}</span><input id="override-end" type="time" value="${esc(draft.end || '')}"></label>
         </div>
         <div class="schedule-rules-actions"><span>${isEnglish() ? 'Saved on this Mac; does not change the school platform.' : '保存在这台 Mac，不会修改学校平台。'}</span><button class="button button-primary" type="submit">${t('保存临时调课')}</button></div>
       </form>
@@ -716,10 +739,11 @@
     return `<section class="card custom-schedule-card">${cardHeader('schedule', '自编课表', '<span class="card-kicker">' + t('添加自编课程') + '</span>')}<form id="custom-schedule-form" class="custom-schedule-form"><div class="custom-schedule-grid"><label><span>${t('课程名称')}</span><input id="custom-title" type="text" maxlength="300" value="${esc(draft.title)}" placeholder="如：晨会、社团"></label><label><span>${t('教室（可选）')}</span><input id="custom-room" type="text" maxlength="200" value="${esc(draft.room)}" placeholder="如：操场"></label></div><div class="custom-mode-tabs"><button type="button" class="custom-mode ${kind === 'weekly' ? 'active' : ''}" data-action="custom-kind" data-kind="weekly">${t('每周课程')}</button><button type="button" class="custom-mode ${kind === 'once' ? 'active' : ''}" data-action="custom-kind" data-kind="once">${t('一次性课程')}</button></div>${scheduleKind}<div class="custom-mode-tabs"><button type="button" class="custom-mode ${mode === 'period' ? 'active' : ''}" data-action="custom-mode" data-mode="period">${t('按节次')}</button><button type="button" class="custom-mode ${mode === 'time' ? 'active' : ''}" data-action="custom-mode" data-mode="time">${t('按时刻')}</button></div><div class="custom-schedule-grid ${mode === 'time' ? 'is-time' : ''}"><label class="custom-period-field"><span>${t('第几节')}</span><select id="custom-period">${periodOptions}</select></label><label><span>${t('开始时间')}</span><input id="custom-start" type="time" value="${esc(draft.start)}"></label><label><span>${t('结束时间')}</span><input id="custom-end" type="time" value="${esc(draft.end)}"></label></div><p id="custom-time-hint" class="custom-time-hint">${mode === 'period' ? '选择节次后自动带出时间' : '填入开始时间后会自动识别节次'}</p><p class="custom-schedule-note">${t('结束时间将自动补为开始时间后 45 分钟。')} ${t('按时间填写时，会按重叠比例自动归入对应节次。')}</p><button class="button button-primary" type="submit">${icon('plus')}${t('保存自编课程')}</button></form>${rows ? '<div class="custom-lesson-list"><div class="custom-schedule-label">' + t('已添加') + ' ' + lessons.length + '</div>' + rows + '</div>' : ''}</section>${renderScheduleRules()}`;
   }
   function scheduleRows(rows, date) {
-    const now = Core.clock(), today = Core.today();
+    const now = Date.now(), today = Core.today();
     return '<div class="schedule-list">' + rows.map(row => {
-      const current = date === today && row.start && row.end && row.start <= now && row.end > now;
-      const past = date < today || (date === today && row.end && row.end <= now);
+      const interval = Core.scheduleInterval(row);
+      const current = interval && interval.startAt <= now && now < interval.endAt;
+      const past = interval ? interval.endAt <= now : date < today;
       return '<div class="schedule-row ' + (row.custom ? 'custom-row ' : '') + (current ? 'current' : past ? 'past' : '') + '"><div class="schedule-time">' + esc(row.start || (row.period || '待定')) + '<small>' + esc(row.end || '') + '</small></div><div class="timeline"><span class="timeline-dot"></span></div><div class="class-tile"><h3>' + esc(row.title || (row.isSelfStudy ? '自习课' : '未命名课程')) + (row.custom ? '<span class="inline-label custom-label">自编</span>' : '') + (current ? '<span class="inline-label">正在上课</span>' : '') + '</h3><div class="class-meta">' + (row.room ? '<span>' + esc(row.room) + '</span>' : '') + (row.teacher ? '<span>' + esc(row.teacher) + '</span>' : '') + (row.period ? '<span>' + esc(row.period) + '</span>' : '') + (row.isSelfStudy ? '<span>空白课节 · 自习</span>' : '') + (!row.room && !row.teacher && !row.period && !row.isSelfStudy ? '<span>教室与教师未显示</span>' : '') + '</div></div></div>';
     }).join('') + '</div>';
   }
@@ -1216,7 +1240,8 @@
     const nowDate = Core.today(), now = Core.clock(), [hh, mm] = now.split(':').map(Number);
     const nowAt = Date.parse(nowDate + 'T' + String(Math.max(8, hh)).padStart(2, '0') + ':' + String(hh < 8 ? 0 : mm).padStart(2, '0') + ':00+08:00');
     const endAt = Date.parse(nowDate + 'T22:00:00+08:00');
-    const classes = scheduleRowsForState(nowDate).filter(row => row.start && row.end).map(row => ({ start: Date.parse(nowDate + 'T' + row.start + ':00+08:00'), end: Date.parse(nowDate + 'T' + row.end + ':00+08:00') })).sort((a, b) => a.start - b.start);
+    const classes = scheduleRowsForState(nowDate).map(row => Core.scheduleInterval(row)).filter(Boolean)
+      .map(interval => ({ start: interval.startAt, end: interval.endAt })).sort((a, b) => a.start - b.start);
     let cursor = nowAt;
     return all.map(task => {
       const duration = (Number(settings.taskMinutes[task.id]) || 30) * 60000;
@@ -3522,6 +3547,7 @@
   });
   document.addEventListener('change', event => {
     const el = event.target;
+    if (captureScheduleOverrideDraft(el)) return;
     if (el.id === 'agenda-all-day') { document.getElementById('agenda-time-fields').hidden = el.checked; return; }
     if (getGradePlanner().change(el)) return;
     if (el.id === 'graphics-mode') {
@@ -3669,6 +3695,7 @@
     sendAssistantQuestion();
   });
   document.addEventListener('input', event => {
+    if (captureScheduleOverrideDraft(event.target)) return;
     if (['task-title', 'task-due-date', 'task-due-time'].includes(event.target.id) && !event.isComposing) updateTaskDraft(false);
     if (getGradePlanner().input(event.target)) return;
     if (event.target.id === 'assistant-question') {
@@ -3837,7 +3864,8 @@
       if (action === 'replace' && !period && !start) { toast('替换课程时请选择新节次或开始时间。'); return; }
       const id = 'override-' + (window.crypto && window.crypto.randomUUID ? window.crypto.randomUUID() : Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8));
       state.settings.scheduleOverrides = (state.settings.scheduleOverrides || []).concat({ id, date, action, targetPeriod, period, title, room, start, end });
-      persist(); render(); toast('临时调课已保存。');
+      persist(); scheduleOverrideDraft = {};
+      renderSavedScheduleForm('schedule-override-form', 'override-date'); toast('临时调课已保存。');
       return;
     }
     if (event.target.id !== 'custom-schedule-form') return;
@@ -3865,7 +3893,7 @@
     persist();
     customScheduleDraft = { title: '', room: '', period: period || customScheduleDraft.period, start: '', end: '' };
     customScheduleOneDate = '';
-    render();
+    renderSavedScheduleForm('custom-schedule-form', 'custom-title');
     toast('自编课程已添加。');
   });
   document.getElementById('teams-page-form').addEventListener('submit', event => {

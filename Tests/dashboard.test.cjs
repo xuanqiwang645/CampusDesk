@@ -2719,3 +2719,40 @@ test('history reserves space for a complete reply before sending and keeps the q
   assert.equal(app.node('assistant-question').value, 'KEEP_UNSENT_CAPACITY_QUESTION');
   assert.match(app.node('toast').textContent, /聊天历史空间不足|not enough history space/i);
 });
+
+test('overnight schedule rows stay current until their actual next-day end', () => {
+  const app = harness({ hash: '#schedule' });
+  app.tick(Date.parse('2026-09-19T23:44:59+08:00') - Date.parse('2026-09-19T00:41:28Z'));
+  const state = app.ctx.CampusCore.emptyState();
+  state.settings.customLessons = [{ id: 'night', title: 'Synthetic night class', date: '2026-09-19', weekdays: [], start: '23:45', end: '' }];
+  app.receive({ type: 'state', state });
+  assert.match(app.node('content').innerHTML, /class="schedule-row custom-row "/);
+  assert.doesNotMatch(app.node('content').innerHTML, /class="schedule-row custom-row past"/);
+  app.tick(1000);
+  assert.match(app.node('content').innerHTML, /class="schedule-row custom-row current"/);
+  app.tick(15 * 60000);
+  app.click({ action: 'prev-day' });
+  assert.equal(app.node('schedule-date').value, '2026-09-19');
+  assert.match(app.node('content').innerHTML, /class="schedule-row custom-row current"/);
+  app.tick(30 * 60000);
+  assert.match(app.node('content').innerHTML, /class="schedule-row custom-row past"/);
+});
+
+test('unsupported calendar semantics leave the saved calendar and rendered events intact', () => {
+  const app = harness({ hash: '#schedule' });
+  const wrap = events => ['BEGIN:VCALENDAR', ...events, 'END:VCALENDAR'].join('\r\n');
+  const original = ['BEGIN:VEVENT', 'UID:prior', 'DTSTART;VALUE=DATE:20260919', 'DTEND;VALUE=DATE:20260920', 'SUMMARY:Original calendar event', 'END:VEVENT'];
+  app.receive({ type: 'schoolCalendarFile', fileName: 'original.ics', text: wrap(original) });
+  const saved = app.last('saveState').state.schoolCalendar;
+  const saves = app.sent.filter(item => item.action === 'saveState').length;
+  for (const property of ['DURATION:P2D', 'RDATE;VALUE=DATE:20260921', 'RECURRENCE-ID;VALUE=DATE:20260919', 'STATUS:CANCELLED']) {
+    const replacement = ['BEGIN:VEVENT', 'UID:new', 'DTSTART;VALUE=DATE:20260919', 'SUMMARY:Must not partially import', 'END:VEVENT',
+      'BEGIN:VEVENT', 'UID:unsupported', 'DTSTART;VALUE=DATE:20260919', 'SUMMARY:学校放假', property, 'END:VEVENT'];
+    app.receive({ type: 'schoolCalendarFile', fileName: 'unsupported.ics', text: wrap(replacement) });
+    assert.equal(app.sent.filter(item => item.action === 'saveState').length, saves);
+    assert.deepEqual(app.last('saveState').state.schoolCalendar, saved);
+    assert.match(app.node('content').innerHTML, /Original calendar event/);
+    assert.doesNotMatch(app.node('content').innerHTML, /Must not partially import/);
+    assert.match(app.node('toast').textContent, /校历导入失败.*暂不支持/);
+  }
+});

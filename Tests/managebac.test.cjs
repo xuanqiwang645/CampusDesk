@@ -111,6 +111,17 @@ test('task detail does not manufacture a course-level grade', () => {
   assert.deepEqual(result.courses, []);
   assert.equal(result.officialGPA, null);
 });
+test('read-only query parameters do not hide task IDs or mix detail-page grade scopes', () => {
+  const listing=clone();
+  listing.tasks=listing.tasks.map(row=>({...row,url:row.url+'?term=901&view=list'}));
+  const tasks=mb.fromProjection(listing,timestamp);
+  assert.deepEqual(tasks.tasks.map(row=>row.id),['8101','8102','8103']);
+  assert.deepEqual(tasks.grades.map(row=>row.assignmentId),['8102']);
+  const detail=clone();
+  detail.url=HOME+COURSE+'/8102?term=901';
+  detail.tasks.push({...detail.tasks[1],url:COURSE+'/8104',title:'Related task',points:'19 / 20'});
+  assert.deepEqual(mb.fromProjection(detail,timestamp).grades.map(row=>row.assignmentId),['8102']);
+});
 
 test('discovery retains same-origin read-only class links and rejects actions or credentials', () => {
   const page = clone(); page.links.push(
@@ -263,7 +274,7 @@ test('rendered grade roster distinguishes pending, zero, hidden and loading mark
       ${card('8104','Hidden quiz','<div class="task-score" hidden><span class="points">20 / 20</span></div>')}
       <aside><div class="list-item"><strong>Overall</strong><span class="cell">Overall</span><span class="cell">94%</span></div></aside></main>`);
     await page.evaluate(fs.readFileSync(require.resolve('../Resources/managebac.js'),'utf8'));
-    const read=()=>page.evaluate(url=>CampusManageBac.fromProjection(CampusManageBac.collect(document,url),'2032-04-08T01:00:00.000Z'),HOME+COURSE);
+    const read=(url=HOME+COURSE)=>page.evaluate(url=>CampusManageBac.fromProjection(CampusManageBac.collect(document,url),'2032-04-08T01:00:00.000Z'),url);
     const result=await read();
     assert.equal(result.gradesCaptured,true);
     assert.deepEqual(result.grades.map(row=>[row.id,row.score,row.maxScore,row.percentage,row.gradeLabel]),[['8101',null,null,null,''],['8102',0,20,0,null],['8103',null,null,91,'A-']]);
@@ -274,5 +285,9 @@ test('rendered grade roster distinguishes pending, zero, hidden and loading mark
     assert.equal((await read()).gradesCaptured,false,'recognized heading alone may still be loading');
     await page.locator('main').evaluate(node=>node.insertAdjacentHTML('beforeend','<div class="empty-state">No tasks found</div>'));
     const empty=await read(); assert.equal(empty.gradesCaptured,true); assert.deepEqual(empty.grades,[]);
+    await page.setContent('<main><h1>Synthetic Environmental Systems</h1><h2>Task Details</h2><div class="short-assignment"><div class="title">Quiz with a term filter</div><div class="task-score"><span class="points">17 / 20</span></div></div></main>');
+    const detail=await read(HOME+COURSE+'/8102?term=901');
+    assert.deepEqual(detail.tasks.map(row=>row.id),['8102'],'a detail title needs no link when the current URL identifies its task');
+    assert.deepEqual(detail.grades.map(row=>[row.assignmentId,row.score,row.maxScore]),[['8102',17,20]]);
   } finally {await browser.close();}
 });

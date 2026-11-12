@@ -117,6 +117,15 @@ final class GraphAuth: NSObject, ASWebAuthenticationPresentationContextProviding
         notify()
         return credentialsRemoved
     }
+    /// Cancelling an in-progress account-selection flow is not a sign-out.
+    /// Leave any previously saved credential/bearer and signed-out marker intact.
+    func cancelSignIn() {
+        guard signInCompletion != nil else { return }
+        revision = UUID()
+        authentication?.cancel(); authentication = nil
+        activeTask?.cancel(); activeTask = nil
+        finishSignIn(.failure(GraphAuthError(message: "Teams 登录已取消")))
+    }
     func signIn(completion: @escaping (Result<GraphAccount, Error>) -> Void) {
         guard Self.validClientID(clientId) else {
             completion(.failure(GraphAuthError(message: "尚未注册或配置 CampusDesk 的 Microsoft 应用，暂时无法发起登录"))); return

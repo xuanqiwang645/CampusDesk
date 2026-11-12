@@ -157,6 +157,62 @@ import Foundation
         boundary.dashboardReloaded()
         check(boundary.acceptsMutation(boundary.generation), "A fresh authoritative dashboard handshake recovers a failed result delivery")
 
+        var fileRequests = CampusStateRequest(), fileBoundary = CampusStateBridgeBoundary()
+        var fileEvents = [[String: Any]]()
+        // Hold callbacks as the PDF worker does, then finish them in a different
+        // order from their selections. No panels, OCR or personal files needed.
+        func startFileRead() -> ([String: Any]) -> Void {
+            let ticket = fileRequests.begin(generation: fileBoundary.generation)
+            return { event in
+                guard fileRequests.finish(ticket, boundary: fileBoundary) else { return }
+                fileEvents.append(event)
+            }
+        }
+        let olderPDF = startFileRead(), newerPDF = startFileRead()
+        olderPDF(["type": "schoolCalendarPDF", "text": "Older selection"])
+        check(fileEvents.isEmpty, "A slow older PDF cannot replace a later calendar selection")
+        newerPDF(["type": "schoolCalendarPDF", "text": "Current selection"])
+        check(fileEvents.last?["text"] as? String == "Current selection", "Rejecting the old completion does not cancel the newer reader")
+        newerPDF(["type": "schoolCalendarFileError", "message": "Duplicate completion"])
+        check(fileEvents.count == 1, "A completed reader cannot later replace its result with a duplicate error")
+        let beforeImport = startFileRead()
+        fileBoundary.beginImport("synthetic-file-import")
+        check(fileBoundary.acknowledgeImport("synthetic-file-import", generation: fileBoundary.generation), "Synthetic import applies its replacement state")
+        beforeImport(["type": "schoolCalendarPDF", "text": "Before backup restore"])
+        check(fileEvents.count == 1, "PDF data initiated before backup restore cannot acquire the new generation on completion")
+        let duringImport = startFileRead()
+        fileBoundary.beginImport("synthetic-file-import-failure")
+        duringImport(["type": "schoolCalendarFileError", "message": "Before import acknowledgement"])
+        check(fileEvents.count == 1, "The import barrier also suppresses an outstanding file error")
+        check(fileBoundary.acknowledgeImport("synthetic-file-import-failure", generation: fileBoundary.generation), "Synthetic failed import acknowledges the preserved state")
+        let afterImport = startFileRead()
+        afterImport(["type": "schoolCalendarFile", "text": "Newly selected ICS"])
+        check(fileEvents.count == 2 && fileEvents.last?["text"] as? String == "Newly selected ICS", "A fresh calendar selection works after import recovery")
+        let beforeReset = startFileRead()
+        fileBoundary.replaceState()
+        beforeReset(["type": "schoolCalendarPDF", "text": "Before account reset"])
+        check(fileEvents.count == 2, "An account state replacement invalidates existing file reads")
+        let beforeReload = startFileRead()
+        fileRequests.cancel()
+        beforeReload(["type": "schoolCalendarPDF", "text": "Before dashboard reload"])
+        check(fileEvents.count == 2, "Dashboard reload or shutdown cancels file callbacks even without changing the state generation")
+        let failedSelection = startFileRead(), latestSelection = startFileRead()
+        latestSelection(["type": "schoolCalendarPDF", "text": "Latest preview"])
+        failedSelection(["type": "schoolCalendarFileError", "message": "Old read failed late"])
+        check(fileEvents.count == 3 && fileEvents.last?["text"] as? String == "Latest preview", "Late errors from superseded files cannot disturb the current preview")
+
+        var graphWork = CampusGraphWorkBoundary()
+        let firstLogin = graphWork.beginSignIn()
+        check(graphWork.signingIn, "A pending native Graph login makes the operation busy")
+        check(graphWork.cancel(), "Sleep or import cancellation reports that the authentication flow must be cancelled")
+        check(!graphWork.signingIn && graphWork.generation != firstLogin, "Cancellation clears both the login busy flag and its callback ownership")
+        check(!graphWork.finishSignIn(firstLogin) && !graphWork.signingIn, "A cancelled login completion cannot restore its old busy state")
+        let secondLogin = graphWork.beginSignIn()
+        check(!graphWork.finishSignIn(firstLogin) && graphWork.signingIn, "An old login callback cannot finish a newer login attempt")
+        check(graphWork.finishSignIn(secondLogin) && !graphWork.signingIn, "A fresh login can finish after sleep or a failed import")
+        check(!graphWork.finishSignIn(secondLogin), "Duplicate login completion is ignored")
+        check(!graphWork.cancel(), "Cancelling ordinary Graph sync does not request credential or login revocation")
+
         let encodingFailed = DispatchSemaphore(value: 0)
         events.encode(["invalid": Date()], failure: { encodingFailed.signal() }) { _ in }
         check(encodingFailed.wait(timeout: .now() + 5) == .success, "Encoding failure reports completion instead of silently stranding a barrier")

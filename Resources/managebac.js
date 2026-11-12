@@ -27,8 +27,12 @@
       return url.href;
     } catch (_) { return null; }
   }
-  function courseID(url) { return (String(url).match(/\/student\/classes\/(\d+)(?:\/|$)/) || [])[1] || null; }
-  function taskID(url) { return (String(url).match(/\/core_tasks\/(\d+)(?:\/|$)/) || [])[1] || null; }
+  function courseID(url) {
+    try { return (new URL(url).pathname.match(/^\/student\/classes\/(\d+)(?:\/|$)/) || [])[1] || null; } catch (_) { return null; }
+  }
+  function taskID(url) {
+    try { return (new URL(url).pathname.match(/^\/student\/classes\/\d+\/core_tasks\/(\d+)(?:\/|$)/) || [])[1] || null; } catch (_) { return null; }
+  }
   function overallPercentage(label, value) {
     if (!/^(?:overall|overall grade|term overall|总评|总成绩)$/i.test(clean(label))) return null;
     const match = clean(value).match(/(?:^|[^\d.])(\d{1,3}(?:\.\d+)?)\s*%/);

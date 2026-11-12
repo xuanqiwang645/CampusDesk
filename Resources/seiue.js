@@ -156,7 +156,8 @@
       const a = column.getBoundingClientRect(), b = headerElements[index].getBoundingClientRect();
       return Math.abs(a.left - b.left) < 4 && Math.abs(a.width - b.width) < 4;
     });
-    const loading = Array.from(container.querySelectorAll('[aria-busy="true"], .ant-spin-spinning')).some(visible);
+    const loading = container.getAttribute('aria-busy') === 'true' ||
+      Array.from(container.querySelectorAll('[aria-busy="true"], .ant-spin-spinning')).some(visible);
     return {
       monthText: heading ? heading.innerText : '',
       headers: headerElements.map(element => element.innerText),

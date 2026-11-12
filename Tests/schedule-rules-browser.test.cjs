@@ -7,6 +7,65 @@ const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 const Core = require('../Resources/core.js');
 
+async function scheduleFormFixture(run) {
+  const browser = await launchChromium();
+  try {
+    const page = await browser.newPage({ viewport: { width: 1440, height: 1000 }, timezoneId: 'Asia/Shanghai' });
+    const errors = [];
+    page.on('pageerror', error => errors.push(error.message));
+    await page.addInitScript(() => localStorage.setItem('campusdesk.school-config.v1', JSON.stringify({ seiue: 'https://example-school.seiue.com/', managebac: '' })));
+    await page.clock.setFixedTime(new Date('2026-11-12T02:00:00Z'));
+    await page.goto(pathToFileURL(path.resolve(__dirname, '../Resources/index.html')).href + '#schedule');
+    await page.locator('#custom-title').waitFor();
+    await run(page);
+    assert.deepEqual(errors, []);
+  } finally { await browser.close(); }
+}
+
+test('saving a custom course with Enter clears its draft and cannot add the same course twice', { skip: !process.env.PLAYWRIGHT_MODULE }, async () => scheduleFormFixture(async page => {
+  await page.locator('[data-action="custom-day"][data-day="1"]').click();
+  await page.locator('#custom-room').fill('Synthetic lab');
+  await page.locator('#custom-title').fill('Synthetic course');
+  await page.locator('#custom-title').press('Enter');
+  const savedCourses = () => page.evaluate(() => JSON.parse(localStorage.getItem('campusdesk.browser.v1')).settings.customLessons);
+  assert.equal((await savedCourses()).length, 1);
+  assert.equal(await page.locator('#custom-title').inputValue(), '', 'a successful keyboard save clears the title');
+  assert.equal(await page.locator('#custom-room').inputValue(), '');
+  await page.locator('#custom-title').press('Enter');
+  assert.equal((await savedCourses()).length, 1, 'repeated Enter must not create a duplicate course');
+  await page.locator('#custom-title').fill('Second synthetic course');
+  await page.locator('#custom-room').fill('Second lab');
+  await page.locator('#custom-room').press('Enter');
+  assert.equal((await savedCourses()).length, 2);
+  assert.equal(await page.locator('#custom-title').inputValue(), '');
+  assert.equal(await page.locator('#custom-room').inputValue(), '', 'saving from another field also clears that field');
+}));
+
+test('temporary schedule changes survive deferred background sync and clear only after saving', { skip: !process.env.PLAYWRIGHT_MODULE }, async () => scheduleFormFixture(async page => {
+  const draft = { date: '2026-11-13', action: 'replace', 'target-period': 'P1', period: 'P2', title: 'Synthetic replacement', room: 'Test lab', start: '09:00', end: '09:45' };
+  for (const [key, value] of Object.entries(draft)) {
+    const field = page.locator('#override-' + key);
+    if (['action', 'target-period', 'period'].includes(key)) await field.selectOption(value);
+    else await field.fill(value);
+  }
+  await page.evaluate(() => CampusDesk.receive({ type: 'snapshot', snapshot: { source: 'seiue', url: 'https://example-school.seiue.com/timetable', capturedAt: '2026-11-12T02:00:00Z', warnings: [],
+    calendarDates: ['2026-11-12'], schedule: [{ id: 'new-lesson', date: '2026-11-12', start: '08:00', end: '08:45', title: 'Fresh synthetic lesson', isSelfStudy: false }] } }));
+  await page.locator('#schedule-override-heading').click();
+  await page.locator('.schedule-full .schedule-row').waitFor();
+  const values = () => page.evaluate(keys => Object.fromEntries(keys.map(key => [key, document.getElementById('override-' + key).value])), Object.keys(draft));
+  assert.deepEqual(await values(), draft, 'pending sync may paint after blur without discarding the form');
+  const saved = () => page.evaluate(() => JSON.parse(localStorage.getItem('campusdesk.browser.v1')));
+  assert.equal((await saved()).settings.scheduleOverrides.length, 0, 'typing does not save an override');
+  await page.locator('#override-room').focus();
+  await page.evaluate(state => CampusDesk.receive({ type: 'state', state }), await saved());
+  assert.deepEqual(await values(), draft, 'a state broadcast also preserves every field');
+  await page.locator('#schedule-override-form [type="submit"]').click();
+  const changes = (await saved()).settings.scheduleOverrides;
+  assert.equal(changes.length, 1);
+  assert.deepEqual({ ...changes[0], id: 'ignored' }, { id: 'ignored', date: draft.date, action: draft.action, targetPeriod: draft['target-period'], period: draft.period, title: draft.title, room: draft.room, start: draft.start, end: draft.end });
+  assert.deepEqual(await values(), { date: '', action: 'replace', 'target-period': '', period: '', title: '', room: '', start: '', end: '' });
+}));
+
 test('board shows every captured class and opens the full schedule at today after browsing another date', { skip: !process.env.PLAYWRIGHT_MODULE }, async () => {
   const browser = await launchChromium();
   try {

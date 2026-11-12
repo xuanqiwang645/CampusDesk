@@ -205,11 +205,11 @@ test('excluded system IDs are deduplicated and capped at 2000 with no content ex
   const result=await run(create(environment({fetch:async()=>Response.json({messages:rows})})),{op:'messages',conversationId:CONVERSATION});
   assert.equal(result.error.code,'RESPONSE_LIMIT');assert.equal(result.result.excludedNativeIDs.length,2000);assert.equal(result.result.messages.length,0);assert.equal(JSON.stringify(result).includes('must not export'),false);
 });
-test('in-page injection upgrades a reused v6 singleton and preserves current v7 jobs',()=>{
+test('in-page injection upgrades a reused v7 singleton and preserves current v8 jobs',()=>{
   const vm=require('node:vm'),fs=require('node:fs'),source=fs.readFileSync(require.resolve('../Resources/teams-api.js'),'utf8');
-  const env=environment(),old={version:6};env.CampusDeskTeamsAPI=old;
+  const env=environment(),old={version:7};env.CampusDeskTeamsAPI=old;
   const context=vm.createContext({window:env});vm.runInContext(source,context);
-  const current=env.CampusDeskTeamsAPI;assert.notEqual(current,old);assert.equal(current.version,7);assert.equal(typeof current.start,'function');
+  const current=env.CampusDeskTeamsAPI;assert.notEqual(current,old);assert.equal(current.version,8);assert.equal(typeof current.start,'function');
   vm.runInContext(source,context);assert.equal(env.CampusDeskTeamsAPI,current);
 });
 test('429 Retry-After seconds blocks later jobs in memory, exports only safe retry diagnostics, and expires',async()=>{
@@ -246,6 +246,26 @@ function fileEnvironment(fetchFile,file={}){
   env.localStorage=storage({[key()]:entry(),[key('school.sharepoint.com')]:entry()});return env;
 }
 async function discoverFile(bridge){const result=await run(bridge,{op:'messages',conversationId:CONVERSATION});return result.result.messages[0].attachments[0];}
+for(const status of [401,403]){
+  for(const stage of ['metadata','download'])test(`SharePoint ${stage} HTTP_${status} cannot fall back to cookies`,async()=>{
+    const env=fileEnvironment(async(u)=>{
+      if(u.includes('/driveItem/'))return stage==='metadata'?new Response('',{status}):Response.json({'@content.downloadUrl':'https://school.sharepoint.com/download?tempauth=private',size:16});
+      if(u.includes('/download?'))return new Response('',{status});
+      return new Response('%PDF-1.7\nfixture',{headers:{'content-type':'application/pdf'}});
+    });
+    const bridge=create(env),file=await discoverFile(bridge),result=await run(bridge,{op:'attachment',attachmentId:file.id});
+    assert.equal(result.status,'error');assert.equal(result.error.code,'HTTP_'+status);assert.equal(result.result,null);
+    assert.equal(env.calls.length,stage==='metadata'?2:3);assert.equal(env.calls.some(call=>call.init.credentials==='include'),false);
+  });
+  test(`media proxy HTTP_${status} cannot fall back to original cookie host`,async()=>{
+    const media='https://apac-api.asm.skype.com/v1/objects/fixture/views/imgo';
+    const env=environment({fetch:async(u)=>u.includes('/authz')?Response.json({regionGtms:{chatService:HOST},userRegion:'apac'}):u.startsWith(HOST)?Response.json({messages:[{id:'media',messagetype:'RichText/Html',content:'<img src="'+media+'">'}]}):u.includes('.asyncgw.teams.microsoft.com/')?new Response('',{status}):new Response(new Uint8Array([137,80,78,71]),{headers:{'content-type':'image/png'}})});
+    env.performance.getEntriesByType=()=>[];env.localStorage=storage({[key()]:entry(),[key('api.spaces.skype.com')]:entry()});
+    const bridge=create(env),file=await discoverFile(bridge),result=await run(bridge,{op:'attachment',attachmentId:file.id});
+    assert.equal(result.status,'error');assert.equal(result.error.code,'HTTP_'+status);assert.equal(result.result,null);
+    assert.equal(env.calls.length,3);assert.equal(env.calls.some(call=>call.address===media),false);
+  });
+}
 test('SharePoint metadata 429/503 never falls back to cookies, even in a later attachment job',async()=>{
   for(const status of [429,503]){
     const env=fileEnvironment(async()=>new Response('not exported',{status,headers:{'Retry-After':'90'}})),bridge=create(env),file=await discoverFile(bridge);
@@ -254,6 +274,14 @@ test('SharePoint metadata 429/503 never falls back to cookies, even in a later a
     // Cooldown applies to this service, not the already verified chat service.
     assert.equal((await run(bridge,{op:'messages',conversationId:CONVERSATION})).status,'complete');assert.equal(env.calls.length,3);
   }
+});
+test('media with a known proxy region but unavailable matching token retains cookie access',async()=>{
+  const media='https://apac-api.asm.skype.com/v1/objects/fixture/views/imgo';
+  const env=environment({fetch:async(u)=>u.includes('/authz')?Response.json({regionGtms:{chatService:HOST},userRegion:'apac'}):u.startsWith(HOST)?Response.json({messages:[{id:'media',messagetype:'RichText/Html',content:'<img src="'+media+'">'}]}):new Response(new Uint8Array([137,80,78,71]),{headers:{'content-type':'image/png'}})});
+  env.performance.getEntriesByType=()=>[];env.localStorage=storage({[key()]:entry(),[key('api.spaces.skype.com')]:entry()});
+  const bridge=create(env),file=await discoverFile(bridge);env.localStorage=storage({[key('api.spaces.skype.com')]:entry()});
+  const result=await run(bridge,{op:'attachment',attachmentId:file.id});assert.equal(result.status,'complete');assert.equal(env.calls.length,3);
+  assert.equal(env.calls[2].address,media);assert.deepEqual(env.calls[2].init.headers,{});assert.equal(env.calls[2].init.credentials,'include');
 });
 test('SharePoint download throttling cannot trigger a second cookie download',async()=>{
   const env=fileEnvironment(async(u)=>u.includes('/driveItem/')?Response.json({'@content.downloadUrl':'https://school.sharepoint.com/download?tempauth=secret',eTag:'"file,1"',size:16}):new Response('',{status:429,headers:{'Retry-After':'45'}}));
@@ -290,12 +318,14 @@ test('message file version is stable across signed URL changes and absent metada
   assert.equal(await hint({lastModifiedDateTime:'2026-09-20T01:00:00Z',size:16}),await hint({lastModifiedDateTime:'2026-09-20T09:00:00+08:00',size:16}));
   assert.notEqual(await hint({lastModifiedDateTime:'2026-09-20T01:00:00Z',size:16}),await hint({lastModifiedDateTime:'2026-09-20T01:00:00Z',size:17}));
 });
-test('unknown fresh versions, resolver failure, and inline media never become permanent cache hits',async()=>{
-  let metadata=true,downloads=0;
-  const env=fileEnvironment(async(u)=>u.includes('/driveItem/')?(metadata?Response.json({'@content.downloadUrl':'https://school.sharepoint.com/download',size:16}):new Response('',{status:403})):(downloads++,new Response('%PDF-1.7\nfixture',{headers:{'content-type':'application/pdf'}})),{eTag:'"message-stale"'});
+test('unknown fresh versions, unavailable resolver token, and inline media never become permanent cache hits',async()=>{
+  let downloads=0;
+  const env=fileEnvironment(async(u)=>u.includes('/driveItem/')?Response.json({'@content.downloadUrl':'https://school.sharepoint.com/download',size:16}):(downloads++,new Response('%PDF-1.7\nfixture',{headers:{'content-type':'application/pdf'}})),{eTag:'"message-stale"'});
   const bridge=create(env),file=await discoverFile(bridge);
   for(const knownVersionKey of ['',file.versionKey]){const result=await run(bridge,{op:'attachment',attachmentId:file.id,knownVersionKey});assert.equal(result.result.notModified,undefined);assert.equal(result.result.versionKey,'');}
-  metadata=false;const fallback=await run(bridge,{op:'attachment',attachmentId:file.id,knownVersionKey:file.versionKey});assert.equal(fallback.result.versionKey,'');assert.equal(fallback.result.notModified,undefined);assert.equal(downloads,3);
+  env.localStorage=storage({[key()]:entry()});const callsBeforeFallback=env.calls.length;
+  const fallback=await run(bridge,{op:'attachment',attachmentId:file.id,knownVersionKey:file.versionKey});assert.equal(fallback.result.versionKey,'');assert.equal(fallback.result.notModified,undefined);assert.equal(downloads,3);
+  assert.equal(env.calls.length,callsBeforeFallback+1);assert.equal(env.calls.at(-1).init.credentials,'include');assert.equal(env.calls.at(-1).address,'https://school.sharepoint.com/sites/class/Notes.pdf');
   const mediaEnv=environment({fetch:async(u)=>u.startsWith(HOST)?Response.json({messages:[{id:'picture',messagetype:'RichText/Html',content:'<img src="https://apac-api.asm.skype.com/v1/objects/fixture/views/imgo">'}]}):new Response(new Uint8Array([137,80,78,71]),{headers:{'content-type':'image/png'}})});
   const mediaBridge=create(mediaEnv),media=await discoverFile(mediaBridge),result=await run(mediaBridge,{op:'attachment',attachmentId:media.id,knownVersionKey:file.versionKey});assert.equal(media.versionKey,'');assert.equal(result.result.versionKey,'');assert.equal(result.result.notModified,undefined);
 });

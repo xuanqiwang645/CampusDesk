@@ -7,10 +7,10 @@
  */
 (function (root, factory) {
   if (typeof module === 'object' && module.exports) module.exports = factory;
-  else if (!root.CampusDeskTeamsAPI || root.CampusDeskTeamsAPI.version !== 7) root.CampusDeskTeamsAPI = factory(root);
+  else if (!root.CampusDeskTeamsAPI || root.CampusDeskTeamsAPI.version !== 8) root.CampusDeskTeamsAPI = factory(root);
 })(typeof window === 'object' ? window : globalThis, function createBridge(env) {
   'use strict';
-  var VERSION = 7, jobs = new Map(), known = new Map(), files = new Map(), cooldowns = new Map(), owner = '', serial = 0, mediaRegion = '';
+  var VERSION = 8, jobs = new Map(), known = new Map(), files = new Map(), cooldowns = new Map(), owner = '', serial = 0, mediaRegion = '';
   var UUID = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
   var MAX_JSON = 2000000, MAX_RESULT = 2500000, MAX_FILE = 12 * 1024 * 1024, MAX_RETRY_MS = 24 * 60 * 60 * 1000;
   var errors = {
@@ -339,7 +339,7 @@
         if(download.hostname!==u.hostname)fail('SCOPE_DENIED');
         var downloaded=await request(job,download.href,u.hostname,limit,'download');downloaded.versionKey=versionKey;return downloaded;
       }
-    }catch(e){if(isBackoff(e)||['ACCOUNT_CHANGED','TIMEOUT','RESPONSE_LIMIT','SCOPE_DENIED','FILE_ACCESS_DENIED'].includes(e.code))throw e;}
+    }catch(e){if(isBackoff(e)||['ACCOUNT_CHANGED','TIMEOUT','RESPONSE_LIMIT','SCOPE_DENIED','FILE_ACCESS_DENIED','HTTP_401','HTTP_403'].includes(e.code))throw e;}
     // Existing browser login cookies may serve direct files if metadata API is
     // unavailable. No permission redemption or sharing mutation is attempted.
     return await request(job,u.href,u.hostname,limit,'file-cookie');
@@ -352,7 +352,7 @@
       if(prefix){
         var path=u.pathname.replace(new RegExp('^/v1/(?:'+job.accountId+'/)?'),'');
         var proxy='https://'+prefix+'-prod.asyncgw.teams.microsoft.com/v1/'+job.accountId+'/'+path+'?v=1';
-        try{response=await request(job,proxy,'ic3.teams.office.com',limit,'media-token');}catch(e){if(isBackoff(e)||['ACCOUNT_CHANGED','TIMEOUT','RESPONSE_LIMIT','SCOPE_DENIED'].includes(e.code))throw e;}
+        try{response=await request(job,proxy,'ic3.teams.office.com',limit,'media-token');}catch(e){if(isBackoff(e)||['ACCOUNT_CHANGED','TIMEOUT','RESPONSE_LIMIT','SCOPE_DENIED','HTTP_401','HTTP_403'].includes(e.code))throw e;}
       }
       if(!response)response=await request(job,u.href,'',limit,'media-cookie');
     }else response=await sharePointFile(job,file,limit,typeof input.knownVersionKey==='string'&&/^v1:[a-f0-9]{64}$/.test(input.knownVersionKey)?input.knownVersionKey:'');

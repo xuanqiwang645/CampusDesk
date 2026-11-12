@@ -96,6 +96,58 @@ final class CampusJSONEventEncoder {
     }
 }
 
+/// An asynchronous file read belongs to both its initiating state and its
+/// selection. A later selection, state replacement or page reload revokes it.
+/// Confined to the main queue, like CampusStateBridgeBoundary.
+struct CampusStateRequest {
+    struct Ticket {
+        fileprivate let id: UUID
+        fileprivate let generation: Int
+    }
+    private var current: UUID?
+
+    mutating func begin(generation: Int) -> Ticket {
+        let id = UUID()
+        current = id
+        return Ticket(id: id, generation: generation)
+    }
+
+    mutating func cancel() { current = nil }
+
+    /// Consume only this request. An older completion must not cancel a newer
+    /// selection, and a rejected state generation can never be relabeled.
+    mutating func finish(_ ticket: Ticket, boundary: CampusStateBridgeBoundary) -> Bool {
+        guard current == ticket.id else { return false }
+        current = nil
+        return boundary.acceptsMutation(ticket.generation)
+    }
+}
+
+/// Sync cancellation also revokes the login callback that was preparing that
+/// sync. Keep its busy flag and callback identity in the same transition.
+struct CampusGraphWorkBoundary {
+    private(set) var generation = UUID()
+    private(set) var signingIn = false
+
+    mutating func beginSignIn() -> UUID {
+        signingIn = true
+        return generation
+    }
+
+    mutating func finishSignIn(_ expected: UUID) -> Bool {
+        guard signingIn, generation == expected else { return false }
+        signingIn = false
+        return true
+    }
+
+    @discardableResult mutating func cancel() -> Bool {
+        let interruptedSignIn = signingIn
+        generation = UUID()
+        signingIn = false
+        return interruptedSignIn
+    }
+}
+
 /// The dashboard and native state share an epoch, independently of disk-write
 /// revisions. Import replaces that epoch before either side may produce data
 /// again. A matching acknowledgement proves the dashboard applied the result.

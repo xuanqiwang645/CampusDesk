@@ -126,6 +126,49 @@ test('account-matched local index reads EC without navigating pages',()=>{
   assert.equal(f.context.counts.channelsRead,1);assert.equal(f.snapshots.length,1);assert.equal(f.events.length,1);
   assert.equal(f.requests[0].op,'conversations');
 });
+test('EC discovery falls back to visible navigation when the local index has no readable EC scope',()=>{
+  for(const options of [
+    {conversations:[]},
+    {conversations:[{id:'19:general@thread.tacv2',name:'General',type:'channel'}]},
+    {messageResponse:{status:'error',error:{code:'NETWORK'}}}
+  ]) {
+    const f=fixture(options), result=runTeamsAPIIndex(f.context);
+    assert.equal(Boolean(result && result.handled),false);
+    assert.equal(f.snapshots.length,0);
+    assert.equal(f.events.length,0);
+  }
+});
+test('account-change API replies stop the run at discovery, messages, and attachments',()=>{
+  for(const phase of ['index','messages','poll','rediscovery','attachment']) {
+    const f=fixture({messages:[{nativeID:'m1',text:'EC roster',attachments:[{id:'f1'},{id:'f2'}]}]});
+    const changed={status:'error',error:{code:'ACCOUNT_CHANGED',message:'Teams account changed'}};
+    const start=f.api.start;
+    f.api.start=request=>{
+      if(phase==='messages' && request.op==='messages') { f.requests.push(request); return changed; }
+      if(phase==='poll' && request.op==='messages') { f.requests.push(request); return {status:'running',jobId:'changing-message'}; }
+      if(phase==='rediscovery' && request.op==='messages') { f.requests.push(request); return {status:'error',error:{code:'SCOPE_DENIED'}}; }
+      if(phase==='attachment' && request.op==='attachment') { f.requests.push(request); return changed; }
+      return start(request);
+    };
+    if(['index','poll','rediscovery'].includes(phase)) f.api.status=()=>changed;
+    assert.throws(()=>phase==='index'?runTeamsAPIIndex(f.context):runTeamsAPI(f.context),{code:'ACCOUNT_CHANGED'},phase);
+    assert.equal(f.events.length,0,phase);
+    assert.equal(f.snapshots.length,phase==='attachment'?1:0,phase);
+    assert.ok(f.requests.filter(request=>request.op==='messages').length<=1,phase);
+    assert.ok(f.requests.filter(request=>request.op==='attachment').length<=1,phase);
+  }
+});
+test('denied or expired API authorization cannot turn EC discovery into a DOM fallback',()=>{
+  for(const code of ['HTTP_401','HTTP_403','FILE_ACCESS_DENIED']) {
+    const f=fixture({messageResponse:{status:'error',error:{code}},conversations:[
+      {id:'19:example@thread.tacv2',name:'English Corner',type:'channel'},
+      {id:'19:second@thread.tacv2',name:'English Corner 2',type:'channel'}
+    ]});
+    assert.throws(()=>runTeamsAPIIndex(f.context),{code});
+    assert.equal(f.requests.filter(request=>request.op==='messages').length,1);
+    assert.equal(f.snapshots.length,0);
+  }
+});
 test('foreign local index cannot grant conversation scope',()=>{
   const f=fixture({indexAccount:'foreign'});assert.equal(runTeamsAPIIndex(f.context),false);
   assert.equal(f.snapshots.length,0);assert.equal(f.events.length,0);assert.equal(f.requests.length,1);

@@ -64,3 +64,28 @@ test('invalid recurrence counts and impossible source wall times are rejected ex
   assert.throws(()=>calendar(['DTSTART;TZID=America/New_York:20260308T023000','DTEND;TZID=America/New_York:20260308T033000']),/源时区不存在/);
   assert.throws(()=>calendar(['DTSTART:20260230T120000Z','DTEND:20260230T130000Z']),/日期无效/);
 });
+
+test('unsupported event duration, recurrence exceptions and cancellations are rejected instead of changing dates', () => {
+  for (const property of [
+    'DURATION:P2D', 'RDATE;VALUE=DATE:20260928',
+    'RECURRENCE-ID;VALUE=DATE:20260925', 'EXRULE:FREQ=WEEKLY;BYDAY=FR', 'STATUS:CANCELLED'
+  ]) {
+    assert.throws(() => calendar(['DTSTART;VALUE=DATE:20260925', property]), /暂不支持/, property);
+  }
+  assert.throws(() => Core.parseSchoolCalendarICS([
+    'BEGIN:VCALENDAR', 'METHOD:CANCEL', 'BEGIN:VEVENT', 'UID:cancelled',
+    'DTSTART;VALUE=DATE:20260925', 'SUMMARY:学校放假', 'END:VEVENT', 'END:VCALENDAR'
+  ].join('\r\n'), 'cancelled.ics', 'Asia/Shanghai'), /取消通知/);
+});
+
+test('supported recurring events retain their own fields when a nested alarm has duration and description', () => {
+  const state = calendar([
+    'DTSTART;TZID=Asia/Shanghai:20260925T090000', 'DTEND;TZID=Asia/Shanghai:20260925T100000',
+    'RRULE:FREQ=DAILY;COUNT=3', 'EXDATE;TZID=Asia/Shanghai:20260926T090000', 'DESCRIPTION:Event note',
+    'BEGIN:VALARM', 'ACTION:DISPLAY', 'TRIGGER:-PT10M', 'REPEAT:2', 'DURATION:PT5M',
+    'DESCRIPTION:Alarm note', 'END:VALARM'
+  ]);
+  assert.deepEqual(events(state, '2026-09-25').map(row => [row.displayStartTime, row.displayEndTime, row.description]), [['09:00', '10:00', 'Event note']]);
+  assert.equal(events(state, '2026-09-26').length, 0);
+  assert.equal(events(state, '2026-09-27').length, 1);
+});

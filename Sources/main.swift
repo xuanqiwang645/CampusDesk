@@ -441,8 +441,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         self.graphAuth.accessToken(forceRefresh: forceRefresh, completion: completion)
     })
     var graphProgress: [String: Any] = [:]
-    var graphGeneration = UUID()
-    var graphSigningIn = false
+    var graphWork = CampusGraphWorkBoundary()
+    var graphGeneration: UUID { graphWork.generation }
+    var graphSigningIn: Bool { graphWork.signingIn }
     var pendingGraphBatches = Set<String>()
     var assistantRequestsInFlight = Set<String>()
     var assistantRequestHandles: [String: AssistantRequestHandle] = [:]
@@ -457,6 +458,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
     var pendingStateSave: UInt64?
     var pendingTeamsAutoStart: (focus: String, allowProvision: Bool)?
     var stateBridge = CampusStateBridgeBoundary()
+    var calendarImportRequest = CampusStateRequest()
     var resumeAfterImportAcknowledgement = false
     var pendingAgendaDay: String?
     var pendingWidgetTasks = false
@@ -672,9 +674,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         return alert.runModal() == .alertFirstButtonReturn ? .terminateCancel : .terminateNow
     }
     func applicationWillTerminate(_ notification: Notification) {
+        calendarImportRequest.cancel()
         assistantRequestHandles.values.forEach { $0.cancel() }
         assistantRequestHandles.removeAll()
         teamsLoginRetryTimer?.invalidate()
+        if graphSigningIn { graphAuth.cancelSignIn() }
         teamsBrowserBridge.cancel(); teamsAutoBridge.cancel(); teamsGraph.cancel()
         workers.values.forEach { $0.cancel() }
         flushPendingStateWrites()
@@ -1188,6 +1192,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         switch action {
         case "focusDashboardNotifications": dashboardToolbar?.focusNotifications()
         case "ready":
+            calendarImportRequest.cancel()
             stateBridge.dashboardReloaded()
             resumeAfterImportAcknowledgement = false
             ready = true; emit(["type": "schoolConfiguration", "config": schoolEndpoints.frontend]); emit(["type": "state", "state": state]); emitGraphStatus(); emitTeamsAutoStatus()
@@ -1406,7 +1411,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
             state = candidate.state; configureTimer()
             if previousTeamsMode != teamsMode || previousIncludeChats != graphIncludeChats {
                 cancelGraphSync()
-                if graphSigningIn { graphAuth.signOut(); graphSigningIn = false }
                 teamsBrowserBridge.cancel()
                 stopTeamsAuto(message: "Teams 同步方式已更改，已保留读取缓存")
                 removeGraphCheckpoint()
@@ -1456,7 +1460,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
                 teamsBrowserBridge.cancel()
                 cancelGraphSync()
                 try graphAuth.configure(clientId: clientId, tenant: tenant)
-                graphSigningIn = false; graphProgress = [:]
+                graphProgress = [:]
                 clearGraphIdentity(); resetTeamsData(); emitGraphStatus()
             } catch { graphProgress = ["message": error.localizedDescription]; emitGraphStatus() }
         case "graphBatchProcessed":
@@ -1595,7 +1599,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         } catch { status("app", "Teams 同步进度未能保存，下次会重新检查历史", false) }
     }
     func cancelGraphSync() {
-        graphGeneration = UUID(); teamsGraph.cancel()
+        let interruptedSignIn = graphWork.cancel()
+        if interruptedSignIn { graphAuth.cancelSignIn() }
+        teamsGraph.cancel()
         pendingGraphBatches.removeAll(); pendingGraphCheckpoint = nil
     }
     func resetTeamsData() {
@@ -1614,11 +1620,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
     }
     func signInGraph() {
         guard teamsMode == "graph", !graphSigningIn else { return }
-        cancelGraphSync(); graphProgress = [:]; graphSigningIn = true; emitGraphStatus()
-        let expected = graphGeneration
+        cancelGraphSync(); graphProgress = [:]
+        let expected = graphWork.beginSignIn()
+        emitGraphStatus()
         graphAuth.signIn { [weak self] result in
-            guard let self = self, self.graphGeneration == expected, self.teamsMode == "graph" else { return }
-            self.graphSigningIn = false
+            guard let self = self, self.graphWork.finishSignIn(expected), self.teamsMode == "graph" else { return }
             switch result {
             case .success:
                 guard let identity = self.currentGraphIdentity() else { self.emitGraphStatus(); return }
@@ -1631,7 +1637,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         }
     }
     func signOutGraph() {
-        cancelGraphSync(); graphSigningIn = false
+        cancelGraphSync()
         graphAuth.signOut(); graphProgress = [:]
         clearGraphIdentity(); resetTeamsData(); emitGraphStatus()
     }
@@ -1744,7 +1750,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         status("app", message, false)
         if teamsMode == "graph" {
             cancelGraphSync()
-            if graphSigningIn { graphAuth.signOut(); graphSigningIn = false }
             graphProgress["status"] = "paused"; graphProgress["coverage"] = "partial"
             graphProgress["partial"] = true; graphProgress["historyComplete"] = false
             graphProgress["message"] = "Teams 同步已暂停：本机数据未能保存。请导出当前数据并检查磁盘空间；25 MiB 以上的备份不会覆盖原文件。"
@@ -1773,7 +1778,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
                 importFailurePaused = true
                 stopTeamsAuto(message: "正在导入数据，自动读取已停止")
                 teamsBrowserBridge.cancel(); cancelGraphSync()
-                if graphSigningIn { graphAuth.signOut(); graphSigningIn = false }
                 notifications.sync(items: [], enabled: false)
                 for url in [teamsBrowserIdentityURL, teamsAutoCheckpointURL, graphIdentityURL, graphCheckpointURL]
                     where FileManager.default.fileExists(atPath: url.path) {
@@ -1871,6 +1875,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         return result
     }
     func importSchoolCalendar() {
+        let request = calendarImportRequest.begin(generation: stateBridge.generation)
+        let deliver: ([String: Any]) -> Void = { [weak self] event in
+            guard let self, self.calendarImportRequest.finish(request, boundary: self.stateBridge) else { return }
+            self.emit(event)
+        }
         let panel = NSOpenPanel()
         panel.title = "导入校历文件"
         panel.allowedContentTypes = [UTType(filenameExtension: "ics") ?? .plainText, .pdf]
@@ -1878,32 +1887,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         panel.allowsMultipleSelection = false
         panel.canChooseDirectories = false
         panel.beginSheetModal(for: window) { [weak self] response in
-            guard response == .OK, let self = self, let url = panel.url else { return }
+            guard let self else { return }
+            guard response == .OK, let url = panel.url else {
+                _ = self.calendarImportRequest.finish(request, boundary: self.stateBridge)
+                return
+            }
             do {
                 let values = try url.resourceValues(forKeys: [.fileSizeKey])
                 guard (values.fileSize ?? Int.max) <= 5 * 1024 * 1024 else {
-                    self.emit(["type": "schoolCalendarFileError", "message": "校历文件超过 5 MB"])
+                    deliver(["type": "schoolCalendarFileError", "message": "校历文件超过 5 MB"])
                     return
                 }
                 if url.pathExtension.lowercased() == "pdf" {
                     DispatchQueue.global(qos: .userInitiated).async { [weak self] in
                         do {
                             let text = try self?.extractSchoolCalendarPDF(url: url) ?? ""
-                            DispatchQueue.main.async { self?.emit(["type": "schoolCalendarPDF", "fileName": url.lastPathComponent, "text": text]) }
+                            DispatchQueue.main.async { deliver(["type": "schoolCalendarPDF", "fileName": url.lastPathComponent, "text": text]) }
                         } catch {
-                            DispatchQueue.main.async { self?.emit(["type": "schoolCalendarFileError", "message": error.localizedDescription]) }
+                            DispatchQueue.main.async { deliver(["type": "schoolCalendarFileError", "message": error.localizedDescription]) }
                         }
                     }
                     return
                 }
                 let data = try Data(contentsOf: url, options: [.mappedIfSafe])
                 guard let text = String(data: data, encoding: .utf8) else {
-                    self.emit(["type": "schoolCalendarFileError", "message": "校历文件不是有效的 UTF-8 文本"])
+                    deliver(["type": "schoolCalendarFileError", "message": "校历文件不是有效的 UTF-8 文本"])
                     return
                 }
-                self.emit(["type": "schoolCalendarFile", "fileName": url.lastPathComponent, "text": text])
+                deliver(["type": "schoolCalendarFile", "fileName": url.lastPathComponent, "text": text])
             } catch {
-                self.emit(["type": "schoolCalendarFileError", "message": "无法读取校历文件"])
+                deliver(["type": "schoolCalendarFileError", "message": "无法读取校历文件"])
             }
         }
     }

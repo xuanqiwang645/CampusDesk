@@ -13,7 +13,13 @@ function teamsAPIRetry(ctx, response) {
   stop.code='RATE_LIMITED';stop.retry=retry;throw stop;
 }
 function teamsAPITerminal(error) {return error && ['RATE_LIMITED','TIME_LIMIT','account_changed','ACCOUNT_CHANGED','TAB_CHANGED',
-  'TAB_MISSING','BROWSER_NOT_RUNNING','AUTOMATION_DENIED','JAVASCRIPT_DISABLED'].includes(error.code);}
+  'TAB_MISSING','BROWSER_NOT_RUNNING','AUTOMATION_DENIED','JAVASCRIPT_DISABLED','HTTP_401','HTTP_403','FILE_ACCESS_DENIED'].includes(error.code);}
+function teamsAPIRequireSession(response) {
+  var error=response && response.error;
+  if(!teamsAPITerminal(error))return;
+  var stop=new Error('Teams 读取会话已变化、失效或不再允许访问，已停止本轮同步。');
+  stop.code=error.code;throw stop;
+}
 function runTeamsAPI(ctx) {
   var scope=ctx.scope, source=ctx.readResource('teams-api.js'), url='https://teams.cloud.microsoft/';
   if (!source || !scope || !scope.strong || !scope.id || !ctx.identity) return false;
@@ -27,6 +33,7 @@ function runTeamsAPI(ctx) {
     var began=ctx.now();
     try {
     var initial=evaluate('(function(){'+source+'\nreturn JSON.stringify(window.CampusDeskTeamsAPI.start('+JSON.stringify(request)+'));})();');
+    teamsAPIRequireSession(initial);
     if (!initial || !initial.jobId) return initial || {status:'error'};
     var end=ctx.now()+Math.min(65000,Number(request.timeoutMs)||45000), latest, polls=0;
     var statusCall='window.CampusDeskTeamsAPI.status('+JSON.stringify(initial.jobId)+')';
@@ -41,6 +48,7 @@ function runTeamsAPI(ctx) {
       if(++polls%25===0)ctx.progress('api','正在读取 '+ctx.item.label+' 的接口数据…');
     }
     try{ctx.pageEval('window.CampusDeskTeamsAPI.forget('+JSON.stringify(initial.jobId)+'); "ok";');}catch(_){}
+    teamsAPIRequireSession(latest);
     return latest;
     } finally {
       if(ctx.timings){var key=request.op==='attachment'?'attachments':request.op==='messages'?'messages':'discovery';var metric=ctx.timings[key]||(ctx.timings[key]={requests:0,milliseconds:0});metric.requests++;metric.milliseconds+=Math.max(0,ctx.now()-began);}
@@ -129,9 +137,11 @@ function runTeamsAPIIndex(ctx) {
   try {
     ctx.progress('discovery','正在读取 Teams 本地会话索引，优先同步 EC…');
     var opened=evaluate('(function(){'+source+'\nreturn JSON.stringify(window.CampusDeskTeamsAPI.start({op:"conversations",maxItems:500,timeoutMs:15000}));})();');
+    teamsAPIRequireSession(opened);
     if(!opened.jobId)return false;
     jobID=opened.jobId;var until=ctx.now()+16000;
     while(ctx.now()<until){ctx.sleep(0.25);result=evaluate('JSON.stringify(window.CampusDeskTeamsAPI.status('+JSON.stringify(jobID)+'))');if(result.status!=='running')break;}
+    teamsAPIRequireSession(result);
     teamsAPIRetry(ctx,result);
     if(!result||!result.result||result.result.accountId!==ctx.identity||!Array.isArray(result.result.conversations))return false;
     var conversations=result.result.conversations.filter(function(c){return c && typeof c.id==='string' && /^19:[A-Za-z0-9_.:@-]{1,300}$/.test(c.id);});
@@ -154,7 +164,8 @@ function runTeamsAPIIndex(ctx) {
     }
     ctx.recordCoverage({kind:'education',label:'正式作业、成绩和教师反馈',status:'unread',reason:'本轮仅核对消息和 EC 附件；正式教育接口的学校授权仍未验证。'});
     ctx.warn('本轮从 Teams 本地索引自动读取，无需逐页导航；索引外的隐藏会话、独立回复链和完整历史仍未确认。');
-    return {handled:successes>0 || ctx.config.focus==='ec',message:ctx.config.focus==='ec'?'EC 自动读取已完成本轮可访问范围；请核对附件正文状态。':'本轮已自动读取 '+ctx.counts.messages+' 条消息；其余范围见未完成列表。'};
+    if(!successes){ctx.warn('本地索引未读取到目标会话，继续检查可见的 Teams 页面。');return false;}
+    return {handled:true,message:ctx.config.focus==='ec'?'EC 自动读取已完成本轮可访问范围；请核对附件正文状态。':'本轮已自动读取 '+ctx.counts.messages+' 条消息；其余范围见未完成列表。'};
   } catch(error) {if(teamsAPITerminal(error))throw error;ctx.warn('本地索引读取未完成，尝试浏览器页面发现。');return false;}
   finally {if(jobID)try{ctx.pageEval('window.CampusDeskTeamsAPI.forget('+JSON.stringify(jobID)+'); "ok";');}catch(_){} }
 }

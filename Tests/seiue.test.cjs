@@ -31,6 +31,7 @@ function calendarDocument(input) {
     return column;
   });
   const container = element();
+  container.getAttribute = name => name === 'aria-busy' && input.containerBusy ? 'true' : null;
   container.querySelector = selector => ({
     '.seiue-schedule-week-calendar': grid,
     '[data-test-id="seiue-schedule-container-weekday-bar-group"]': headerGroup,
@@ -185,4 +186,23 @@ test('complete empty days and whole weeks still replace previously captured clas
     assert.equal(status.failed, false);
     assert.equal(status.condition, otherDayHasCourse ? 'available' : 'empty');
   }
+});
+
+test('a busy calendar container cannot turn its transient empty columns into a verified empty week', () => {
+  const input = fridayModel();
+  let state = Core.mergeSnapshot(Core.emptyState(), capture(input, '2026-09-18T00:00:00Z'));
+  input.containerBusy = true;
+  input.days[4].events = [];
+  const loading = capture(input, '2026-09-18T00:01:00Z');
+  assert.notEqual(loading.success, true);
+  assert.deepEqual(loading.calendarDates, []);
+  assert.match(loading.warnings.join(' '), /仍在加载/);
+  state = Core.mergeSnapshot(state, loading);
+  assert.equal(Core.getSchedule(state, '2026-09-18').length, 1);
+  assert.equal(Core.getSourceStatus(state, 'seiue', '2026-09-18T00:01:01Z').failed, true);
+
+  input.containerBusy = false;
+  state = Core.mergeSnapshot(state, capture(input, '2026-09-18T00:02:00Z'));
+  assert.equal(Core.getSchedule(state, '2026-09-18').length, 0);
+  assert.equal(Core.getSourceStatus(state, 'seiue', '2026-09-18T00:02:01Z').condition, 'empty');
 });
