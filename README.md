@@ -3,9 +3,9 @@
 面向使用M系列 mac 的国际部学生打造的集中查看希悦课表、ManageBac课程总评和GPA估算、待办与可识别的教师反馈。同时，对北京101国际部特色活动English Corner（EC）有特别优化
 
 
-**最新版本：v1.2.0 Lagoon · 主题版 · 构建 97。** 适用于 Apple Silicon（M 系列芯片）Mac，最低 macOS 12；桌面小组件需要 macOS 14，原生玻璃工具栏需要 macOS 26 或更新版本。
+**最新版本：v1.2.0 Lagoon · 主题版 · 构建 98。** 适用于 Apple Silicon（M 系列芯片）Mac，最低 macOS 12；桌面小组件需要 macOS 14，原生玻璃工具栏需要 macOS 26 或更新版本。
 
-[下载 DMG 安装包](https://github.com/xuanqiwang645/CampusDesk/releases/download/v1.2.0-build97/CampusDesk-Theme-Edition-v1.2.0-build97-macOS-arm64.dmg) · [下载 ZIP 压缩包](https://github.com/xuanqiwang645/CampusDesk/releases/download/v1.2.0-build97/CampusDesk-Theme-Edition-v1.2.0-build97-macOS-arm64.zip) · [发布说明](https://github.com/xuanqiwang645/CampusDesk/releases/tag/v1.2.0-build97) · [SHA-256 校验文件](https://github.com/xuanqiwang645/CampusDesk/releases/download/v1.2.0-build97/SHA256SUMS.txt)
+[下载 DMG 安装包](https://github.com/xuanqiwang645/CampusDesk/releases/download/v1.2.0-build98/CampusDesk-Theme-Edition-v1.2.0-build98-macOS-arm64.dmg) · [下载 ZIP 压缩包](https://github.com/xuanqiwang645/CampusDesk/releases/download/v1.2.0-build98/CampusDesk-Theme-Edition-v1.2.0-build98-macOS-arm64.zip) · [发布说明](https://github.com/xuanqiwang645/CampusDesk/releases/tag/v1.2.0-build98) · [SHA-256 校验文件](https://github.com/xuanqiwang645/CampusDesk/releases/download/v1.2.0-build98/SHA256SUMS.txt)
 
 打开 DMG 后，将 **CampusDesk Theme Edition.app** 拖入 Applications。更新时请替换原来的主题版安装位置；如果原应用位于个人 `~/Applications`，请仍放回该目录。应用使用本机持久签名，尚未经过 Apple Developer ID 公证。
 
@@ -13,14 +13,14 @@
 
 如发现任何值得改进的地方，欢迎联系我！邮箱：xuanqiwang645@gmail.com
 
-## Build 97 更新
+## Build 98 更新
 
-- 修复跨午夜课程的倒计时、高亮和小组件结束时间；希悦课表仍在加载时保留有效缓存。
-- 临时调课草稿不再被后台刷新清空，自编课程回车保存后清空输入，避免重复添加；旧校历解析结果不能覆盖新选择或恢复后的备份。
-- 修复 ManageBac 带参数作业链接漏读、Teams EC 会话发现中断及 Graph 取消登录后卡住；账号变化或授权失效时停止本轮读取。
-- 「连接与设置」底部新增密码解锁彩蛋；支持手动锁定，离开设置、进入专注模式或重启应用后重新隐藏。
+- 新增「跟随 macOS 自动外观」：系统浅色时使用选定的白天配色，系统深色时使用「深夜」。白天配色与手动主题独立保存。
+- 页面、原生玻璃工具栏、GPA 图表和 WebGL 玻璃一起切换；切换只更新颜色，保留正在编辑的内容、焦点和图表视图。
+- 启动和重新加载时先应用已保存的外观，避免先闪浅色；唤醒或重新激活后再次核对系统外观。
+- 设置入口为「连接与设置 → 面板样式 → 外观切换」。在 macOS「系统设置 → 外观」中选择「自动」后，应用随系统日出日落或 Night Shift 计划切换，无需 CampusDesk 获取定位。
 
-完整改动和使用边界见 [Build 97 发布说明](releases/v1.2.0-build97.md)。延续 Build 94 的完整今日课程、紧凑看板和原生玻璃工具栏；部分慢速页面仍可能需要等待加载完成后重新同步。
+完整改动与系统切换时机说明见 [Build 98 发布说明](releases/v1.2.0-build98.md)。保留 Build 97 的课表、同步、表单及彩蛋锁定修复。
 
 ## Lagoon 主题版有什么
 
@@ -64,8 +64,9 @@ DeepSeek API 密钥通过原生组件保存在 macOS 钥匙串中。安装包不
 
 ## 版本记录
 
-提交链、GPT 托管工作树和实机验收范围见[开发历史与工作树交接](docs/development-history.md)。Build 97 汇总 Build 94 之后的课表、表单、平台同步和设置页改进；应用版本仍为 v1.2.0 Lagoon，使用独立发布标签 `v1.2.0-build97`。
+提交链、GPT 托管工作树和实机验收范围见[开发历史与工作树交接](docs/development-history.md)。Build 98 增加跟随 macOS 自动外观；应用版本仍为 v1.2.0 Lagoon，使用独立发布标签 `v1.2.0-build98`。
 
+- [v1.2.0 Lagoon · 主题版 · 构建 98](releases/v1.2.0-build98.md) — 跟随系统自动切换深浅外观、独立白天配色、原生工具栏及图表玻璃配色同步。
 - [v1.2.0 Lagoon · 主题版 · 构建 97](releases/v1.2.0-build97.md) — 跨午夜课程、加载中课表保护、调课草稿、异步导入、平台读取与彩蛋锁定修复。
 - [v1.2.0 Lagoon · 主题版 · 构建 94](releases/v1.2.0-build94.md) — 完整今日课程、不完整读取保护、本地日期切换、紧凑看板、原生玻璃按钮和安静的后台同步。
 - [v1.2.0 Lagoon · 主题版 · 构建 78](releases/v1.2.0.md) — 行事历与三类桌面小组件、待办数字滚轮和流畅度优化、12 档 GPA、成绩未读通知，以及 DeepSeek 多轮修复与可搜索、可续聊的本机历史。
@@ -122,7 +123,7 @@ CAMPUSDESK_INFO_PLIST="$PWD/Info-ThemeEdition.plist" bash scripts/package-macos.
 shasum -a 256 -c SHA256SUMS.txt
 ```
 
-当前源码与发布安装包统一为 **v1.2.0 Lagoon / Build 97**，详见 [Build 97 发布说明](releases/v1.2.0-build97.md)。继续保留学习助手本机历史、全文搜索、独立草稿、重启后续聊、成绩未读通知、双 GPA、行事历和三类桌面小组件；应用标识与数据目录不变。
+当前源码与发布安装包统一为 **v1.2.0 Lagoon / Build 98**，详见 [Build 98 发布说明](releases/v1.2.0-build98.md)。继续保留学习助手本机历史、全文搜索、独立草稿、重启后续聊、成绩未读通知、双 GPA、行事历和三类桌面小组件；应用标识与数据目录不变。
 
 Build 76 同时修复连续追问时“第一次点击发送无反应”的失焦重绘问题。输入框到发送按钮的指针交互期间保留原控件，后台同步不会吞掉点击；失败重试保留已成功对话和问题草稿。新增真实浏览器回归，并在已安装的 macOS 版完成三轮 DeepSeek 连续对话验收。
 

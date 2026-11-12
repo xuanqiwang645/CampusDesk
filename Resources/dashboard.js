@@ -15,6 +15,16 @@
   const appVersionLabel = 'CampusDesk v' + String(appVersionInfo.version || '').slice(0, 40) + (appVersionInfo.name ? ' ' + String(appVersionInfo.name).slice(0, 60) : '');
   const storageKey = 'campusdesk.browser.v1';
   let state = Core.emptyState();
+  const nativeAppearance = native && window.CampusDeskNativeAppearance === true;
+  const appearanceQuery = typeof window.matchMedia === 'function' ? window.matchMedia('(prefers-color-scheme: dark)') : null;
+  let systemAppearanceDark = nativeAppearance ? window.CampusDeskSystemAppearance === 'dark' : Boolean(appearanceQuery && appearanceQuery.matches);
+  let lastNativeAppearance = '';
+  const initialAppearance = window.CampusDeskInitialAppearanceSettings;
+  if (nativeAppearance && initialAppearance && typeof initialAppearance === 'object') {
+    if (['manual', 'system'].includes(initialAppearance.appearanceMode)) state.settings.appearanceMode = initialAppearance.appearanceMode;
+    if (['sage', 'ocean', 'ember', 'midnight'].includes(initialAppearance.colorTheme)) state.settings.colorTheme = initialAppearance.colorTheme;
+    if (['sage', 'ocean', 'ember'].includes(initialAppearance.dayColorTheme)) state.settings.dayColorTheme = initialAppearance.dayColorTheme;
+  }
   let page = (['overview', 'learning', 'schedule', 'calendar', 'grades', 'tasks', 'feedback', 'teams', 'ec', 'settings'].includes(location.hash.slice(1)) || (themeEdition && location.hash.slice(1) === 'assistant')) ? location.hash.slice(1) : 'overview';
   // The schedule is a school calendar, but its "today" navigation follows
   // the Mac's local calendar day. Course start/end times remain school time.
@@ -1483,7 +1493,8 @@
       // with a small edge inset rather than moving them onto the candle bodies.
       if (point.x < 20 || point.x > bounding.width - 20) return [];
       const labelY = Math.max(12, Math.min(point.y - 14, bounding.height - 12));
-      return [{ type: 'text', attrs: { x: point.x, y: labelY, text: label, width: 38, height: 17, align: 'center', baseline: 'middle' }, styles: { style: 'stroke_fill', color: '#2e6650', size: 10, weight: 600, borderColor: '#d3e4d7', borderSize: 1, borderRadius: 4, backgroundColor: '#ffffff' } }];
+      const dark = Core.effectiveColorTheme(state.settings, systemAppearanceDark) === 'midnight';
+      return [{ type: 'text', attrs: { x: point.x, y: labelY, text: label, width: 38, height: 17, align: 'center', baseline: 'middle' }, styles: { style: 'stroke_fill', color: dark ? '#b8ead9' : '#2e6650', size: 10, weight: 600, borderColor: dark ? '#3b4a53' : '#d3e4d7', borderSize: 1, borderRadius: 4, backgroundColor: dark ? '#1a252c' : '#ffffff' } }];
     } });
     window.__campusGpaValueOverlay = true;
   }
@@ -1649,6 +1660,7 @@
     try { chart.createIndicator({ name: 'MACD', calcParams: [12, 26, 9], precision: 2, paneId: 'macd_pane' }, false); } catch (_) { /* MACD is an enhancement; the price chart remains usable. */ }
     attachGpaLineSnap(chart, container);
     chart.setStyles({ crosshair: { show: false } });
+    chart.setStyles(gpaSurfaceStyles());
     chart.resize();
     gpaKlineCharts[mode] = chart;
     gpaKlineChartKeys[mode] = chartKey;
@@ -1888,17 +1900,56 @@
     const subjectControls = subjects.length ? '<div class="reminder-subject-options">' + subjects.map((subject, index) => '<label class="reminder-subject-option" for="reminder-subject-choice-' + index + '"><input id="reminder-subject-choice-' + index + '" type="checkbox" data-reminder-subject="' + esc(subject) + '" ' + (allSubjects || selected.has(subject) ? 'checked' : '') + (!native ? ' disabled' : '') + '><span>' + esc(subject) + '</span></label>').join('') + resetSubjects + '</div>' : '<div class="reminder-subject-options reminder-no-subjects"><p class="subtle">' + t('暂无已读取学科；获取到 Teams 作业后会在这里列出。') + '</p>' + resetSubjects + '</div>';
     return '<section id="reminder-settings" class="card settings-section">' + cardHeader('bell', 'Teams 作业提醒') + '<div class="settings-fields"><div class="settings-field"><div><label for="teams-notifications">' + t('截止前系统通知') + '</label><p id="notification-status">' + esc(t(permissionCopy())) + '</p></div><label class="toggle" for="teams-notifications"><input id="teams-notifications" type="checkbox" ' + (state.settings.teamsNotifications ? 'checked' : '') + (!native ? ' disabled' : '') + ' aria-label="' + esc(t('Teams 作业截止提醒')) + '"><span></span></label></div><div class="settings-field"><div><label for="reminder-minutes">' + t('提前多久提醒') + '</label><p>' + t('如果提前提醒时间已过，将在截止时提醒。已逾期或已完成的作业不安排通知。') + '</p></div><select id="reminder-minutes">' + [[0, '截止时'], [10, '提前 10 分钟'], [30, '提前 30 分钟'], [60, '提前 1 小时'], [1440, '提前 1 天']].map(item => '<option value="' + item[0] + '" ' + (Number(state.settings.reminderMinutes) === item[0] ? 'selected' : '') + '>' + t(item[1]) + '</option>').join('') + '</select></div><div class="settings-field reminder-subject-setting"><div><label>' + t('提醒学科') + '</label><p>' + t('取消某科可暂停该科通知；默认所有学科都可提醒。') + '</p></div>' + subjectControls + '</div></div><p class="gpa-note">' + t('课表倒计时按北京时间每秒更新，依据已读取课节的结束和下一节开始时间计算。应用需定期运行并同步，才能发现新作业和截止时间变更；系统通知是否显示还受 Mac 通知和专注模式设置影响。') + '</p></section>';
   }
+  function appearanceStatusText() {
+    const dark = Core.effectiveColorTheme(state.settings, systemAppearanceDark) === 'midnight';
+    return assistantCopy('当前：' + (dark ? '深色' : '浅色'), 'Current: ' + (dark ? 'Dark' : 'Light'));
+  }
+  function applyAppearance() {
+    const theme = Core.effectiveColorTheme(state.settings, systemAppearanceDark);
+    const root = document.documentElement, shell = document.getElementById('app-shell');
+    const changed = root && root.dataset.colorTheme !== theme;
+    if (changed) root.dataset.colorTheme = theme;
+    if (shell && shell.dataset.colorTheme !== theme) shell.dataset.colorTheme = theme;
+    setText('appearance-status', appearanceStatusText());
+    if (changed) {
+      for (const chart of Object.values(gpaKlineCharts)) if (chart) chart.setStyles(gpaSurfaceStyles());
+      window.CampusGlassInvalidate?.();
+    }
+    const mode = state.settings.appearanceMode === 'system' ? 'system' : 'manual';
+    const signature = mode + ':' + theme;
+    if (nativeAppearance && signature !== lastNativeAppearance) {
+      lastNativeAppearance = signature;
+      send('setAppearance', { mode, theme });
+    }
+  }
+  function receiveSystemAppearance(dark) {
+    if (typeof dark !== 'boolean') return;
+    systemAppearanceDark = dark;
+    // Change colors in place: keep open dialogs, focus, drafts and chart zoom.
+    applyAppearance();
+  }
+  function gpaSurfaceStyles() {
+    const dark = Core.effectiveColorTheme(state.settings, systemAppearanceDark) === 'midnight';
+    const style = typeof window.getComputedStyle === 'function' ? window.getComputedStyle(document.documentElement) : null;
+    const line = style?.getPropertyValue('--line').trim() || (dark ? '#3b4a53' : '#e5ebe4');
+    const text = style?.getPropertyValue('--muted').trim() || (dark ? '#b5c4cb' : '#61736b');
+    return { grid: { horizontal: { color: line } }, separator: { color: line },
+      xAxis: { axisLine: { color: line }, tickLine: { color: line }, tickText: { color: text } },
+      yAxis: { axisLine: { color: line }, tickLine: { color: line }, tickText: { color: text } } };
+  }
   function renderAppearanceSettings() {
     const theme = state.settings.dashboardTheme || 'classic';
-    const colorTheme = state.settings.colorTheme || 'sage';
+    const automatic = state.settings.appearanceMode === 'system';
+    const colorTheme = automatic ? state.settings.dayColorTheme || 'sage' : state.settings.colorTheme || 'sage';
     const candleColors = state.settings.gpaCandleColors || 'red-up';
     const colorThemes = [
       ['sage', '自然绿', '自然、柔和的浅色默认主题'],
       ['ocean', '海湾蓝', '清晰的冷调蓝色主题'],
       ['ember', '暖阳橙', '温暖的沙色与深棕强调色'],
       ['midnight', '深夜', '低亮度深色主题']
-    ];
-    return '<section id="appearance-settings" class="card settings-section appearance-settings">' + cardHeader('overview', '面板样式') + '<p class="settings-intro">经典面板保留原有的信息布局；卡片看板用更紧凑的统计卡和任务卡集中展示今天的重点。两种样式使用同一份本机数据，随时可切换。</p><div class="appearance-options"><button type="button" class="appearance-option ' + (theme === 'classic' ? 'selected' : '') + '" data-action="dashboard-theme" data-theme="classic" aria-pressed="' + (theme === 'classic') + '"><span class="appearance-preview preview-classic"><i></i><i></i><i></i></span><strong>经典面板</strong><small>熟悉的课程、成绩与待办布局</small></button><button type="button" class="appearance-option ' + (theme === 'board' ? 'selected' : '') + '" data-action="dashboard-theme" data-theme="board" aria-pressed="' + (theme === 'board') + '"><span class="appearance-preview preview-board"><i></i><i></i><i></i><i></i></span><strong>卡片看板</strong><small>统计概览与密集任务卡片</small></button></div><div class="color-theme-section"><h3>' + t('主题配色') + '</h3><p class="settings-intro">' + t('只改变 CampusDesk 的界面配色；不影响经典/卡片布局、成绩涨跌色或学校数据。') + '</p><div class="color-theme-options">' + colorThemes.map(item => '<button type="button" class="color-theme-option color-theme-' + item[0] + (colorTheme === item[0] ? ' selected' : '') + '" data-action="color-theme" data-theme="' + item[0] + '" aria-pressed="' + (colorTheme === item[0]) + '"><span class="color-theme-preview" aria-hidden="true"><i></i><i></i></span><strong>' + t(item[1]) + '</strong><small>' + t(item[2]) + '</small></button>').join('') + '</div></div><div class="settings-fields appearance-candle-setting"><div class="settings-field"><div><label for="gpa-candle-colors">GPA K 线涨跌颜色</label><p>选择成绩上升和下降时 K 线的颜色，设置会保存在本机。</p></div><select id="gpa-candle-colors" aria-label="GPA K 线涨跌颜色"><option value="red-up"' + (candleColors === 'red-up' ? ' selected' : '') + '>红涨绿跌</option><option value="green-up"' + (candleColors === 'green-up' ? ' selected' : '') + '>绿涨红跌</option></select></div></div></section>';
+    ].filter(item => !automatic || item[0] !== 'midnight');
+    const modeControl = '<div class="settings-field appearance-mode-setting"><div><label for="appearance-mode">' + assistantCopy('外观切换', 'Appearance switching') + '</label><p>' + assistantCopy('跟随系统时，在 macOS「系统设置 → 外观」选择「自动」，即可按日出日落或 Night Shift 计划切换。系统可能在闲置后切换。', 'To switch with sunrise and sunset or the Night Shift schedule, choose Auto in macOS System Settings → Appearance. macOS may wait until the Mac is idle.') + '</p></div><select id="appearance-mode"><option value="manual"' + (!automatic ? ' selected' : '') + '>' + assistantCopy('手动选择', 'Manual') + '</option><option value="system"' + (automatic ? ' selected' : '') + '>' + assistantCopy('跟随 macOS 自动外观', 'Follow macOS appearance') + '</option></select></div><output id="appearance-status" class="appearance-status" aria-live="polite">' + appearanceStatusText() + '</output>';
+    return '<section id="appearance-settings" class="card settings-section appearance-settings">' + cardHeader('overview', '面板样式') + '<p class="settings-intro">经典面板保留原有的信息布局；卡片看板用更紧凑的统计卡和任务卡集中展示今天的重点。两种样式使用同一份本机数据，随时可切换。</p><div class="appearance-options"><button type="button" class="appearance-option ' + (theme === 'classic' ? 'selected' : '') + '" data-action="dashboard-theme" data-theme="classic" aria-pressed="' + (theme === 'classic') + '"><span class="appearance-preview preview-classic"><i></i><i></i><i></i></span><strong>经典面板</strong><small>熟悉的课程、成绩与待办布局</small></button><button type="button" class="appearance-option ' + (theme === 'board' ? 'selected' : '') + '" data-action="dashboard-theme" data-theme="board" aria-pressed="' + (theme === 'board') + '"><span class="appearance-preview preview-board"><i></i><i></i><i></i><i></i></span><strong>卡片看板</strong><small>统计概览与密集任务卡片</small></button></div><div class="color-theme-section">' + modeControl + '<h3>' + (automatic ? assistantCopy('白天配色', 'Daytime palette') : t('主题配色')) + '</h3><p class="settings-intro">' + (automatic ? assistantCopy('浅色时使用下面的配色，深色时自动使用「深夜」。', 'Use this palette in Light mode and Midnight in Dark mode.') : t('只改变 CampusDesk 的界面配色；不影响经典/卡片布局、成绩涨跌色或学校数据。')) + '</p><div class="color-theme-options" data-mode="' + (automatic ? 'system' : 'manual') + '">' + colorThemes.map(item => '<button type="button" class="color-theme-option color-theme-' + item[0] + (colorTheme === item[0] ? ' selected' : '') + '" data-action="color-theme" data-theme="' + item[0] + '" aria-pressed="' + (colorTheme === item[0]) + '"><span class="color-theme-preview" aria-hidden="true"><i></i><i></i></span><strong>' + t(item[1]) + '</strong><small>' + t(item[2]) + '</small></button>').join('') + '</div></div><div class="settings-fields appearance-candle-setting"><div class="settings-field"><div><label for="gpa-candle-colors">GPA K 线涨跌颜色</label><p>选择成绩上升和下降时 K 线的颜色，设置会保存在本机。</p></div><select id="gpa-candle-colors" aria-label="GPA K 线涨跌颜色"><option value="red-up"' + (candleColors === 'red-up' ? ' selected' : '') + '>红涨绿跌</option><option value="green-up"' + (candleColors === 'green-up' ? ' selected' : '') + '>绿涨红跌</option></select></div></div></section>';
   }
   function renderGraphicsSettings() {
     return '<section class="card settings-section"><div class="settings-field"><div><label for="graphics-mode">' + assistantCopy('动效与耗电', 'Effects and energy') + '</label><p>' + assistantCopy('自动：操作时流畅，闲置时降频；低功耗：仅在界面变化时绘制静态玻璃。窗口不可见时暂停。', 'Automatic: smooth while interacting and slower when idle. Low power: redraw static glass only when needed. Rendering pauses while hidden.') + '</p></div><select id="graphics-mode"><option value="auto"' + (state.settings.graphicsMode !== 'low-power' ? ' selected' : '') + '>' + assistantCopy('自动', 'Automatic') + '</option><option value="low-power"' + (state.settings.graphicsMode === 'low-power' ? ' selected' : '') + '>' + assistantCopy('低功耗', 'Low power') + '</option></select></div></section>';
@@ -2905,8 +2956,9 @@
         deferGpaChartDispose(oldChart, window.klinecharts);
       }
     }
-    if (shell) { shell.dataset.dashboardTheme = state.settings.dashboardTheme || 'classic'; shell.dataset.colorTheme = state.settings.colorTheme || 'sage'; shell.dataset.focusMode = String(Boolean(state.settings.focusMode)); }
-    if (document.documentElement) { document.documentElement.dataset.colorTheme = state.settings.colorTheme || 'sage'; document.documentElement.dataset.graphicsMode = state.settings.graphicsMode || 'auto'; }
+    if (shell) { shell.dataset.dashboardTheme = state.settings.dashboardTheme || 'classic'; shell.dataset.focusMode = String(Boolean(state.settings.focusMode)); }
+    if (document.documentElement) document.documentElement.dataset.graphicsMode = state.settings.graphicsMode || 'auto';
+    applyAppearance();
     renderNav();
     updateStaticChrome();
     setText('breadcrumb-page', pageName(page));
@@ -3309,7 +3361,10 @@
     else if (action === 'setup-wizard-theme') {
       const theme = target.dataset.theme;
       if (!['sage', 'ocean', 'ember', 'midnight'].includes(theme)) return;
-      state.settings.colorTheme = theme; persist(); render(); renderSetupWizard();
+      state.settings.appearanceMode = 'manual';
+      state.settings.colorTheme = theme;
+      if (theme !== 'midnight') state.settings.dayColorTheme = theme;
+      persist(); render(); renderSetupWizard();
     }
     else if (action === 'connect-source') startQuickConnection(target.dataset.source);
     else if (action === 'connection-options') startQuickConnection(target.dataset.source, true);
@@ -3360,8 +3415,11 @@
     else if (action === 'color-theme') {
       const theme = target.dataset.theme;
       if (!['sage', 'ocean', 'ember', 'midnight'].includes(theme)) return;
-      state.settings.colorTheme = theme; persist(); render();
-      toast(t({ sage: '界面配色已切换为自然绿。', ocean: '界面配色已切换为海湾蓝。', ember: '界面配色已切换为暖阳橙。', midnight: '界面配色已切换为深夜。' }[theme]));
+      const automatic = state.settings.appearanceMode === 'system' && theme !== 'midnight';
+      if (!automatic) { state.settings.colorTheme = theme; state.settings.appearanceMode = 'manual'; }
+      if (theme !== 'midnight') state.settings.dayColorTheme = theme;
+      persist(); render();
+      toast(automatic ? assistantCopy('白天配色已保存，浅色时自动使用。', 'Daytime palette saved for Light mode.') : t({ sage: '界面配色已切换为自然绿。', ocean: '界面配色已切换为海湾蓝。', ember: '界面配色已切换为暖阳橙。', midnight: '界面配色已切换为深夜。' }[theme]));
     }
     else if (action === 'appearance-settings') {
       navigate('settings');
@@ -3550,6 +3608,11 @@
     if (captureScheduleOverrideDraft(el)) return;
     if (el.id === 'agenda-all-day') { document.getElementById('agenda-time-fields').hidden = el.checked; return; }
     if (getGradePlanner().change(el)) return;
+    if (el.id === 'appearance-mode') {
+      if (!['manual', 'system'].includes(el.value)) return;
+      state.settings.appearanceMode = el.value;
+      persist(); render(); return;
+    }
     if (el.id === 'graphics-mode') {
       if (['auto', 'low-power'].includes(el.value)) { state.settings.graphicsMode = el.value; persist(); render(); window.CampusGlassInvalidate?.(); }
       return;
@@ -3988,6 +4051,10 @@
     receive: function (event) {
       if (!event || typeof event !== 'object') return;
       try {
+        if (event.type === 'systemAppearance') {
+          if (nativeAppearance) receiveSystemAppearance(event.dark);
+          return;
+        }
         if (event.type === 'dashboardToolbarAction') {
           if (!nativeToolbar || !toolbarButtonIDs.includes(event.id) || toolbarBlocked() ||
               event.stateGeneration !== nativeStateGeneration) return;
@@ -4321,7 +4388,18 @@
       lastRenderedDay = today; lastClockBoundary = boundary; render();
     }
   }
-  document.addEventListener('visibilitychange', () => { if (!dashboardHidden()) tickDashboardClock(); });
+  function refreshBrowserAppearance() {
+    if (!nativeAppearance && appearanceQuery) receiveSystemAppearance(Boolean(appearanceQuery.matches));
+  }
+  if (!nativeAppearance && appearanceQuery) {
+    const changed = event => receiveSystemAppearance(event.matches);
+    if (typeof appearanceQuery.addEventListener === 'function') appearanceQuery.addEventListener('change', changed);
+    else if (typeof appearanceQuery.addListener === 'function') appearanceQuery.addListener(changed);
+    window.addEventListener('focus', refreshBrowserAppearance);
+  }
+  document.addEventListener('visibilitychange', () => {
+    if (!dashboardHidden()) { refreshBrowserAppearance(); tickDashboardClock(); }
+  });
   // close also covers Escape and the native dialog close button.
   for (const id of ['task-dialog', 'detail-dialog', 'agenda-event-dialog', 'teams-page-dialog', 'calendar-preview-dialog', 'setup-wizard-dialog', 'quick-connect-dialog', 'assistant-confirm-dialog']) {
     document.getElementById(id)?.addEventListener('close', () => flushBackgroundRender());

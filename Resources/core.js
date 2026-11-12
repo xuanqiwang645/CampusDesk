@@ -13,6 +13,8 @@
   const BAD_KEYS = new Set(['__proto__', 'prototype', 'constructor']);
   const SOURCES = ['seiue', 'managebac', 'teams'];
   const TEAMS_HOSTS = new Set(['teams.microsoft.com', 'teams.cloud.microsoft']);
+  const DAY_COLOR_THEMES = ['sage', 'ocean', 'ember'];
+  const COLOR_THEMES = DAY_COLOR_THEMES.concat('midnight');
   const schoolCalendarEventsCache = new WeakMap();
   const timeZoneFormatters = new Map();
   let configuredSchools = { seiue: '', managebac: '' };
@@ -488,11 +490,18 @@
     try { new Intl.DateTimeFormat('en', { timeZone: tz }).format(); } catch (_) { fail('时区无效'); }
     return tz;
   }
+  function effectiveColorTheme(settings, systemDark) {
+    const value = settings && typeof settings === 'object' && !Array.isArray(settings) ? settings : {};
+    const manualTheme = COLOR_THEMES.includes(value.colorTheme) ? value.colorTheme : 'sage';
+    if (value.appearanceMode !== 'system') return manualTheme;
+    if (systemDark === true) return 'midnight';
+    return DAY_COLOR_THEMES.includes(value.dayColorTheme) ? value.dayColorTheme : DAY_COLOR_THEMES.includes(manualTheme) ? manualTheme : 'sage';
+  }
   function emptyState() {
     const state = { version: VERSION, settings: { timezone: 'Asia/Shanghai', refreshMinutes: 15, selfStudy: true,
       seiueURL: configuredSchools.seiue, managebacURL: configuredSchools.managebac, teamsPages: [], teamsNotifications: false,
       teamsBrowser: 'chrome', teamsBrowserAutomation: false, teamsMode: 'browser', teamsAutoDiscover: true, graphIncludeChats: true,
-      reminderMinutes: 30, reminderSubjects: [], reminderSubjectsMuted: false, teamsDueOverrides: {}, dashboardTheme: 'classic', colorTheme: 'sage', gpaCandleColors: 'red-up', language: 'zh-CN', focusSubjects: [], focusTeamsChannels: [], customLessons: [],
+      reminderMinutes: 30, reminderSubjects: [], reminderSubjectsMuted: false, teamsDueOverrides: {}, dashboardTheme: 'classic', colorTheme: 'sage', appearanceMode: 'manual', dayColorTheme: 'sage', gpaCandleColors: 'red-up', language: 'zh-CN', focusSubjects: [], focusTeamsChannels: [], customLessons: [],
       scheduleHolidays: [], scheduleWeekAnchor: '', scheduleOverrides: [], focusMode: false, graphicsMode: 'auto', planOrder: [], taskMinutes: {}, taskPriority: {}, gradeGoals: {}, gradePlans: {}, gpaTermDates: {}, ecIdentityNames: [] }, snapshots: { seiue: {}, managebac: {}, teams: {} },
       manualTasks: [], personalEvents: [], taskChecks: {}, feedbackRead: {}, gradeHistory: [], gradeUpdates: [], gradeUpdateRead: {}, gradeUpdateBaselines: [], gradeUpdateCaptures: [], changeLog: [], schoolCalendar: { fileName: '', importedAt: '', events: [] } };
     if (themeEdition) {
@@ -985,7 +994,11 @@
     s.settings.graphicsMode = settings.graphicsMode === undefined ? 'auto' : settings.graphicsMode;
     if (!['auto', 'low-power'].includes(s.settings.graphicsMode)) fail('图形性能设置无效');
     s.settings.colorTheme = settings.colorTheme === undefined ? 'sage' : settings.colorTheme;
-    if (!['sage', 'ocean', 'ember', 'midnight'].includes(s.settings.colorTheme)) fail('主题配色无效');
+    if (!COLOR_THEMES.includes(s.settings.colorTheme)) fail('主题配色无效');
+    s.settings.appearanceMode = settings.appearanceMode === undefined ? 'manual' : settings.appearanceMode;
+    if (!['manual', 'system'].includes(s.settings.appearanceMode)) fail('外观切换方式无效');
+    s.settings.dayColorTheme = settings.dayColorTheme === undefined ? (DAY_COLOR_THEMES.includes(s.settings.colorTheme) ? s.settings.colorTheme : 'sage') : settings.dayColorTheme;
+    if (!DAY_COLOR_THEMES.includes(s.settings.dayColorTheme)) fail('日间主题配色无效');
     s.settings.gpaCandleColors = settings.gpaCandleColors === undefined ? 'red-up' : settings.gpaCandleColors;
     if (!['red-up', 'green-up'].includes(s.settings.gpaCandleColors)) fail('GPA K 线颜色设置无效');
     s.settings.language = settings.language === undefined ? 'zh-CN' : settings.language;
@@ -2107,7 +2120,7 @@
       sources: { seiue: getSourceStatus(state, 'seiue', date), managebac: getSourceStatus(state, 'managebac', date), teams: getSourceStatus(state, 'teams', date) },
       changes: state.changeLog.slice().sort((a, b) => Date.parse(b.capturedAt) - Date.parse(a.capturedAt)) };
   }
-  return Object.freeze({ VERSION, GPA_BANDS, GPA_BANDED_METHOD: METHOD, configureSchools, schoolHomes, normalizeSchoolHome, emptyState, defaultState: emptyState, validateState, normalizeState: validateState, validateAssistantConversations, assistantHistoryHasCapacity, exportBackup, importBackup,
+  return Object.freeze({ VERSION, GPA_BANDS, GPA_BANDED_METHOD: METHOD, configureSchools, schoolHomes, normalizeSchoolHome, emptyState, defaultState: emptyState, effectiveColorTheme, validateState, normalizeState: validateState, validateAssistantConversations, assistantHistoryHasCapacity, exportBackup, importBackup,
     mergeSnapshot, resetTeamsData, clearTeamsData: resetTeamsData, today, clock, getSchedule, getCourses, getTasks, resolveTaskDeadline, parseManualDeadline, normalizePersonalEvent: personalEventRow, getFeedback, getGradeUpdates, markGradeUpdatesRead, getOfficialGPA, estimateGPA, estimateLinearGPA, semesterGPAForecast,
     getNextClass, getClassClock, createClassClockReader, scheduleInterval, getSchedulePeriods, getTeamsPosts, getTeamsEC, getTeamsGrades, getSourceStatus, buildView, getSchoolCalendarEvents, schoolCalendarScheduleRule, schoolCalendarScheduleConflict, parseSchoolCalendarICS, parseSchoolCalendarPDFText, safeURL, safeAttachmentURL, gradePoints: points, linearGradePoints: linearPoints });
 });

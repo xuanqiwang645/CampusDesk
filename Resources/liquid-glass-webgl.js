@@ -32,7 +32,14 @@ if (!canvas) {
 
     const backgroundMaterial = new THREE.RawShaderMaterial({
       glslVersion: THREE.GLSL3,
-      uniforms: { uTime: { value: 0 }, uResolution: { value: new THREE.Vector2(1, 1) } },
+      uniforms: {
+        uTime: { value: 0 }, uResolution: { value: new THREE.Vector2(1, 1) },
+        uBaseLow: { value: new THREE.Vector3(0.945, 0.955, 0.920) },
+        uBaseHigh: { value: new THREE.Vector3(0.985, 0.975, 0.940) },
+        uMint: { value: new THREE.Vector3(0.045, 0.105, 0.070) },
+        uAqua: { value: new THREE.Vector3(0.018, 0.080, 0.065) },
+        uAmber: { value: new THREE.Vector3(0.050, 0.030, 0.005) }
+      },
       vertexShader: `
         precision highp float;
         in vec3 position;
@@ -45,6 +52,11 @@ if (!canvas) {
         in vec2 vUv;
         uniform float uTime;
         uniform vec2 uResolution;
+        uniform vec3 uBaseLow;
+        uniform vec3 uBaseHigh;
+        uniform vec3 uMint;
+        uniform vec3 uAqua;
+        uniform vec3 uAmber;
         out vec4 outColor;
 
         float hash21(vec2 p) {
@@ -57,7 +69,7 @@ if (!canvas) {
           float aspect = uResolution.x / max(uResolution.y, 1.0);
           vec2 p = (uv - 0.5) * vec2(aspect, 1.0);
           float drift = uTime * 0.025;
-          vec3 base = mix(vec3(0.945, 0.955, 0.920), vec3(0.985, 0.975, 0.940), uv.y);
+          vec3 base = mix(uBaseLow, uBaseHigh, uv.y);
           float mint = exp(-3.1 * length(p - vec2(0.42 + 0.05 * sin(drift), 0.30)));
           float aqua = exp(-4.2 * length(p - vec2(-0.54, -0.28 + 0.04 * cos(drift * 1.3))));
           float amber = exp(-5.0 * length(p - vec2(0.12, -0.50)));
@@ -65,7 +77,7 @@ if (!canvas) {
           vec2 line = smoothstep(vec2(0.965), vec2(0.995), abs(fract(gridUv) - 0.5) * 2.0);
           float grid = max(line.x, line.y) * 0.018;
           float grain = (hash21(gl_FragCoord.xy) - 0.5) / 255.0;
-          vec3 color = base + mint * vec3(0.045, 0.105, 0.070) + aqua * vec3(0.018, 0.080, 0.065) + amber * vec3(0.050, 0.030, 0.005);
+          vec3 color = base + mint * uMint + aqua * uAqua + amber * uAmber;
           color -= grid;
           color += grain;
           outColor = vec4(color, 1.0);
@@ -95,7 +107,8 @@ if (!canvas) {
       uDispersion: { value: 0.012 },
       uGlassThickness: { value: 0.082 },
       uNormalTransition: { value: 0.055 },
-      uBackgroundDistance: { value: 0.72 }
+      uBackgroundDistance: { value: 0.72 },
+      uTint: { value: new THREE.Vector3(0.91, 0.975, 0.94) }
     };
 
     const glassMaterial = new THREE.RawShaderMaterial({
@@ -131,6 +144,7 @@ if (!canvas) {
         uniform float uGlassThickness;
         uniform float uNormalTransition;
         uniform float uBackgroundDistance;
+        uniform vec3 uTint;
         out vec4 outColor;
 
         float sdCircle(vec2 p, float radius) { return length(p) - radius; }
@@ -257,7 +271,7 @@ if (!canvas) {
           float rim = pow(1.0 - nv, 2.4) * edgeAmount;
           vec3 color = refracted;
           color += vec3(0.94, 1.0, 0.975) * (specular * nl * 0.34 + rim * 0.10 + fresnel * outerWeight * 0.07);
-          color = mix(color, vec3(0.91, 0.975, 0.94), 0.035 + outerWeight * 0.06);
+          color = mix(color, uTint, 0.035 + outerWeight * 0.06);
           float alpha = mask * mix(0.56, 0.82, edgeAmount);
           outColor = vec4(color, alpha);
         }
@@ -267,6 +281,7 @@ if (!canvas) {
 
     let paintComposeRT = null;
     let shapesDirty = true;
+    let renderedPalette = null;
     let lastWidth = 0;
     let lastHeight = 0;
     let lastFrame = -Infinity;
@@ -279,6 +294,42 @@ if (!canvas) {
       '.button-light', '.icon-button', '.focus-button', '.check-button', '.board-check',
       '.brand-mark', '.nav-item > .icon', '.card-title > .icon', '.banner-icon', '.clock-mark', '.empty-illustration'
     ].join(',');
+
+    function updatePalette() {
+      const palette = root.dataset.colorTheme || 'sage';
+      if (palette === renderedPalette) return;
+      renderedPalette = palette;
+      const uniforms = backgroundMaterial.uniforms;
+      // Preserve the original natural-green material, including the fallback
+      // without a selected palette. Other palettes use the same CSS surfaces
+      // as the DOM; a midnight transition must not retain a bright green frame.
+      if (palette === 'sage') {
+        uniforms.uBaseLow.value.set(0.945, 0.955, 0.920);
+        uniforms.uBaseHigh.value.set(0.985, 0.975, 0.940);
+        uniforms.uMint.value.set(0.045, 0.105, 0.070);
+        uniforms.uAqua.value.set(0.018, 0.080, 0.065);
+        uniforms.uAmber.value.set(0.050, 0.030, 0.005);
+        glassUniforms.uTint.value.set(0.91, 0.975, 0.94);
+        return;
+      }
+      const style = getComputedStyle(root);
+      const color = (name, fallback) => {
+        const raw = style.getPropertyValue(name).trim();
+        return /^#[0-9a-f]{6}$/i.test(raw)
+          ? [1, 3, 5].map(index => parseInt(raw.slice(index, index + 2), 16) / 255)
+          : fallback;
+      };
+      const paper = color('--paper', [0.945, 0.955, 0.920]);
+      const card = color('--card', paper);
+      const soft = color('--teal-soft', card);
+      const nav = color('--nav', paper);
+      uniforms.uBaseLow.value.set(...paper);
+      uniforms.uBaseHigh.value.set(...card);
+      uniforms.uMint.value.set(...soft.map((value, index) => (value - paper[index]) * 0.22));
+      uniforms.uAqua.value.set(...nav.map((value, index) => (value - paper[index]) * 0.18));
+      uniforms.uAmber.value.set(...card.map((value, index) => (value - paper[index]) * 0.10));
+      glassUniforms.uTint.value.set(...soft);
+    }
 
     function roundedRadius(element, rect) {
       const raw = getComputedStyle(element).borderTopLeftRadius;
@@ -346,6 +397,7 @@ if (!canvas) {
       lastFrame = milliseconds;
       const ratio = Math.min(window.devicePixelRatio || 1, staticMode() ? 1 : 1.25);
       if (renderer.getPixelRatio() !== ratio) { renderer.setPixelRatio(ratio); lastWidth = 0; }
+      updatePalette();
       resize();
       if (shapesDirty) updateShapes();
       const seconds = staticMode() ? 0 : milliseconds * 0.001;
@@ -402,7 +454,7 @@ if (!canvas) {
       const textOnly = new Set(['sidebar-clock', 'class-clock-time', 'global-status']);
       if (records.some(record => !(record.type === 'childList' && textOnly.has(record.target.id) && [...record.addedNodes, ...record.removedNodes].every(node => node.nodeType === 3)))) invalidate();
     }).observe(document.getElementById('app-shell'), { childList: true, subtree: true, attributes: true, attributeFilter: ['class', 'data-dashboard-theme'] });
-    new MutationObserver(invalidate).observe(root, { attributes: true, attributeFilter: ['data-graphics-mode', 'data-window-visible'] });
+    new MutationObserver(invalidate).observe(root, { attributes: true, attributeFilter: ['data-graphics-mode', 'data-window-visible', 'data-color-theme'] });
     if ('ResizeObserver' in window) new ResizeObserver(invalidate).observe(document.getElementById('app-shell'));
     reducedMotion.addEventListener?.('change', invalidate);
     reducedTransparency.addEventListener?.('change', invalidate);

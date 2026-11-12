@@ -6,9 +6,11 @@ const vm = require('node:vm');
 const fs = require('node:fs');
 const path = require('node:path');
 const root = path.join(__dirname, '..');
-function harness({ native = true, hash = '#overview', saved = null, idle = false, themeEdition = false, online = true, appVersion = '1.0.0' } = {}) {
+function harness({ native = true, hash = '#overview', saved = null, idle = false, themeEdition = false, online = true, appVersion = '1.0.0', nativeAppearance = false, systemDark = false, initialAppearance = null } = {}) {
   const nodes = new Map(), listeners = {}, windowListeners = {}, intervals = [], sent = [], opened = [], store = new Map(), idleQueue = [], timeouts = [];
   let instant = Date.parse('2026-09-19T00:41:28Z');
+  const appearanceListeners = [];
+  const appearanceQuery = { matches: systemDark, addEventListener: (name, callback) => appearanceListeners.push(callback) };
   class Clock extends Date { constructor(...args) { super(...(args.length ? args : [instant])); } static now() { return instant; } }
   class Element {
     constructor(id = '') { this.id = id; this.dataset = {}; this.attributes={};this.tagName='DIV';this.style={};this.scrollTop=0;this.scrollLeft=0;this.selectionStart=0;this.selectionEnd=0;this.events = {}; this.value = ''; this.checked = false; this.open = false; this.writes = 0; this.children = []; this.textContent = ''; this.animations = []; this.classList = { toggle() {}, add() {}, remove() {} }; }
@@ -42,6 +44,8 @@ function harness({ native = true, hash = '#overview', saved = null, idle = false
   nodes.set('settings-nav', new Element('settings-nav'));
   if (saved) store.set('campusdesk.browser.v1', JSON.stringify(saved));
   const ctx = { Date: Clock, Intl, URL, URLSearchParams, Blob, CampusDeskThemeEdition: themeEdition, CampusDeskAppVersion: { version: appVersion, name: 'Orion' }, setTimeout: () => 1, clearTimeout() {}, setInterval: (cb, ms) => { intervals.push({ cb, ms }); return intervals.length; }, console,
+    CampusDeskNativeAppearance: nativeAppearance, CampusDeskSystemAppearance: systemDark ? 'dark' : 'light', CampusDeskInitialAppearanceSettings: initialAppearance,
+    matchMedia: query => query === '(prefers-color-scheme: dark)' ? appearanceQuery : { matches: false },
     location: { hash }, navigator: { onLine: online }, localStorage: { getItem: key => store.get(key), setItem: (key, value) => store.set(key, value) },
     setTimeout: callback => { timeouts.push(callback); return timeouts.length; },
     document: { documentElement: { dataset: {} }, getElementById: id => nodes.get(id) || null, querySelectorAll: () => [], querySelector: selector => selector === '.settings-nav' ? nodes.get('settings-nav') : null, createElement: () => new Element(), addEventListener: (event, cb) => (listeners[event] ||= []).push(cb) },
@@ -58,6 +62,7 @@ function harness({ native = true, hash = '#overview', saved = null, idle = false
   vm.runInContext(fs.readFileSync(path.join(root, 'Resources/graph.js'), 'utf8'), ctx);
   vm.runInContext(fs.readFileSync(path.join(root, 'Resources/dashboard.js'), 'utf8'), ctx);
   return { ctx, nodes, sent, opened, intervals, store,
+    setMediaDark: dark => { appearanceQuery.matches = dark; for (const callback of appearanceListeners) callback({ matches: dark }); },
     node: id => { const node = nodes.get(id); assert.ok(node, 'Missing rendered element: ' + id); return node; },
     click: dataset => { const element = new Element(); element.dataset = dataset; for (const listener of listeners.click || []) listener({ target: element }); },
     change: (id, data) => { const element = nodes.get(id); assert.ok(element, id); Object.assign(element, data); for (const listener of listeners.change || []) listener({ target: element }); },
@@ -2755,4 +2760,78 @@ test('unsupported calendar semantics leave the saved calendar and rendered event
     assert.doesNotMatch(app.node('content').innerHTML, /Must not partially import/);
     assert.match(app.node('toast').textContent, /校历导入失败.*暂不支持/);
   }
+});
+
+test('system appearance changes colors in place, preserving drafts and saved palette', () => {
+  const app = harness({ hash: '#settings', nativeAppearance: true });
+  app.click({ action: 'color-theme', theme: 'ocean' });
+  app.change('appearance-mode', { value: 'system' });
+  const saved = app.last('saveState').state;
+  const password = app.node('settings-easter-egg-password');
+  app.input(password.id, 'unfinished'); password.focus();
+  const main = app.node('content'), original = main.innerHTML;
+  const saves = app.sent.filter(item => item.action === 'saveState').length;
+  app.receive({ type: 'systemAppearance', dark: true });
+  assert.equal(app.node('app-shell').dataset.colorTheme, 'midnight');
+  assert.equal(app.ctx.document.documentElement.dataset.colorTheme, 'midnight');
+  assert.equal(app.node('content').innerHTML, original, 'do not rebuild the page on a system event');
+  assert.equal(app.node(password.id), password);
+  assert.equal(password.value, 'unfinished');
+  assert.equal(app.ctx.document.activeElement, password);
+  assert.equal(app.sent.filter(item => item.action === 'saveState').length, saves);
+  assert.equal(saved.settings.colorTheme, 'ocean');
+  assert.equal(saved.settings.dayColorTheme, 'ocean');
+  assert.equal(app.last('setAppearance').mode, 'system');
+  app.setMediaDark(false);
+  assert.equal(app.node('app-shell').dataset.colorTheme, 'midnight', 'native window media must not feed back into system appearance');
+  app.receive({ type: 'systemAppearance', dark: false });
+  assert.equal(app.node('app-shell').dataset.colorTheme, 'ocean');
+});
+
+test('manual themes ignore system changes and automatic mode remembers its daytime palette', () => {
+  const app = harness({ hash: '#settings', nativeAppearance: true });
+  app.click({ action: 'color-theme', theme: 'ember' });
+  app.receive({ type: 'systemAppearance', dark: true });
+  assert.equal(app.node('app-shell').dataset.colorTheme, 'ember');
+  app.change('appearance-mode', { value: 'system' });
+  assert.equal(app.node('app-shell').dataset.colorTheme, 'midnight');
+  app.click({ action: 'color-theme', theme: 'ocean' });
+  assert.equal(app.last('saveState').state.settings.appearanceMode, 'system');
+  assert.equal(app.node('app-shell').dataset.colorTheme, 'midnight');
+  app.receive({ type: 'systemAppearance', dark: false });
+  assert.equal(app.node('app-shell').dataset.colorTheme, 'ocean');
+  app.change('appearance-mode', { value: 'manual' });
+  assert.equal(app.node('app-shell').dataset.colorTheme, 'ember', 'daytime selection preserves the independent manual theme');
+  app.click({ action: 'color-theme', theme: 'midnight' });
+  app.receive({ type: 'systemAppearance', dark: false });
+  assert.equal(app.node('app-shell').dataset.colorTheme, 'midnight');
+  assert.equal(app.last('setAppearance').mode, 'manual');
+  app.change('appearance-mode', { value: 'system' });
+  assert.equal(app.node('app-shell').dataset.colorTheme, 'ocean');
+});
+
+test('automatic appearance survives saved-state reloads in browser mode', () => {
+  const app = harness({ native: false, hash: '#settings' });
+  app.click({ action: 'color-theme', theme: 'ember' });
+  app.change('appearance-mode', { value: 'system' });
+  app.setMediaDark(true);
+  assert.equal(app.node('app-shell').dataset.colorTheme, 'midnight');
+  const saved = JSON.parse(app.store.get('campusdesk.browser.v1'));
+  const reopened = harness({ native: false, hash: '#settings', saved, systemDark: true });
+  assert.equal(reopened.node('app-shell').dataset.colorTheme, 'midnight');
+  reopened.setMediaDark(false);
+  assert.equal(reopened.node('app-shell').dataset.colorTheme, 'ember');
+  reopened.change('app-language', { value: 'en-US' });
+  assert.match(reopened.node('content').innerHTML, /Follow macOS appearance/);
+  assert.match(reopened.node('content').innerHTML, /Daytime palette/);
+});
+
+test('native appearance bootstrap renders the saved theme before the first state event', () => {
+  const app = harness({ nativeAppearance: true, systemDark: true,
+    initialAppearance: { appearanceMode: 'system', colorTheme: 'ocean', dayColorTheme: 'ocean' } });
+  assert.equal(app.node('app-shell').dataset.colorTheme, 'midnight');
+  app.receive({ type: 'systemAppearance', dark: 'false' });
+  assert.equal(app.node('app-shell').dataset.colorTheme, 'midnight', 'malformed events do not change appearance');
+  app.receive({ type: 'systemAppearance', dark: false });
+  assert.equal(app.node('app-shell').dataset.colorTheme, 'ocean');
 });

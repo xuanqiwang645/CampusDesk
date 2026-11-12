@@ -21,6 +21,10 @@ campus_arch="$(uname -m)"
   -o "$campus_tests/dashboard-toolbar-smoke"
 "$campus_tests/dashboard-toolbar-smoke"
 /usr/bin/xcrun swiftc -swift-version 5 -O -target "$campus_arch-apple-macosx12.0" \
+  -framework AppKit -framework WebKit "$campus_root/Sources/DashboardAppearance.swift" "$campus_root/Tests/dashboard-appearance-smoke.swift" \
+  -o "$campus_tests/dashboard-appearance-smoke"
+"$campus_tests/dashboard-appearance-smoke"
+/usr/bin/xcrun swiftc -swift-version 5 -O -target "$campus_arch-apple-macosx12.0" \
   "$campus_root/Sources/NativeWorkQueue.swift" "$campus_root/Tests/native-work-queue-smoke.swift" \
   -o "$campus_tests/native-work-queue-smoke"
 "$campus_tests/native-work-queue-smoke"

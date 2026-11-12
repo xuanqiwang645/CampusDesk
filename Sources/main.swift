@@ -417,6 +417,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
     var window: NSWindow!
     var dashboard: WKWebView!
     var dashboardToolbar: DashboardToolbar?
+    var dashboardAppearance: CampusDashboardAppearance?
     var statusItem: NSStatusItem!
     var browsers: [String: SchoolBrowser] = [:]
     var workers: [String: SyncWorker] = [:]
@@ -547,13 +548,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         let appVersion = ["version": Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "", "name": Bundle.main.object(forInfoDictionaryKey: "CampusDeskReleaseName") as? String ?? ""]
         let bootstrap = "window.CampusDeskJSONStateSaves = true;window.CampusSchoolConfig = " + (json(schoolEndpoints.frontend) ?? "{}") + ";window.CampusDeskThemeEdition = " + (themeEdition ? "true" : "false") + ";window.CampusDeskAppVersion = " + (json(appVersion) ?? "{}") + ";"
         config.userContentController.addUserScript(WKUserScript(source: bootstrap, injectionTime: .atDocumentStart, forMainFrameOnly: true))
+        let appearanceSettings = CampusDashboardAppearanceSettings(state["settings"] as? [String: Any] ?? [:])
+        CampusDashboardAppearance.installBootstrap(in: config.userContentController, settings: appearanceSettings)
         dashboard = WKWebView(frame: .zero, configuration: config)
+        dashboard.underPageBackgroundColor = CampusDashboardAppearance.paperColor(theme: appearanceSettings.resolvedTheme(systemDark: CampusDashboardAppearance.systemIsDark))
         dashboard.navigationDelegate = self
         dashboard.uiDelegate = self
         window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1220, height: 850), styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
         window.title = campusDeskBundleIdentifier == "local.campusdesk.mac.themeedition" ? "CampusDesk · 主题版" : "CampusDesk · 学习看板"
         window.minSize = NSSize(width: 900, height: 640)
         window.isReleasedWhenClosed = false
+        dashboardAppearance = CampusDashboardAppearance(window: window, settings: appearanceSettings) { [weak self] dark in
+            self?.refreshAppearanceBootstrap()
+            self?.emit(["type": "systemAppearance", "dark": dark])
+        }
         window.contentView = dashboard
         dashboardToolbar = DashboardToolbar(window: window) { [weak self] id in
             guard let self, self.ready, self.stateBridge.awaitingImportRequestID == nil else { return }
@@ -765,6 +773,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         if widgetsSupported { widgetWriter.flush() }
     }
     @objc func wokeUp() {
+        dashboardAppearance?.refresh(force: true)
         updateCountdown()
         if stateDurable { queueWidgetProjection() }
         DispatchQueue.main.asyncAfter(deadline: .now() + 4) { [weak self] in self?.sync() }
@@ -1125,6 +1134,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
             self?.status(source, message, false)
         }
     }
+    func refreshAppearanceBootstrap() {
+        guard let dashboard else { return }
+        let settings = CampusDashboardAppearanceSettings(state["settings"] as? [String: Any] ?? [:])
+        CampusDashboardAppearance.installBootstrap(in: dashboard.configuration.userContentController, settings: settings)
+        dashboard.underPageBackgroundColor = CampusDashboardAppearance.paperColor(theme: settings.resolvedTheme(systemDark: CampusDashboardAppearance.systemIsDark))
+    }
+    func applyDashboardAppearanceFromState() {
+        dashboardAppearance?.apply(settings: CampusDashboardAppearanceSettings(state["settings"] as? [String: Any] ?? [:]))
+        refreshAppearanceBootstrap()
+    }
+    func applicationDidBecomeActive(_ notification: Notification) {
+        dashboardAppearance?.refresh(force: true)
+    }
     func emit(_ value: [String: Any]) {
         guard ready else { return }
         let generation = stateBridge.generation
@@ -1179,6 +1201,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
                                                         currentState: state, onImportFailure: emit) else { return }
         // Presentation updates also run while an import has disabled the page.
         if action == "updateDashboardToolbar" { dashboardToolbar?.update(body); return }
+        if action == "setAppearance" {
+            if dashboardAppearance?.apply(message: body) == true, let theme = body["theme"] as? String {
+                dashboard.underPageBackgroundColor = CampusDashboardAppearance.paperColor(theme: theme)
+            }
+            return
+        }
         if CampusStateBridgeBoundary.requiresCurrentState(action), !stateBridge.acceptsMutation(body["stateGeneration"]) {
             if let requestID = CampusStateBridgeBoundary.importRequestID(body) {
                 emit(["type": "importResult", "requestId": requestID, "success": false, "state": state,
@@ -1196,6 +1224,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
             stateBridge.dashboardReloaded()
             resumeAfterImportAcknowledgement = false
             ready = true; emit(["type": "schoolConfiguration", "config": schoolEndpoints.frontend]); emit(["type": "state", "state": state]); emitGraphStatus(); emitTeamsAutoStatus()
+            applyDashboardAppearanceFromState()
+            dashboardAppearance?.refresh(force: true)
             emitWindowVisibility()
             deliverAgendaNavigation()
             configureWidgets()
@@ -1408,7 +1438,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
             let wasReadingTeams = teamsBrowserAutomation
             let wasAutoDiscovering = teamsAutoDiscover
             let previousTeamsPages = json(teamsPages)
-            state = candidate.state; configureTimer()
+            state = candidate.state; applyDashboardAppearanceFromState(); configureTimer()
             if previousTeamsMode != teamsMode || previousIncludeChats != graphIncludeChats {
                 cancelGraphSync()
                 teamsBrowserBridge.cancel()
@@ -1785,7 +1815,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
                 }
                 teamsBrowserAccount = nil
             }
-            state = committed; stateDurable = true; graphSaveFailed = false
+            state = committed; applyDashboardAppearanceFromState(); stateDurable = true; graphSaveFailed = false
             queueWidgetProjection()
             graphProgress = [:]; importFailurePaused = false
             resumeAfterImportAcknowledgement = true

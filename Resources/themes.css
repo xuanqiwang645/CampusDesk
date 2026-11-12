@@ -96,10 +96,27 @@
 :root[data-color-theme="midnight"] .toast { background: #e7eff2; color: #172229; }
 :root[data-color-theme="midnight"] .grade-pie:after { box-shadow: 0 0 0 1px var(--line); }
 
+/* These older inset surfaces used light-only colors, even inside dark cards. */
+:root[data-color-theme="midnight"] :is(.brand, .brand-mark, .card-title .icon, .card .view-link, .button-plain, .gpa-forecast-metrics strong, .gpa-forecast-courses > div > b, .gp-results strong) { color: var(--accent-ink); }
+:root[data-color-theme="midnight"] :is(.appearance-option, .gpa-kline-plot, .gpa-kline-tools button, .gpa-kline-labels span, .gpa-kline-snap-value) { background: var(--card); border-color: var(--line); color: var(--ink); }
+:root[data-color-theme="midnight"] :is(.appearance-option:hover, .appearance-option.selected, .gpa-forecast-form, .gpa-forecast-status, .gpa-forecast-help, .gp-results > div, .gpa-kline-time-control) { background: var(--teal-soft); border-color: var(--line); }
+:root[data-color-theme="midnight"] .appearance-option.selected { border-color: var(--accent-ink); }
+:root[data-color-theme="midnight"] .color-theme-option.selected { border-color: var(--accent-ink); }
+:root[data-color-theme="midnight"] :is(.appearance-option small, .gpa-forecast-status, .gpa-forecast-help, .gpa-kline-time-heading, .gpa-kline-time-scale, .gpa-kline-legend, .gpa-kline-tools) { color: var(--muted); }
+:root[data-color-theme="midnight"] .gpa-kline-time-heading output { color: var(--accent-ink); }
+:root[data-color-theme="midnight"] .gpa-kline-averages { border-color: var(--line); }
+:root[data-color-theme="midnight"] .gpa-kline-averages strong { color: var(--ink); }
+:root[data-color-theme="midnight"] .gpa-kline-averages [data-ma-ready="false"] strong { color: var(--muted); }
+
 .color-theme-section { margin-top: 22px; padding-top: 19px; border-top: 1px solid var(--line); }
 .color-theme-section h3 { margin: 0 0 6px; font-size: 14px; color: var(--ink); }
 .color-theme-section > .settings-intro { margin: 0; }
 .color-theme-options { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin-top: 13px; }
+.color-theme-options[data-mode="system"] { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.appearance-mode-setting { gap: 16px; align-items: flex-start; border-color: var(--line); }
+.appearance-mode-setting > div { min-width: 0; }
+.appearance-mode-setting select { flex-shrink: 0; max-width: 100%; }
+.appearance-status { display: block; margin: 8px 0 19px; color: var(--muted); font-size: 11px; line-height: 1.6; overflow-wrap: anywhere; }
 .color-theme-option { min-width: 0; display: grid; grid-template-columns: 36px minmax(0, 1fr); grid-template-rows: auto auto; gap: 3px 9px; align-items: center; padding: 10px; text-align: left; border: 1px solid var(--line); border-radius: 12px; background: var(--card); color: var(--ink); cursor: pointer; }
 .color-theme-option:hover { border-color: var(--teal); }
 .color-theme-option.selected { border: 2px solid var(--teal); padding: 9px; box-shadow: 0 3px 12px color-mix(in srgb, var(--teal) 14%, transparent); }
@@ -133,8 +150,15 @@
 
 .sidebar > .brand { min-height: 42px; }
 @media (max-width: 580px) { .sidebar > .brand { min-height: 30px; } }
-@media (max-width: 900px) { .color-theme-options { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
-@media (max-width: 560px) { .color-theme-option { grid-template-columns: 30px minmax(0, 1fr); padding: 8px; } .color-theme-option.selected { padding: 7px; } .color-theme-preview { height: 28px; } }
+@media (max-width: 900px) { .color-theme-options, .color-theme-options[data-mode="system"] { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 560px) {
+  .appearance-mode-setting { flex-direction: column; gap: 10px; }
+  .appearance-mode-setting select { width: 100%; }
+  .color-theme-options[data-mode="system"] { grid-template-columns: minmax(0, 1fr); }
+  .color-theme-option { grid-template-columns: 30px minmax(0, 1fr); padding: 8px; }
+  .color-theme-option.selected { padding: 7px; }
+  .color-theme-preview { height: 28px; }
+}
 @media (prefers-reduced-motion: reduce) { .color-theme-option, .color-theme-option * { transition: none !important; animation: none !important; } }
 @media (prefers-reduced-transparency: reduce) {
   :root[data-color-theme] .app-shell[data-dashboard-theme="board"] .sidebar,
