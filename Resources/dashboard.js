@@ -1887,7 +1887,8 @@
       '<p id="settings-easter-egg-error" role="status" aria-live="polite">' + (settingsEasterEggError ? assistantCopy('密码不正确，再试一次。', 'Incorrect password. Try again.') : '') + '</p></form></section>';
     return '<section class="card settings-easter-egg" lang="zh-CN" translate="no" aria-labelledby="settings-easter-egg-title">' +
       '<div><h2 id="settings-easter-egg-title" tabindex="-1">你居然看到这里了？！</h2>' +
-      '<p>在这里，我十分感谢曹明选和张蕴然。</p><p>同时请记住：曹明选非常😋😋😋！！！</p></div>' +
+      '<p>在这里，我十分感谢曹明选和张蕴然。</p><p>同时请记住：曹明选非常😋😋😋！！！</p>' +
+      '<button class="button button-light settings-easter-egg-lock" type="button" data-action="settings-easter-egg-lock">' + assistantCopy('收起并锁定', 'Hide and lock') + '</button></div>' +
       '<img src="images/settings-easter-egg.png" width="351" height="388" alt="双手竖起大拇指的图片" loading="lazy" decoding="async"></section>';
   }
   function renderLanguageSettings() {
@@ -2834,6 +2835,10 @@
     window.scrollTo(saved.x,Math.max(0,y));
   }
   function render() {
+    if (page !== 'settings' || state.settings.focusMode) {
+      settingsEasterEggUnlocked = false;
+      settingsEasterEggError = false;
+    }
     if (dashboardHidden()) { backgroundRenderPending = true; return; }
     // The drawer owns only notification DOM. A live sync must not replace a
     // form or assistant draft underneath it, or steal its keyboard focus.
@@ -3129,7 +3134,13 @@
     if (!target) return;
     if (target.dataset.page) { navigate(target.dataset.page); return; }
     const action = target.dataset.action;
-    if (action === 'grade-notifications-open') {
+    if (action === 'settings-easter-egg-lock') {
+      settingsEasterEggUnlocked = false;
+      settingsEasterEggError = false;
+      render();
+      document.getElementById('settings-easter-egg-password')?.focus({ preventScroll: true });
+    }
+    else if (action === 'grade-notifications-open') {
       const dialog = document.getElementById('grade-notifications-dialog');
       if (dialog.open) { closeGradeNotifications(); return; }
       gradeNotificationsLimit = 40; showDialog('grade-notifications-dialog'); updateGradeNotifications();

@@ -266,3 +266,4 @@ html[data-native-toolbar="true"] .topbar .toolbar > button { display: none !impo
 .settings-easter-egg-controls button { flex-shrink: 0; }
 .settings-easter-egg #settings-easter-egg-error { font-size: 13px; }
 .settings-easter-egg #settings-easter-egg-error:empty { margin: 0; }
+.settings-easter-egg-lock { margin-top: 16px; }
