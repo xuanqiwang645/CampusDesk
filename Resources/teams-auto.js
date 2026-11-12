@@ -83,17 +83,17 @@
       var kind = helpers.classify(Object.assign({},record,{channel:channel}),{kind:'auto'});
       if (kind === 'assignment' && (!/[A-Za-z\u3400-\u9fff]/.test(body + instructions) || /^(?:ok(?:ay)?|thanks?|thank you|got it|done|好的?|收到|明白)[\s.!！。]*$/i.test(body))) kind = 'general';
       var itemURL = helpers.teamsURL(record.url,url) || url;
-      var clipped = body.length > LIMITS.text || instructions.length > LIMITS.text;
+      var clipped = record.truncated === true || body.length > LIMITS.text || instructions.length > LIMITS.text;
       if (clipped) out.coverageMetadata.textTruncated = true;
       out.posts.push({id:id,title:title,text:(body || instructions).slice(0,LIMITS.text),author:short(record.author,160) || null,
         recipient:scope.type === 'channel' ? short(scope.teamName,200) || null : scope.type === 'chat' ? short(scope.name,200) || null : null,
         channel:channel,date:helpers.exactDate(record.postedAt),dateLabel:short(record.dateLabel || record.postedAt,200) || null,url:itemURL,kind:kind,attachments:attachments,
-        nativeID:record.nativeID || null,textTruncated:clipped,messageType:record.messageType || 'message'});
+        nativeID:record.nativeID || null,textTruncated:clipped,messageType:record.messageType || 'message',officialAssignment:record.assignmentCard === true});
       if (kind === 'assignment') {
         var dueAt = helpers.exactDate(record.dueDatetime);
         var dueLine = helpers.deadlineLabel({dueLabel:record.dueLabel,instructions:instructions || body});
         out.tasks.push({id:id,title:title,course:channel,dueAt:dueAt,dueLabel:short(dueLine || (dueAt ? record.dueDatetime : ''),400) || null,
-          status:helpers.taskStatus(record.status),url:itemURL,requirements:(instructions || body).slice(0,LIMITS.text) || null,attachments:attachments});
+          status:helpers.taskStatus(record.status),url:itemURL,requirements:(instructions || body).slice(0,LIMITS.text) || null,attachments:attachments,officialAssignment:record.assignmentCard === true,sourceIncomplete:clipped});
       }
     });
     out.warnings.push('浏览器同步覆盖已发现并加载的内容；历史、回复和附件正文尚不能视为全部读取。');

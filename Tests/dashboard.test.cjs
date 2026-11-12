@@ -1557,7 +1557,7 @@ test('to-do deadline icons distinguish upcoming, overdue and unknown dates witho
   assert.match(html, /截止时间未标明/);
   assert.equal(app.sent.filter(item => item.action === 'syncReminders').at(-1)?.items.length ?? 0, 0);
   app.click({ page: 'settings' });
-  assert.match(app.node('content').innerHTML, /id="reminder-settings"[\s\S]*?Teams 作业提醒/);
+  assert.match(app.node('content').innerHTML, /id="reminder-settings"[\s\S]*?Teams 待办提醒/);
 });
 
 test('reminder glyph dimensions and state colors remain legible', () => {

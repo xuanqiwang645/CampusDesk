@@ -26,18 +26,26 @@ final class CampusAgendaSnapshotBuilder {
     }
 
     // Keep the inputs to CampusCore.getTasks/getSchedule and the calendar.
-    // Unrelated histories, Teams posts and feedback can be several MiB.
+    // Unrelated histories stay outside the projection. When Teams analysis is
+    // enabled, its exact source evidence is required to reject stale results.
     private func reader(for state: [String: Any]) throws -> JSValue {
         guard let sources = state["snapshots"] as? [String: [String: [String: Any]]],
               let settings = state["settings"] as? [String: Any] else { throw CampusAgendaSnapshotError.invalid }
-        var input = state.filter { ["manualTasks", "personalEvents", "taskChecks", "schoolCalendar"].contains($0.key) }
+        let analysisNeeded = settings["teamsAnalysisEnabled"] as? Bool == true || !(state["teamsAnalysisOverrides"] as? [String: Any] ?? [:]).isEmpty
+        var input = state.filter { ["manualTasks", "personalEvents", "taskChecks", "schoolCalendar", "teamsAnalysis", "teamsAnalysisOverrides"].contains($0.key) }
         input["settings"] = settings.filter {
             ["timezone", "selfStudy", "scheduleWeekAnchor", "scheduleHolidays", "scheduleOverrides",
-             "customLessons", "teamsDueOverrides", "gpaTermDates"].contains($0.key)
+             "customLessons", "teamsDueOverrides", "gpaTermDates", "teamsAnalysisEnabled", "aiModel"].contains($0.key)
         }
         input["snapshots"] = sources.mapValues { pages in
             pages.mapValues { page in
-                page.filter { ["accountId", "url", "capturedAt", "schedule", "calendarDates", "periods", "tasks", "courses"].contains($0.key) }
+                var projected = page.filter { ["accountId", "url", "capturedAt", "schedule", "calendarDates", "periods", "tasks", "courses"].contains($0.key) }
+                if analysisNeeded {
+                    for key in ["posts", "feedback", "grades"] { projected[key] = page[key] }
+                } else if let posts = page["posts"] as? [[String: Any]] {
+                    projected["posts"] = posts.map { $0.filter { ["id", "officialAssignment"].contains($0.key) } }
+                }
+                return projected
             }
         }
         let comparable = input as NSDictionary

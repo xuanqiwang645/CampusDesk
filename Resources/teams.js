@@ -187,13 +187,13 @@
         if (!attachments.some(x=>x.url===safe)) attachments.push({title:clean(attachment.title).slice(0,200) || '附件',url:safe});
       }
       result.posts.push({id,title:title.slice(0,160) || 'Teams 消息',text:body || instructions,author:clean(item.author).slice(0,160) || null,
-        channel,date:exactDate(item.postedAt),dateLabel:clean(item.dateLabel || item.postedLabel || item.postedAt).slice(0,200) || null,url:itemURL,kind,attachments});
+        channel,date:exactDate(item.postedAt),dateLabel:clean(item.dateLabel || item.postedLabel || item.postedAt).slice(0,200) || null,url:itemURL,kind,attachments,officialAssignment:item.assignmentCard === true});
       if (kind !== 'assignment') continue;
       const dueLabel = deadlineLabel(item);
       // Message publication timestamps are deliberately never used as deadlines.
       const dueAt = exactDate(item.dueDatetime);
       result.tasks.push({id,title:title.slice(0,160) || 'Teams 作业',course:channel,dueAt,dueLabel:dueLabel || (dueAt ? clean(item.dueDatetime) : null),
-        status:taskStatus(item.status),url:itemURL,requirements:instructions || body || null,attachments});
+        status:taskStatus(item.status),url:itemURL,requirements:instructions || body || null,attachments,officialAssignment:item.assignmentCard === true});
       if (dueLabel && !dueAt) warn('部分截止时间缺少年份或时区，仅保留原文；请在 Teams 中核对。');
     }
     if (!result.posts.length) {

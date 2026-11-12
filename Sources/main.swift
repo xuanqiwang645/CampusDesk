@@ -448,6 +448,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
     var pendingGraphBatches = Set<String>()
     var assistantRequestsInFlight = Set<String>()
     var assistantRequestHandles: [String: AssistantRequestHandle] = [:]
+    var teamsAnalysisWork = TeamsAnalysisWorkBoundary()
+    var teamsAnalysisHandle: AssistantRequestHandle?
+    var teamsAnalysisSuspended = false
+    var teamsAnalysisCooldown: (until: Date, error: TeamsAnalysisError)?
+    var taskReviewWork = TaskReviewWorkBoundary()
+    var taskReviewHandle: AssistantRequestHandle?
+    var taskReviewReceipt: TaskReviewNotificationReceipt?
+    var taskReviewTimer: Timer?
     var assistantModelRequestsInFlight = Set<String>()
     var assistantKeyRecoveryInFlight = false
     var pendingGraphCheckpoint: [String: Any]?
@@ -580,6 +588,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         dashboard.loadFileURL(resources.appendingPathComponent("index.html"), allowingReadAccessTo: resources)
         notifications.onEvent = { [weak self] event in self?.emit(event) }
         notifications.onOpen = { [weak self] raw in self?.openSource("teams", raw: raw) }
+        notifications.onOpenTasks = { [weak self] in
+            guard let self else { return }
+            self.pendingWidgetTasks = true; self.showDashboard(); self.deliverAgendaNavigation()
+        }
         configureGraph()
         configureTeamsAuto()
 
@@ -682,6 +694,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         return alert.runModal() == .alertFirstButtonReturn ? .terminateCancel : .terminateNow
     }
     func applicationWillTerminate(_ notification: Notification) {
+        cancelBackgroundAnalysis()
         calendarImportRequest.cancel()
         assistantRequestHandles.values.forEach { $0.cancel() }
         assistantRequestHandles.removeAll()
@@ -692,6 +705,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         flushPendingStateWrites()
         teamsStatusWriter.flush()
         widgetTimer?.invalidate()
+        taskReviewTimer?.invalidate()
         if widgetsSupported { widgetWriter.flush() }
     }
     @objc func showDashboard() { window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true) }
@@ -765,6 +779,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         else { runTeamsBrowser("sync") }
     }
     @objc func willSleep() {
+        teamsAnalysisSuspended = true
+        cancelBackgroundAnalysis(notify: true, temporary: true)
         stopTeamsAuto(message: "Mac 已休眠，已保留读取结果；唤醒后继续检查")
         teamsBrowserBridge.cancel(); cancelGraphSync()
         workers.values.forEach { $0.cancel() }
@@ -773,6 +789,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         if widgetsSupported { widgetWriter.flush() }
     }
     @objc func wokeUp() {
+        teamsAnalysisSuspended = false
+        emitTaskReviewTick()
         dashboardAppearance?.refresh(force: true)
         updateCountdown()
         if stateDurable { queueWidgetProjection() }
@@ -1070,6 +1088,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         }
         let cachedAccountMismatch = CampusTeamsAccountState.needsReset(state, browserAccount: account)
         if teamsBrowserAccount == account && !cachedAccountMismatch { return true }
+        cancelBackgroundAnalysis()
         do {
             if cachedAccountMismatch || (teamsBrowserAccount != nil && teamsBrowserAccount != account) {
                 guard let encoded = json(state) else { throw StateReadError.invalid }
@@ -1133,6 +1152,159 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
             else { message = warnings.first.map { "读取完成，但有提示：" + $0 } ?? "已读取当前页" }
             self?.status(source, message, false)
         }
+    }
+    var teamsAnalysisSettings: [String: Any] { state["settings"] as? [String: Any] ?? [:] }
+    var teamsAnalysisEnabled: Bool { teamsAnalysisSettings["teamsAnalysisEnabled"] as? Bool == true }
+    var teamsAnalysisAccountScope: String {
+        if teamsMode == "browser" { return "browser:" + teamsBrowserChoice + ":" + (teamsBrowserAccount ?? "unbound") }
+        let identity = currentGraphIdentity() ?? [:]
+        return "graph:" + ["accountID", "clientId", "tenant"].map { identity[$0] ?? "" }.joined(separator: "|")
+    }
+    func emitTeamsAnalysisFailure(_ batch: TeamsAnalysisBatch, _ error: TeamsAnalysisError) {
+        var event: [String: Any] = ["type": "teamsAnalysisResult", "requestId": batch.requestID,
+            "phase": batch.phase, "model": batch.model, "success": false, "errorCode": error.code, "message": error.message]
+        if let seconds = error.retryAfterSeconds { event["retryAfterSeconds"] = seconds }
+        emit(event)
+    }
+    func cancelTeamsAnalysis(notify: Bool = false, requestID: String? = nil, temporary: Bool = false) {
+        guard let active = teamsAnalysisWork.active, requestID == nil || requestID == active.batch.requestID else { return }
+        teamsAnalysisWork.cancel()
+        let handle = teamsAnalysisHandle; teamsAnalysisHandle = nil; handle?.cancel()
+        if notify && stateBridge.matches(active.generation) {
+            emitTeamsAnalysisFailure(active.batch, TeamsAnalysisError(code: temporary ? "busy" : "cancelled", retryAfterSeconds: temporary ? 5 : nil))
+        }
+    }
+    func startTeamsAnalysis(_ body: [String: Any]) {
+        guard campusDeskBundleIdentifier == "local.campusdesk.mac.themeedition" else { return }
+        let batch: TeamsAnalysisBatch
+        do { batch = try TeamsAnalysisBatch(body) }
+        catch {
+            if let requestID = body["requestId"] as? String, TeamsAnalysisBatch.validRequestID(requestID),
+               let phase = body["phase"] as? String, ["summarize", "classify"].contains(phase),
+               let model = body["model"] as? String, model.utf8.count <= 100 {
+                let error = TeamsAnalysisError(code: "invalidRequest")
+                emit(["type": "teamsAnalysisResult", "requestId": requestID, "phase": phase, "model": model,
+                      "success": false, "errorCode": error.code, "message": error.message])
+            }
+            return
+        }
+        if let error = teamsAnalysisWork.admissionError(settings: teamsAnalysisSettings, model: batch.model,
+            chatBusy: !assistantRequestsInFlight.isEmpty || taskReviewWork.active != nil, suspended: teamsAnalysisSuspended, keyRecovery: assistantKeyRecoveryInFlight) {
+            emitTeamsAnalysisFailure(batch, error); return
+        }
+        if let cooldown = teamsAnalysisCooldown, cooldown.until > Date() {
+            var error = cooldown.error; error.retryAfterSeconds = max(1, Int(ceil(cooldown.until.timeIntervalSinceNow)))
+            emitTeamsAnalysisFailure(batch, error); return
+        }
+        guard let ticket = teamsAnalysisWork.begin(batch, generation: stateBridge.generation, account: teamsAnalysisAccountScope) else { return }
+        teamsAnalysisHandle = CampusAssistantAI.analyzeTeams(batch) { [weak self] result in
+            DispatchQueue.main.async {
+                guard let self, self.teamsAnalysisWork.owns(ticket) else { return }
+                self.teamsAnalysisHandle = nil
+                guard self.teamsAnalysisWork.finish(ticket, generation: self.stateBridge.generation,
+                    account: self.teamsAnalysisAccountScope, model: TeamsAnalysisBatch.effectiveModel(settings: self.teamsAnalysisSettings),
+                    enabled: self.teamsAnalysisEnabled && self.stateBridge.acceptsMutation(ticket.generation)) else { return }
+                switch result {
+                case .success(let results):
+                    self.emit(["type": "teamsAnalysisResult", "requestId": batch.requestID, "phase": batch.phase,
+                               "model": batch.model, "success": true, "results": results])
+                case .failure(let error):
+                    if let seconds = error.retryAfterSeconds, ["rateLimited", "serviceUnavailable", "network"].contains(error.code) {
+                        self.teamsAnalysisCooldown = (Date().addingTimeInterval(TimeInterval(seconds)), error)
+                    }
+                    self.emitTeamsAnalysisFailure(batch, error)
+                }
+            }
+        }
+    }
+    var taskReviewEnabled: Bool { teamsAnalysisSettings["taskReviewEnabled"] as? Bool == true }
+    func emitTaskReviewFailure(_ batch: TaskReviewBatch, _ error: TeamsAnalysisError) {
+        var event: [String: Any] = ["type": "taskReviewResult", "requestId": batch.requestID, "model": batch.model,
+            "success": false, "errorCode": error.code,
+            "message": error.code == "disabled" ? "定时学习提醒已关闭，未发送内容。" : error.message]
+        if let seconds = error.retryAfterSeconds { event["retryAfterSeconds"] = seconds }
+        emit(event)
+    }
+    func cancelTaskReview(notify: Bool = false, requestID: String? = nil, temporary: Bool = false) {
+        if requestID == nil || taskReviewReceipt?.ticket.batch.requestID == requestID { taskReviewReceipt = nil }
+        guard let active = taskReviewWork.active, requestID == nil || requestID == active.batch.requestID else { return }
+        taskReviewWork.cancel()
+        let handle = taskReviewHandle; taskReviewHandle = nil; handle?.cancel()
+        if notify && stateBridge.matches(active.generation) {
+            emitTaskReviewFailure(active.batch, TeamsAnalysisError(code: temporary ? "busy" : "cancelled", retryAfterSeconds: temporary ? 5 : nil))
+        }
+    }
+    func cancelBackgroundAnalysis(notify: Bool = false, temporary: Bool = false) {
+        cancelTeamsAnalysis(notify: notify, temporary: temporary); cancelTaskReview(notify: notify, temporary: temporary)
+        notifications.cancelTaskReviewNotifications()
+    }
+    func startTaskReview(_ body: [String: Any]) {
+        guard campusDeskBundleIdentifier == "local.campusdesk.mac.themeedition" else { return }
+        let batch: TaskReviewBatch
+        do { batch = try TaskReviewBatch(body) }
+        catch {
+            if let id = body["requestId"] as? String, TeamsAnalysisBatch.validRequestID(id),
+               let model = body["model"] as? String, model.utf8.count <= 100 {
+                let error = TeamsAnalysisError(code: "invalidRequest")
+                emit(["type": "taskReviewResult", "requestId": id, "model": model, "success": false,
+                      "errorCode": error.code, "message": error.message])
+            }
+            return
+        }
+        if let error = taskReviewWork.admissionError(settings: teamsAnalysisSettings, model: batch.model,
+            otherBusy: !assistantRequestsInFlight.isEmpty || teamsAnalysisWork.active != nil,
+            suspended: teamsAnalysisSuspended, keyRecovery: assistantKeyRecoveryInFlight) {
+            emitTaskReviewFailure(batch, error); return
+        }
+        if let cooldown = teamsAnalysisCooldown, cooldown.until > Date() {
+            var error = cooldown.error; error.retryAfterSeconds = max(1, Int(ceil(cooldown.until.timeIntervalSinceNow)))
+            emitTaskReviewFailure(batch, error); return
+        }
+        guard let ticket = taskReviewWork.begin(batch, generation: stateBridge.generation, account: teamsAnalysisAccountScope) else { return }
+        taskReviewReceipt = nil
+        taskReviewHandle = CampusAssistantAI.reviewTasks(batch) { [weak self] result in
+            DispatchQueue.main.async {
+                guard let self, self.taskReviewWork.owns(ticket) else { return }
+                self.taskReviewHandle = nil
+                guard self.taskReviewWork.finish(ticket, generation: self.stateBridge.generation,
+                    account: self.teamsAnalysisAccountScope, model: TeamsAnalysisBatch.effectiveModel(settings: self.teamsAnalysisSettings),
+                    enabled: self.taskReviewEnabled && self.stateBridge.acceptsMutation(ticket.generation)) else { return }
+                switch result {
+                case .success(let result):
+                    self.taskReviewReceipt = TaskReviewNotificationReceipt(ticket: ticket, result: result)
+                    self.emit(["type": "taskReviewResult", "requestId": batch.requestID, "model": batch.model, "success": true, "result": result])
+                case .failure(let error):
+                    if let seconds = error.retryAfterSeconds, ["rateLimited", "serviceUnavailable", "network"].contains(error.code) {
+                        self.teamsAnalysisCooldown = (Date().addingTimeInterval(TimeInterval(seconds)), error)
+                    }
+                    self.emitTaskReviewFailure(batch, error)
+                }
+            }
+        }
+    }
+    func notifyTaskReview(_ body: [String: Any]) {
+        guard let requestID = body["requestId"] as? String, TeamsAnalysisBatch.validRequestID(requestID),
+              let taskIDs = body["taskIDs"] as? [String], (1...3).contains(taskIDs.count), Set(taskIDs).count == taskIDs.count,
+              taskReviewReceipt?.ticket.batch.requestID == requestID else { return }
+        notifications.notifyTaskReview(requestID: requestID) { [weak self] in
+            guard let self, var receipt = self.taskReviewReceipt, !self.teamsAnalysisSuspended,
+                  self.stateBridge.acceptsMutation(receipt.ticket.generation), self.taskReviewEnabled,
+                  let unfinished = try? nativeStateValidator.get().unfinishedTasks(self.state, among: taskIDs, schools: schoolEndpoints.frontend) else { return nil }
+            let content = receipt.consume(requestID: requestID, taskIDs: taskIDs, generation: self.stateBridge.generation,
+                account: self.teamsAnalysisAccountScope, model: TeamsAnalysisBatch.effectiveModel(settings: self.teamsAnalysisSettings),
+                enabled: self.taskReviewEnabled, unfinished: unfinished)
+            self.taskReviewReceipt = receipt
+            return content
+        }
+    }
+    func configureTaskReviewTimer() {
+        guard taskReviewTimer == nil, campusDeskBundleIdentifier == "local.campusdesk.mac.themeedition" else { return }
+        let timer = Timer(timeInterval: 60, repeats: true) { [weak self] _ in self?.emitTaskReviewTick() }
+        timer.tolerance = 5; RunLoop.main.add(timer, forMode: .common); taskReviewTimer = timer
+    }
+    func emitTaskReviewTick() {
+        guard ready, taskReviewEnabled, !teamsAnalysisSuspended, stateBridge.acceptsMutation(stateBridge.generation) else { return }
+        emit(["type": "taskReviewTick"])
     }
     func refreshAppearanceBootstrap() {
         guard let dashboard else { return }
@@ -1218,8 +1390,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
             importFailurePaused = false
         }
         switch action {
+        case "teamsAnalyze": startTeamsAnalysis(body)
+        case "teamsAnalysisCancel":
+            if body["requestId"] == nil || body["requestId"] is String { cancelTeamsAnalysis(notify: true, requestID: body["requestId"] as? String) }
+        case "taskReviewAnalyze": startTaskReview(body)
+        case "taskReviewCancel":
+            if body["requestId"] == nil || body["requestId"] is String { cancelTaskReview(notify: true, requestID: body["requestId"] as? String) }
+        case "taskReviewNotify": notifyTaskReview(body)
         case "focusDashboardNotifications": dashboardToolbar?.focusNotifications()
         case "ready":
+            cancelBackgroundAnalysis()
             calendarImportRequest.cancel()
             stateBridge.dashboardReloaded()
             resumeAfterImportAcknowledgement = false
@@ -1229,6 +1409,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
             emitWindowVisibility()
             deliverAgendaNavigation()
             configureWidgets()
+            configureTaskReviewTimer()
+            emitTaskReviewTick()
             if assistantKeyRecoveryInFlight { emit(["type": "assistantStatus", "deepSeekKeyConfigured": true, "deepSeekKeyState": "locked"]) }
             else { emit(CampusAssistantAI.status()) }
             configureTimer()
@@ -1276,6 +1458,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
             guard campusDeskBundleIdentifier == "local.campusdesk.mac.themeedition", !assistantKeyRecoveryInFlight, let key = body["key"] as? String else { return }
             do {
                 try CampusAssistantAI.saveDeepSeekKey(key)
+                cancelBackgroundAnalysis(notify: true); teamsAnalysisCooldown = nil
                 var event = CampusAssistantAI.status(); event["notice"] = "keySaved"
                 emit(event)
             } catch let error as AssistantError {
@@ -1288,6 +1471,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         case "assistantDeleteDeepSeekKey":
             guard campusDeskBundleIdentifier == "local.campusdesk.mac.themeedition", !assistantKeyRecoveryInFlight else { return }
             let removed = CampusAssistantAI.deleteDeepSeekKey()
+            if removed { cancelBackgroundAnalysis(notify: true); teamsAnalysisCooldown = nil }
             var event = CampusAssistantAI.status()
             if removed { event["notice"] = "keyDeleted" } else { event["errorCode"] = "keyStore" }
             emit(event)
@@ -1362,6 +1546,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
                 emit(["type": "assistantResponse", "requestId": requestID, "errorCode": "keyAccess"]); return
             }
             assistantRequestsInFlight.insert(requestID)
+            // Interactive chat gets priority over optional background jobs.
+            cancelTeamsAnalysis(notify: true, temporary: true)
+            cancelTaskReview(notify: true, temporary: true)
             let handle = CampusAssistantAI.request(provider: provider, model: model, fallbackModel: fallbackModel, networkAvailable: networkAvailable, messages: messages, onChunk: { [weak self] chunk in
                 DispatchQueue.main.async {
                     guard let self, self.assistantRequestsInFlight.contains(requestID) else { return }
@@ -1439,6 +1626,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
             let wasAutoDiscovering = teamsAutoDiscover
             let previousTeamsPages = json(teamsPages)
             state = candidate.state; applyDashboardAppearanceFromState(); configureTimer()
+            if let active = teamsAnalysisWork.active, !teamsAnalysisEnabled ||
+                active.batch.model != TeamsAnalysisBatch.effectiveModel(settings: teamsAnalysisSettings) || active.account != teamsAnalysisAccountScope {
+                cancelTeamsAnalysis(notify: true)
+            }
+            if let active = taskReviewWork.active, !taskReviewEnabled ||
+                active.batch.model != TeamsAnalysisBatch.effectiveModel(settings: teamsAnalysisSettings) || active.account != teamsAnalysisAccountScope {
+                cancelTaskReview(notify: true)
+            }
+            if let receipt = taskReviewReceipt, !taskReviewEnabled ||
+                receipt.ticket.batch.model != TeamsAnalysisBatch.effectiveModel(settings: teamsAnalysisSettings) || receipt.ticket.account != teamsAnalysisAccountScope {
+                taskReviewReceipt = nil; notifications.cancelTaskReviewNotifications()
+            }
             if previousTeamsMode != teamsMode || previousIncludeChats != graphIncludeChats {
                 cancelGraphSync()
                 teamsBrowserBridge.cancel()
@@ -1635,6 +1834,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         pendingGraphBatches.removeAll(); pendingGraphCheckpoint = nil
     }
     func resetTeamsData() {
+        cancelBackgroundAnalysis()
         cancelGraphSync()
         flushPendingStateWrites()
         stateBridge.replaceState()
@@ -1789,6 +1989,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         }
     }
     func commitStateImport(_ candidate: [String: Any], requestID: String) {
+        cancelBackgroundAnalysis()
         stateBridge.beginImport(requestID)
         resumeAfterImportAcknowledgement = false
         importFailurePaused = true
@@ -1986,6 +2187,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
     func clearSession(_ source: String) {
         guard let hosts = sourceHosts[source] else { status(source, CampusSchoolConfiguration.help, false); return }
         if source == "teams" {
+            cancelBackgroundAnalysis(notify: true)
             if teamsMode == "graph" { signOutGraph(); return }
             stopTeamsAuto(message: "正在退出 Teams，自动读取已停止")
             teamsBrowserBridge.cancel()

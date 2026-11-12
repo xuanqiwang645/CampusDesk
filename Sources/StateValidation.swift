@@ -76,6 +76,12 @@ final class CampusStateValidator {
             return {encoded: JSON.stringify(value)};
           } catch (error) { return {error: String(error.message || error)}; }
         }
+        function __campusUnfinishedTasks(encoded, ids, schools) {
+          CampusCore.configureSchools(JSON.parse(schools));
+          const wanted = new Set(ids);
+          return CampusCore.getTasks(JSON.parse(encoded)).filter(task => !task.completed && wanted.has(task.id))
+            .map(task => ({id: task.id, title: task.title}));
+        }
         """)
         guard context.exception == nil else {
             throw CampusStateValidationError(message: "数据校验器未能初始化。")
@@ -84,6 +90,24 @@ final class CampusStateValidator {
 
     func validate(_ state: [String: Any], schools: [String: String] = [:]) throws -> [String: Any] {
         try run("validate", value: state, schools: schools)
+    }
+
+    /// Reuse the actual task gate so deleted, completed and reclassified tasks
+    /// cannot leak into a delayed reminder. No school data leaves this process.
+    func unfinishedTasks(_ state: [String: Any], among ids: [String], schools: [String: String] = [:]) throws -> [String: String] {
+        guard (1...3).contains(ids.count), Set(ids).count == ids.count, ids.allSatisfy({ $0.utf16.count <= 1024 }) else {
+            throw CampusStateValidationError(message: "待办提醒标识无效。")
+        }
+        let encoded = String(decoding: try Self.encode(state), as: UTF8.self)
+        let schoolJSON = String(decoding: try JSONSerialization.data(withJSONObject: schools), as: UTF8.self)
+        lock.lock(); defer { lock.unlock() }; context.exception = nil
+        guard let value = context.objectForKeyedSubscript("__campusUnfinishedTasks")?.call(withArguments: [encoded, ids, schoolJSON]),
+              context.exception == nil, let rows = value.toArray() as? [[String: String]] else {
+            throw CampusStateValidationError(message: "无法核对当前待办，未发送提醒。")
+        }
+        var result = [String: String]()
+        for row in rows { if let id = row["id"], ids.contains(id), let title = row["title"] { result[id] = title } }
+        return result
     }
 
     func prepare(_ state: [String: Any], schools: [String: String] = [:]) throws -> PreparedState {

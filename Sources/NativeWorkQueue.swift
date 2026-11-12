@@ -219,6 +219,6 @@ struct CampusStateBridgeBoundary {
         ["state", "snapshot", "graphBatch", "graphReset", "teamsAttachment", "teamsAttachmentUnchanged",
          "pinTeamsPage", "schoolConfiguration", "schoolConfigurationError", "schoolCalendarFile",
          "schoolCalendarPDF", "schoolCalendarFileError", "import", "importResult", "graphStatus",
-         "teamsAutoStatus", "status"].contains(type)
+         "teamsAutoStatus", "teamsAnalysisResult", "taskReviewResult", "taskReviewTick", "status"].contains(type)
     }
 }

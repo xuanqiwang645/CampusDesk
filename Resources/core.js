@@ -19,6 +19,7 @@
   const timeZoneFormatters = new Map();
   let configuredSchools = { seiue: '', managebac: '' };
   const snapshotEntriesCache = new WeakMap();
+  const teamsAnalysisInputsCache = new WeakMap();
   function configureSchools(config) {
     const next = { seiue: '', managebac: '' };
     for (const source of ['seiue', 'managebac']) {
@@ -501,9 +502,9 @@
     const state = { version: VERSION, settings: { timezone: 'Asia/Shanghai', refreshMinutes: 15, selfStudy: true,
       seiueURL: configuredSchools.seiue, managebacURL: configuredSchools.managebac, teamsPages: [], teamsNotifications: false,
       teamsBrowser: 'chrome', teamsBrowserAutomation: false, teamsMode: 'browser', teamsAutoDiscover: true, graphIncludeChats: true,
-      reminderMinutes: 30, reminderSubjects: [], reminderSubjectsMuted: false, teamsDueOverrides: {}, dashboardTheme: 'classic', colorTheme: 'sage', appearanceMode: 'manual', dayColorTheme: 'sage', gpaCandleColors: 'red-up', language: 'zh-CN', focusSubjects: [], focusTeamsChannels: [], customLessons: [],
+      reminderMinutes: 30, reminderSubjects: [], reminderSubjectsMuted: false, teamsDueOverrides: {}, teamsAnalysisEnabled: false, taskReviewEnabled: false, taskReviewIntervalHours: 2, taskReviewEnabledAt: null, dashboardTheme: 'classic', colorTheme: 'sage', appearanceMode: 'manual', dayColorTheme: 'sage', gpaCandleColors: 'red-up', language: 'zh-CN', focusSubjects: [], focusTeamsChannels: [], customLessons: [],
       scheduleHolidays: [], scheduleWeekAnchor: '', scheduleOverrides: [], focusMode: false, graphicsMode: 'auto', planOrder: [], taskMinutes: {}, taskPriority: {}, gradeGoals: {}, gradePlans: {}, gpaTermDates: {}, ecIdentityNames: [] }, snapshots: { seiue: {}, managebac: {}, teams: {} },
-      manualTasks: [], personalEvents: [], taskChecks: {}, feedbackRead: {}, gradeHistory: [], gradeUpdates: [], gradeUpdateRead: {}, gradeUpdateBaselines: [], gradeUpdateCaptures: [], changeLog: [], schoolCalendar: { fileName: '', importedAt: '', events: [] } };
+      manualTasks: [], personalEvents: [], taskChecks: {}, teamsAnalysis: {}, teamsAnalysisOverrides: {}, taskReview: normalizeTaskReview(), feedbackRead: {}, gradeHistory: [], gradeUpdates: [], gradeUpdateRead: {}, gradeUpdateBaselines: [], gradeUpdateCaptures: [], changeLog: [], schoolCalendar: { fileName: '', importedAt: '', events: [] } };
     if (themeEdition) {
       Object.assign(state.settings, { aiProvider: 'off', aiModel: '', aiOllamaModel: 'qwen3:8b', aiContextCategories: ['tasks', 'schedule'], setupWizardCompleted: false, setupWizardStep: 0, setupWizardIntroVersion: '' });
       state.assistantConversations = [];
@@ -607,7 +608,11 @@
       title, course, dueAt, dueLabel: str(row.dueLabel, 300), status: str(row.status, 100, 'open'),
       url: checkedURL(row.url, 'managebac', true) };
     if (row.dueTerm !== undefined) result.dueTerm = str(row.dueTerm, 200);
-    if (manual) result.createdAt = dateISO(row.createdAt, true);
+    if (manual) {
+      result.createdAt = dateISO(row.createdAt, true);
+      result.category = row.category === undefined ? 'homework' : row.category;
+      if (!['homework', 'activity'].includes(result.category)) fail('待办分类无效');
+    }
     return result;
   }
   // Personal calendar dates use inclusive endDate in the editor. Timed events
@@ -729,6 +734,8 @@
       url, requirements: str(row.requirements, 30000), attachments: attachments(row.attachments) };
     if (row.capturedAt !== undefined) result.capturedAt = dateISO(row.capturedAt, false);
     if (row.submissionStatus !== undefined) result.submissionStatus = str(row.submissionStatus, 100);
+    if (row.officialAssignment !== undefined) result.officialAssignment = bool(row.officialAssignment, false);
+    if (row.sourceIncomplete !== undefined) result.sourceIncomplete = bool(row.sourceIncomplete, false);
     Object.assign(result, gradeFields(row));
     if (row.graphProvidedFields !== undefined) result.graphProvidedFields = array(row.graphProvidedFields, 'Graph 字段', 3).map(field => {
       if (!['instructions', 'resources', 'submissions'].includes(field)) fail('Graph 字段无效');
@@ -746,6 +753,10 @@
       author: str(row.author, 300), recipient: str(row.recipient, 300), channel: str(row.channel, 300), date: str(row.date, 100),
       dateLabel: str(row.dateLabel, 300, str(row.date, 100)), attachments: attachments(row.attachments) };
     if (row.replyToId !== undefined) result.replyToId = row.replyToId ? teamsID(row.replyToId) : '';
+    if (row.officialAssignment !== undefined) result.officialAssignment = bool(row.officialAssignment, false);
+    if (row.textTruncated !== undefined) result.textTruncated = bool(row.textTruncated, false);
+    if (row.nativeID !== undefined) result.nativeID = str(row.nativeID, 512);
+    if (row.messageType !== undefined) result.messageType = str(row.messageType, 100);
     if (row.capturedAt !== undefined) result.capturedAt = dateISO(row.capturedAt, false);
     return result;
   }
@@ -976,6 +987,11 @@
     s.settings.teamsPages = array(settings.teamsPages, 'Teams 页面', 20).map(teamsPage);
     if (new Set(s.settings.teamsPages.map(page => page.id)).size !== s.settings.teamsPages.length) fail('Teams 页面 ID 重复');
     s.settings.teamsNotifications = bool(settings.teamsNotifications, false);
+    s.settings.teamsAnalysisEnabled = bool(settings.teamsAnalysisEnabled, false);
+    s.settings.taskReviewEnabled = bool(settings.taskReviewEnabled, false);
+    s.settings.taskReviewIntervalHours = settings.taskReviewIntervalHours === undefined ? 2 : finite(settings.taskReviewIntervalHours, 1, 10, false);
+    if (!Number.isInteger(s.settings.taskReviewIntervalHours)) fail('待办复盘间隔应为整数小时');
+    s.settings.taskReviewEnabledAt = zonedISO(settings.taskReviewEnabledAt, true);
     s.settings.teamsBrowser = settings.teamsBrowser === undefined ? 'chrome' : settings.teamsBrowser;
     if (!['chrome', 'edge'].includes(s.settings.teamsBrowser)) fail('Teams 浏览器仅支持 Chrome 或 Edge');
     s.settings.teamsBrowserAutomation = bool(settings.teamsBrowserAutomation, false);
@@ -1108,6 +1124,9 @@
     s.personalEvents = array(raw.personalEvents, '个人日程', 1000).map(personalEventRow);
     if (new Set(s.personalEvents.map(event => event.id)).size !== s.personalEvents.length) fail('个人日程 ID 重复');
     s.taskChecks = flagMap(raw.taskChecks, '待办标记');
+    s.teamsAnalysis = normalizeTeamsAnalysisMap(raw.teamsAnalysis);
+    s.teamsAnalysisOverrides = normalizeTeamsAnalysisMap(raw.teamsAnalysisOverrides, true);
+    s.taskReview = normalizeTaskReview(raw.taskReview);
     s.feedbackRead = flagMap(raw.feedbackRead, '反馈标记');
     s.gradeUpdates = array(raw.gradeUpdates, '成绩通知', 200).map(gradeUpdateRow);
     if (new Set(s.gradeUpdates.map(row => row.id)).size !== s.gradeUpdates.length) fail('成绩通知 ID 重复');
@@ -1590,6 +1609,266 @@
     return { dueAt: new Date(Date.UTC(candidates[0], month - 1, day, hour, minute, second) - offset * 60000).toISOString(),
       dueResolution: inferredYear ? 'term' : zone || /(?:\bUTC\b|\bGMT\b|Z\s*$)/i.test(raw) ? 'text' : 'school-time', dueLabel: label };
   }
+  // Synchronous SHA-256 is shared by WebKit, Node and isolated JavaScriptCore.
+  // It hashes the canonical source text, never a capture timestamp or a token URL.
+  function teamsAnalysisDigest(text) {
+    const bytes = new Uint8Array(Math.ceil((text.length * 3 + 9) / 64) * 64);
+    let length = 0;
+    const append = (...values) => { for (const value of values) bytes[length++] = value; };
+    for (let i = 0; i < text.length; i++) {
+      let code = text.charCodeAt(i);
+      if (code >= 0xd800 && code <= 0xdbff && i + 1 < text.length && text.charCodeAt(i + 1) >= 0xdc00 && text.charCodeAt(i + 1) <= 0xdfff) code = 0x10000 + ((code - 0xd800) << 10) + text.charCodeAt(++i) - 0xdc00;
+      else if (code >= 0xd800 && code <= 0xdfff) code = 0xfffd;
+      if (code < 0x80) append(code);
+      else if (code < 0x800) append(0xc0 | code >> 6, 0x80 | code & 63);
+      else if (code < 0x10000) append(0xe0 | code >> 12, 0x80 | code >> 6 & 63, 0x80 | code & 63);
+      else append(0xf0 | code >> 18, 0x80 | code >> 12 & 63, 0x80 | code >> 6 & 63, 0x80 | code & 63);
+    }
+    const h = [0x6a09e667,0xbb67ae85,0x3c6ef372,0xa54ff53a,0x510e527f,0x9b05688c,0x1f83d9ab,0x5be0cd19];
+    const k = [0x428a2f98,0x71374491,0xb5c0fbcf,0xe9b5dba5,0x3956c25b,0x59f111f1,0x923f82a4,0xab1c5ed5,0xd807aa98,0x12835b01,0x243185be,0x550c7dc3,0x72be5d74,0x80deb1fe,0x9bdc06a7,0xc19bf174,0xe49b69c1,0xefbe4786,0x0fc19dc6,0x240ca1cc,0x2de92c6f,0x4a7484aa,0x5cb0a9dc,0x76f988da,0x983e5152,0xa831c66d,0xb00327c8,0xbf597fc7,0xc6e00bf3,0xd5a79147,0x06ca6351,0x14292967,0x27b70a85,0x2e1b2138,0x4d2c6dfc,0x53380d13,0x650a7354,0x766a0abb,0x81c2c92e,0x92722c85,0xa2bfe8a1,0xa81a664b,0xc24b8b70,0xc76c51a3,0xd192e819,0xd6990624,0xf40e3585,0x106aa070,0x19a4c116,0x1e376c08,0x2748774c,0x34b0bcb5,0x391c0cb3,0x4ed8aa4a,0x5b9cca4f,0x682e6ff3,0x748f82ee,0x78a5636f,0x84c87814,0x8cc70208,0x90befffa,0xa4506ceb,0xbef9a3f7,0xc67178f2];
+    bytes[length] = 0x80;
+    const paddedLength = Math.ceil((length + 9) / 64) * 64;
+    let tail = paddedLength - 8;
+    const high = Math.floor(length / 0x20000000), low = length * 8 >>> 0;
+    for (const word of [high, low]) for (let shift = 24; shift >= 0; shift -= 8) bytes[tail++] = word >>> shift & 255;
+    const rotate = (x, n) => x >>> n | x << 32 - n, words = new Int32Array(64);
+    for (let offset = 0; offset < paddedLength; offset += 64) {
+      for (let i = 0; i < 16; i++) { const p = offset + i * 4; words[i] = bytes[p] << 24 | bytes[p + 1] << 16 | bytes[p + 2] << 8 | bytes[p + 3]; }
+      for (let i = 16; i < 64; i++) {
+        const x = words[i - 15], y = words[i - 2];
+        words[i] = words[i - 16] + (rotate(x, 7) ^ rotate(x, 18) ^ x >>> 3) + words[i - 7] + (rotate(y, 17) ^ rotate(y, 19) ^ y >>> 10) | 0;
+      }
+      let [a,b,c,d,e,f,g,v] = h;
+      for (let i = 0; i < 64; i++) {
+        const first = v + (rotate(e, 6) ^ rotate(e, 11) ^ rotate(e, 25)) + (e & f ^ ~e & g) + k[i] + words[i] | 0;
+        const second = (rotate(a, 2) ^ rotate(a, 13) ^ rotate(a, 22)) + (a & b ^ a & c ^ b & c) | 0;
+        v=g; g=f; f=e; e=d+first|0; d=c; c=b; b=a; a=first+second|0;
+      }
+      [a,b,c,d,e,f,g,v].forEach((value, i) => { h[i] = h[i] + value | 0; });
+    }
+    return h.map(value => (value >>> 0).toString(16).padStart(8, '0')).join('');
+  }
+  function teamsAnalysisModel(state) {
+    const model = state && state.settings && state.settings.aiModel;
+    return typeof model === 'string' && /^deepseek-[A-Za-z0-9][A-Za-z0-9._-]{0,89}$/.test(model) ? model : 'deepseek-flash';
+  }
+  function analysisWhitespace(value) { return String(value || '').replace(/\s+/g, ' ').trim(); }
+  function analysisFingerprint(value) {
+    const result = str(value, 64);
+    if (!/^[a-f0-9]{64}$/.test(result)) fail('Teams 分析指纹无效');
+    return result;
+  }
+  function analysisTask(value) {
+    record(value, 'Teams 分析待办');
+    if (!['homework', 'activity'].includes(value.category)) fail('Teams 分析分类无效');
+    const task = { category: value.category, title: str(value.title, 180), summary: str(value.summary, 500),
+      evidence: str(value.evidence, 600), deadlineText: str(value.deadlineText, 400) };
+    if (!task.title || !analysisWhitespace(task.evidence)) fail('Teams 分析缺少待办证据');
+    if (value.id !== undefined) task.id = teamsID(value.id);
+    return task;
+  }
+  function normalizeTaskReview(value) {
+    if (value === undefined) return { lastAttemptAt: null, lastCompletedAt: null, summary: '', recommendations: [], error: '' };
+    record(value, '待办复盘');
+    return { lastAttemptAt: zonedISO(value.lastAttemptAt, true), lastCompletedAt: zonedISO(value.lastCompletedAt, true),
+      summary: str(value.summary, 1200), error: str(value.error, 500), recommendations: array(value.recommendations, '复盘建议', 3).map(row => {
+        record(row, '复盘建议'); return { id: id(row.id), reason: str(row.reason, 300) };
+      }) };
+  }
+  function normalizeTeamsAnalysisMap(value, overrides) {
+    if (value === undefined) return {};
+    record(value, 'Teams 分析');
+    const out = {}, rows = Object.entries(value);
+    if (rows.length > 10000) fail('Teams 分析记录过多');
+    for (const [key, raw] of rows) {
+      const sourceID = teamsID(key); record(raw, 'Teams 分析记录');
+      const row = { accountId: str(raw.accountId, 512), fingerprint: analysisFingerprint(raw.fingerprint) };
+      if (overrides) {
+        if (!['homework', 'activity', 'notice'].includes(raw.category)) fail('Teams 人工分类无效');
+        row.category = raw.category;
+      } else {
+        if (!['ready', 'failed'].includes(raw.status) || !['actionable', 'notice', 'uncertain'].includes(raw.classification)) fail('Teams 分析状态无效');
+        row.status = raw.status; row.classification = raw.classification;
+        row.model = str(raw.model, 100); if (teamsAnalysisModel({ settings: { aiModel: row.model } }) !== row.model) fail('Teams 分析模型无效');
+        row.summary = str(raw.summary, 1200); row.error = str(raw.error, 500);
+        row.analyzedAt = raw.analyzedAt ? dateISO(raw.analyzedAt, false) : '';
+        row.tasks = array(raw.tasks, 'Teams 分析待办', 8).map(analysisTask);
+        if ((row.status === 'failed' || row.classification !== 'actionable') && row.tasks.length) fail('Teams 非待办分析包含任务');
+        if (row.classification === 'actionable' && !row.tasks.length) fail('Teams 待办分析为空');
+        if (new Set(row.tasks.map(task => task.id)).size !== row.tasks.length || row.tasks.some(task => !task.id)) fail('Teams 分析待办标识无效');
+      }
+      if (out[sourceID]) fail('Teams 分析标识重复');
+      out[sourceID] = row;
+    }
+    return out;
+  }
+  function teamsAnalysisIndex(state) {
+    const snapshots = state.snapshots.teams, model = teamsAnalysisModel(state);
+    let cache = teamsAnalysisInputsCache.get(snapshots);
+    if (cache && cache.model === model) return cache;
+    const sources = new Map();
+    for (const page of entries(state, 'teams')) for (const field of ['posts', 'tasks', 'feedback', 'grades']) for (const row of page[field] || []) {
+      // Assignment feedback and grades are context for that same assignment.
+      const sourceID = teamsID((field === 'feedback' || field === 'grades') && row.assignmentId || row.id);
+      let source = sources.get(sourceID);
+      if (!source) { source = { id: sourceID, accountId: page.accountId || '', url: page.url, rows: {}, page }; sources.set(sourceID, source); }
+      const key = field === 'posts' || field === 'tasks' ? field : field + ':' + row.id;
+      const old = source.rows[key], captured = Date.parse(row.capturedAt || page.capturedAt) || 0;
+      if (!old || captured > old.captured) source.rows[key] = { row, captured, field, page };
+    }
+    const inputs = [], byID = new Map();
+    for (const source of sources.values()) {
+      const rows = Object.values(source.rows).sort((a, b) => a.field.localeCompare(b.field) || a.row.id.localeCompare(b.row.id));
+      const task = source.rows.tasks && source.rows.tasks.row, post = source.rows.posts && source.rows.posts.row;
+      const main = task || post || rows[0].row, sections = [], files = new Map(), evidence = [];
+      const title = main.title || 'Teams 信息', channel = main.course || main.channel || '';
+      const publishedAt = post && knownPublishedDate(post.date) || null;
+      let sourceIncomplete = false;
+      for (const { row, field } of rows) {
+        for (const key of ['text', 'requirements', 'feedback']) if (row[key]) evidence.push(row[key]);
+        if (row.title && !(row.attachments || []).some(file => file.title === row.title)) evidence.push(row.title);
+        for (const [key, label] of [['title','标题'],['text','正文'],['requirements','要求'],['feedback','反馈'],['dueLabel','原始截止字段'],['dueAt','原始截止时间'],['status','原始状态'],['submissionStatus','提交状态'],['dateLabel','发布时间原文'],['author','作者'],['recipient','收件范围']]) {
+          if (row[key] && !sections.includes(label + '：' + row[key])) sections.push(label + '：' + row[key]);
+        }
+        if (field === 'grades' || field === 'feedback') for (const key of ['score','maxScore','percentage','gradeLabel']) if (row[key] !== undefined && row[key] !== null && row[key] !== '') sections.push(key + '：' + row[key]);
+        sourceIncomplete ||= !!row.sourceIncomplete || !!row.textTruncated;
+        for (const file of row.attachments || []) {
+          const key = file.id || file.url || file.title;
+          const previous = files.get(key);
+          const stamp = Date.parse(file.capturedAt || file.checkedAt || row.capturedAt) || 0;
+          const previousStamp = previous && previous.stamp || 0;
+          if (!previous || stamp > previousStamp || (stamp === previousStamp && ((!previous.file.text && file.text) || (file.versionKey && file.versionKey !== previous.file.versionKey)))) files.set(key, { file, stamp });
+        }
+      }
+      const attachments = [...files.values()].map(({ file }) => ({ id: file.id || '', title: file.title, text: file.text || '',
+        extractionStatus: file.extractionStatus || (file.text ? 'read' : 'unread'), truncated: !!file.truncated,
+        versionKey: file.versionKey || '', extractionCoverage: file.extractionCoverage || '' })).sort((a, b) => (a.id || a.title).localeCompare(b.id || b.title));
+      for (const file of attachments) {
+        sections.push('附件：' + file.title + '\n' + (file.text || '（附件正文尚未读取）'));
+        if (file.text) evidence.push(file.text);
+        sourceIncomplete ||= file.truncated || file.extractionStatus !== 'read' || file.extractionCoverage === 'partial';
+      }
+      const canonical = { id: source.id, accountId: source.accountId, title, channel, publishedAt, text: sections.join('\n\n'), sourceIncomplete,
+        officialAssignment: !!(task && task.officialAssignment || post && post.officialAssignment), attachments };
+      const sourceFingerprint = teamsAnalysisDigest(JSON.stringify([1, canonical]));
+      const input = Object.freeze(Object.assign({}, canonical, { sourceFingerprint,
+        fingerprint: teamsAnalysisDigest(JSON.stringify([1, model, canonical])), url: main.url || source.url, sourceURL: source.url }));
+      source.input = input; source.task = task; source.post = post;
+      source.evidenceText = analysisWhitespace(evidence.join('\n\n'));
+      source.deadlineEvidenceText = analysisWhitespace(input.text);
+      inputs.push(input); byID.set(source.id, source);
+    }
+    cache = { model, inputs: Object.freeze(inputs), byID };
+    teamsAnalysisInputsCache.set(snapshots, cache);
+    return cache;
+  }
+  function getTeamsAnalysisInputs(state) { return teamsAnalysisIndex(state).inputs; }
+  function validTeamsAnalysisRecord(state, source) {
+    const row = (state.teamsAnalysis || {})[source.id];
+    if (!row || row.accountId !== source.accountId || row.fingerprint !== source.input.fingerprint || row.model !== teamsAnalysisModel(state)) return undefined;
+    if (row.classification === 'actionable' && row.tasks.some(task => !analysisWhitespace(task.evidence) || !source.evidenceText.includes(analysisWhitespace(task.evidence)) ||
+        (task.deadlineText && !source.deadlineEvidenceText.includes(analysisWhitespace(task.deadlineText))))) return Object.assign({}, row, { classification: 'uncertain', tasks: [] });
+    return row;
+  }
+  function validTeamsAnalysisOverride(state, source) {
+    if (!source) return undefined;
+    const row = (state.teamsAnalysisOverrides || {})[source.id];
+    return row && row.accountId === source.accountId && row.fingerprint === source.input.sourceFingerprint ? row : undefined;
+  }
+  function getTeamsAnalysisRecord(state, value) {
+    const source = teamsAnalysisIndex(state).byID.get(teamsID(value));
+    if (!source) return undefined;
+    const row = validTeamsAnalysisRecord(state, source), manualOverride = validTeamsAnalysisOverride(state, source);
+    if (!manualOverride) return row;
+    return Object.assign({}, row || { status: 'ready', classification: manualOverride.category === 'notice' ? 'notice' : 'actionable', summary: '', tasks: [] }, { manualOverride });
+  }
+  function getTeamsAnalysisSummary(state) {
+    const summary = { total: 0, ready: 0, pending: 0, failed: 0, homework: 0, activity: 0, notice: 0, uncertain: 0 };
+    for (const source of teamsAnalysisIndex(state).byID.values()) {
+      summary.total++;
+      const manual = validTeamsAnalysisOverride(state, source), row = validTeamsAnalysisRecord(state, source);
+      if (manual) summary[manual.category]++;
+      if (!row) summary.pending++;
+      else if (row.status === 'failed') summary.failed++;
+      else {
+        summary.ready++;
+        if (!manual) {
+          if (row.classification === 'actionable') for (const category of new Set(row.tasks.map(task => task.category))) summary[category]++;
+          else summary[row.classification]++;
+        }
+      }
+    }
+    return summary;
+  }
+  function applyTeamsAnalysisResults(state, payload) {
+    const raw = inputObject(payload), index = teamsAnalysisIndex(state);
+    if (raw.model !== index.model) return state;
+    const results = array(raw.results, 'Teams 分析结果', 8), analysis = Object.assign({}, state.teamsAnalysis || {});
+    let changed = false;
+    for (const result of results) {
+      record(result, 'Teams 分析结果');
+      const source = typeof result.id === 'string' ? index.byID.get(teamsID(result.id)) : null;
+      if (!source || result.fingerprint !== source.input.fingerprint) continue;
+      const row = { accountId: source.accountId, fingerprint: source.input.fingerprint, model: index.model,
+        status: result.status || 'ready', classification: result.classification || 'uncertain', summary: str(result.summary, 1200),
+        error: str(result.error, 500), analyzedAt: result.analyzedAt ? dateISO(result.analyzedAt, false) : new Date().toISOString(), tasks: [] };
+      if (!['ready', 'failed'].includes(row.status) || !['actionable', 'notice', 'uncertain'].includes(row.classification)) fail('Teams 分析状态无效');
+      if (row.status === 'failed') row.classification = 'uncertain';
+      else if (row.classification === 'actionable') {
+        const candidates = array(result.tasks, 'Teams 分析待办', 8), used = new Set();
+        let valid = candidates.length > 0;
+        for (const candidate of candidates) {
+          if (!candidate || !['homework', 'activity'].includes(candidate.category) || !analysisWhitespace(candidate.evidence)) { valid = false; break; }
+          const task = analysisTask(candidate), quote = analysisWhitespace(task.evidence), deadline = analysisWhitespace(task.deadlineText);
+          if (!source.evidenceText.includes(quote) || (deadline && !source.deadlineEvidenceText.includes(deadline))) { valid = false; break; }
+          const prior = (analysis[source.id] && analysis[source.id].tasks || []).find(old => old.category === task.category &&
+            (analysisWhitespace(old.evidence) === quote || analysisWhitespace(old.title) === analysisWhitespace(task.title)) && !used.has(old.id));
+          task.id = prior ? prior.id : !used.has(source.id) ? source.id : 'teams:action:' + teamsAnalysisDigest(JSON.stringify([source.accountId, source.id, task.category, task.title, quote])).slice(0, 40);
+          if (used.has(task.id)) continue;
+          used.add(task.id); row.tasks.push(task);
+        }
+        if (!valid) { row.classification = 'uncertain'; row.tasks = []; }
+      } else if (array(result.tasks, 'Teams 分析待办', 8).length) fail('Teams 非待办分析包含任务');
+      analysis[source.id] = row; changed = true;
+    }
+    if (!changed) return state;
+    // Only source-backed records are retained; deletions and old accounts cannot
+    // accumulate an unbounded cloud cache in the local backup.
+    const bounded = Object.fromEntries(Object.entries(analysis).filter(([key]) => index.byID.has(key)).slice(-10000));
+    const next = Object.assign({}, state, { teamsAnalysis: bounded }); checkSize(next); return next;
+  }
+  function setTeamsAnalysisOverride(state, value, category) {
+    if (!['homework', 'activity', 'notice', 'automatic'].includes(category)) fail('Teams 人工分类无效');
+    const sourceID = teamsID(value), source = teamsAnalysisIndex(state).byID.get(sourceID);
+    if (!source) fail('Teams 原始记录已更新或不存在');
+    const overrides = Object.assign({}, state.teamsAnalysisOverrides || {});
+    if (category === 'automatic') delete overrides[sourceID];
+    else overrides[sourceID] = { accountId: source.accountId, fingerprint: source.input.sourceFingerprint, category };
+    if (Object.keys(overrides).length > 10000) fail('Teams 人工分类过多');
+    const next = Object.assign({}, state, { teamsAnalysisOverrides: overrides }); checkSize(next); return next;
+  }
+  function analyzedTeamsTasks(state) {
+    const rows = [];
+    for (const source of teamsAnalysisIndex(state).byID.values()) {
+      const manual = validTeamsAnalysisOverride(state, source), record = validTeamsAnalysisRecord(state, source);
+      if (manual && manual.category === 'notice') continue;
+      const original = source.task || source.post || {}, input = source.input;
+      const tasks = manual ? [{ id: source.id, category: manual.category, title: original.title || input.title, summary: '', evidence: '', deadlineText: '' }] :
+        state.settings.teamsAnalysisEnabled && record && record.status === 'ready' && record.classification === 'actionable' ? record.tasks : [];
+      for (const task of tasks) {
+        const due = manual ? resolveTaskDeadline(source.task || { requirements: original.text }) : task.deadlineText ? resolveTaskDeadline({ dueLabel: task.deadlineText }) :
+          source.task && source.task.dueAt && tasks.length === 1 && task.category === 'homework' ? { dueAt: source.task.dueAt, dueResolution: 'source' } : { dueAt: null };
+        const override = (state.settings.teamsDueOverrides || {})[task.id];
+        rows.push({ id: task.id, title: task.title, category: task.category, course: input.channel, source: 'teams', manual: false,
+          analysisSourceId: source.id, analysisSummary: task.summary || record && record.summary || '', analysisEvidence: task.evidence,
+          requirements: original.requirements || original.text || '', attachments: [...new Map(Object.values(source.rows).flatMap(item => item.row.attachments || []).map(file => [file.id || file.url || file.title, file])).values()],
+          sourceURL: input.sourceURL, url: input.url, capturedAt: original.capturedAt || source.page.capturedAt,
+          status: source.task && source.task.status || 'unknown', dueAt: override || due.dueAt, originalDueAt: due.dueAt, dueLabel: task.deadlineText || original.dueLabel || '', dueResolution: override ? 'manual' : due.dueResolution || 'unknown', dueOverride: !!override,
+          completed: Object.prototype.hasOwnProperty.call(state.taskChecks, task.id) ? state.taskChecks[task.id] : done(source.task && source.task.status) });
+      }
+    }
+    return rows;
+  }
   function getTasks(state) {
     const rows = [], seenIds = new Set(), seenKeys = new Set();
     const mbCourses = entries(state, 'managebac').flatMap(s => s.courses || []);
@@ -1597,11 +1876,18 @@
       const key = [task.title.toLowerCase(), task.course.toLowerCase(), task.dueAt || task.dueLabel || ''].join('|');
       if (seenIds.has(task.id) || seenKeys.has(key)) continue;
       seenIds.add(task.id); seenKeys.add(key);
-      rows.push(Object.assign({}, task, { manual: false, source: 'managebac', sourceURL: s.url, capturedAt: s.capturedAt,
+      rows.push(Object.assign({}, task, { manual: false, category: 'homework', source: 'managebac', sourceURL: s.url, capturedAt: s.capturedAt,
         dueTerm: task.dueTerm || ((s.courses || []).find(course => course.name === task.course) || {}).term || '',
         completed: Object.prototype.hasOwnProperty.call(state.taskChecks, task.id) ? state.taskChecks[task.id] : done(task.status) }));
     }
-    const teamRows = entries(state, 'teams').flatMap(s => (s.tasks || []).map(task => Object.assign({}, task, { sourceURL: s.url, capturedAt: task.capturedAt || s.capturedAt })))
+    const analysisActive = state.settings.teamsAnalysisEnabled || Object.keys(state.teamsAnalysisOverrides || {}).length > 0;
+    if (analysisActive) rows.push(...analyzedTeamsTasks(state));
+    const teamRows = state.settings.teamsAnalysisEnabled ? [] : entries(state, 'teams').flatMap(s => (s.tasks || []).filter(task => {
+      if (analysisActive && validTeamsAnalysisOverride(state, teamsAnalysisIndex(state).byID.get(teamsID(task.id)))) return false;
+      if (task.officialAssignment === true) return true;
+      if (task.officialAssignment === false) return false;
+      return /^teams:graph:assignment:/.test(task.id) || !(s.posts || []).some(post => post.id === task.id && !post.officialAssignment);
+    }).map(task => Object.assign({}, task, { sourceURL: s.url, capturedAt: task.capturedAt || s.capturedAt })))
       .map((task, index) => ({ task, index, capturedAt: Date.parse(task.capturedAt) || 0 }))
       .sort((a, b) => b.capturedAt - a.capturedAt || a.index - b.index).map(row => row.task);
     const seenTeams = new Set();
@@ -1610,14 +1896,14 @@
       if (seenTeams.has(taskID)) continue;
       seenTeams.add(taskID);
       const override = (state.settings.teamsDueOverrides || {})[taskID];
-      rows.push(Object.assign({}, task, { id: taskID, source: 'teams', manual: false,
+      rows.push(Object.assign({}, task, { id: taskID, source: 'teams', manual: false, category: 'homework',
         originalDueAt: task.dueAt, dueAt: override || task.dueAt, dueOverride: !!override,
         completed: Object.prototype.hasOwnProperty.call(state.taskChecks, taskID) ? state.taskChecks[taskID] : done(task.status) }));
     }
     for (const task of state.manualTasks) rows.push(Object.assign({}, task, { manual: true, source: 'manual',
       completed: Object.prototype.hasOwnProperty.call(state.taskChecks, task.id) ? state.taskChecks[task.id] : done(task.status) }));
     return rows.map(task => {
-      if (task.manual || task.dueAt) return task;
+      if (task.manual || task.dueAt || task.analysisSourceId) return task;
       const course = task.source === 'managebac' ? mbCourses.find(c => c.name === task.course) : null;
       const term = task.dueTerm || (course && course.term) || '';
       const range = (state.settings.gpaTermDates || {})[termKey(term)];
@@ -2006,7 +2292,7 @@
         // Browser views and individual Graph pages are partial; absence is not deletion.
         const deleted = new Set((item.graphDeletedIDs || []).concat(item.browserExcludedIDs || []));
         for (const field of ['tasks', 'posts', 'feedback', 'grades']) {
-          const noLongerTasks = new Set(item.coverage === 'browser' && field === 'tasks' ? item.posts.filter(post => post.kind !== 'assignment').map(post => post.id) : []);
+          const noLongerTasks = new Set(['browser', 'visible'].includes(item.coverage) && field === 'tasks' ? item.posts.filter(post => post.kind !== 'assignment' && !post.officialAssignment).map(post => post.id) : []);
           if (field === 'tasks' && item.coverage === 'graph') {
             const oldTasks = new Map((previous.tasks || []).map(task => [task.id, task]));
             item.tasks = item.tasks.map(task => {
@@ -2029,7 +2315,7 @@
               const seenFiles = new Set();
               const files = (row.attachments || []).map(file => {
                 const identity = fileKey(file), prior = oldFiles.get(identity); seenFiles.add(identity);
-                if (prior && prior.text && !file.text && file.extractionStatus !== 'read') {
+                if (prior && prior.text && !file.text && file.extractionStatus !== 'read' && !(file.versionKey && prior.versionKey && file.versionKey !== prior.versionKey)) {
                   return Object.assign({}, prior, file, { text: prior.text, capturedAt: prior.capturedAt || old.capturedAt, truncated: !!prior.truncated, cached: true });
                 }
                 return file;
@@ -2095,6 +2381,9 @@
     return result;
   }
   function clearTeamsDerived(result) {
+    result.teamsAnalysis = {};
+    result.teamsAnalysisOverrides = {};
+    result.taskReview = normalizeTaskReview();
     result.settings.teamsDueOverrides = {};
     for (const map of [result.taskChecks, result.feedbackRead]) for (const key of Object.keys(map)) if (key.startsWith('teams:')) delete map[key];
     result.changeLog = result.changeLog.filter(row => row.source !== 'teams');
@@ -2121,6 +2410,6 @@
       changes: state.changeLog.slice().sort((a, b) => Date.parse(b.capturedAt) - Date.parse(a.capturedAt)) };
   }
   return Object.freeze({ VERSION, GPA_BANDS, GPA_BANDED_METHOD: METHOD, configureSchools, schoolHomes, normalizeSchoolHome, emptyState, defaultState: emptyState, effectiveColorTheme, validateState, normalizeState: validateState, validateAssistantConversations, assistantHistoryHasCapacity, exportBackup, importBackup,
-    mergeSnapshot, resetTeamsData, clearTeamsData: resetTeamsData, today, clock, getSchedule, getCourses, getTasks, resolveTaskDeadline, parseManualDeadline, normalizePersonalEvent: personalEventRow, getFeedback, getGradeUpdates, markGradeUpdatesRead, getOfficialGPA, estimateGPA, estimateLinearGPA, semesterGPAForecast,
+    mergeSnapshot, resetTeamsData, clearTeamsData: resetTeamsData, today, clock, getSchedule, getCourses, getTasks, teamsAnalysisModel, getTeamsAnalysisInputs, getTeamsAnalysisRecord, getTeamsAnalysisSummary, applyTeamsAnalysisResults, setTeamsAnalysisOverride, resolveTaskDeadline, parseManualDeadline, normalizePersonalEvent: personalEventRow, getFeedback, getGradeUpdates, markGradeUpdatesRead, getOfficialGPA, estimateGPA, estimateLinearGPA, semesterGPAForecast,
     getNextClass, getClassClock, createClassClockReader, scheduleInterval, getSchedulePeriods, getTeamsPosts, getTeamsEC, getTeamsGrades, getSourceStatus, buildView, getSchoolCalendarEvents, schoolCalendarScheduleRule, schoolCalendarScheduleConflict, parseSchoolCalendarICS, parseSchoolCalendarPDFText, safeURL, safeAttachmentURL, gradePoints: points, linearGradePoints: linearPoints });
 });

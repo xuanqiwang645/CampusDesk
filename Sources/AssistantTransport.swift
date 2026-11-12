@@ -10,15 +10,16 @@ final class AssistantHTTPTask: NSObject, URLSessionDataDelegate {
     private let queue: DispatchQueue
     private let maximumBytes: Int
     private let receive: (Data) -> Void
+    private let onResponse: ((HTTPURLResponse) -> Void)?
     private let completion: (Result<Void, AssistantHTTPError>) -> Void
     private var session: URLSession?
     private var receivedBytes = 0
     private var finished = false
 
-    init(queue: DispatchQueue, maximumBytes: Int, receive: @escaping (Data) -> Void,
+    init(queue: DispatchQueue, maximumBytes: Int, receive: @escaping (Data) -> Void, onResponse: ((HTTPURLResponse) -> Void)? = nil,
          completion: @escaping (Result<Void, AssistantHTTPError>) -> Void) {
         self.queue = queue; self.maximumBytes = maximumBytes
-        self.receive = receive; self.completion = completion
+        self.receive = receive; self.onResponse = onResponse; self.completion = completion
     }
 
     func start(_ request: URLRequest, local: Bool, resourceTimeout: TimeInterval,
@@ -54,6 +55,7 @@ final class AssistantHTTPTask: NSObject, URLSessionDataDelegate {
             completionHandler(.cancel); finish(.failure(.invalidResponse)); return
         }
         guard (200...299).contains(http.statusCode) else {
+            onResponse?(http)
             completionHandler(.cancel); finish(.failure(.rejected(http.statusCode))); return
         }
         guard response.expectedContentLength <= Int64(maximumBytes) else {

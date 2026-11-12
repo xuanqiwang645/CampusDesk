@@ -1,4 +1,5 @@
 import Foundation
+import JavaScriptCore
 
 @main
 struct AgendaNativeSmoke {
@@ -70,6 +71,46 @@ struct AgendaNativeSmoke {
         check(try diskItems().compactMap { $0["title"] as? String } == ["Replacement exercise"], "Only the replacement account remains on disk")
         try FileManager.default.removeItem(at: target)
         check(try publisher.publish(state: state, now: now), "Unchanged input recreates a missing widget file")
+        // Use production Core to prepare an analyzed record, then verify that
+        // native input pruning retains exactly the fields required by its gate.
+        state["snapshots"] = ["seiue": [:], "managebac": [:], "teams": [teamsURL: [
+            "url": teamsURL, "source": "teams", "coverage": "visible", "accountId": "synthetic-analysis",
+            "capturedAt": "2026-10-10T01:00:00Z", "tasks": [], "posts": [[
+                "id": "teams:analysis-fixture", "title": "Science fair", "text": "Join the science fair.\nDeadline: 2026-10-11 17:00",
+                "kind": "general", "url": teamsURL, "officialAssignment": false
+            ]]
+        ]]]
+        settings["teamsAnalysisEnabled"] = true
+        state["settings"] = settings
+        state = try validator.validate(state)
+        let pending = try JSONSerialization.jsonObject(with: builder.snapshot(state: state, now: now)) as! [String: Any]
+        check((pending["items"] as! [[String: Any]]).isEmpty, "Pending Teams analysis cannot leak into native widgets")
+        let analysisContext = JSContext()!
+        analysisContext.evaluateScript(try String(contentsOf: resources.appendingPathComponent("core.js"), encoding: .utf8))
+        analysisContext.setObject(String(data: try JSONSerialization.data(withJSONObject: state), encoding: .utf8)!, forKeyedSubscript: "fixtureJSON" as NSString)
+        let preparedJSON = analysisContext.evaluateScript("""
+        var fixtureState = JSON.parse(fixtureJSON);
+        var fixtureInput = CampusCore.getTeamsAnalysisInputs(fixtureState)[0];
+        fixtureState = CampusCore.applyTeamsAnalysisResults(fixtureState, {model: CampusCore.teamsAnalysisModel(fixtureState), results: [{
+          id:fixtureInput.id, fingerprint:fixtureInput.fingerprint, classification:'actionable', status:'ready', summary:'Synthetic activity',
+          tasks:[{category:'activity',title:'Join science fair',evidence:'Join the science fair.',deadlineText:'Deadline: 2026-10-11 17:00'}]
+        }]});
+        JSON.stringify(fixtureState);
+        """)?.toString()
+        check(analysisContext.exception == nil && preparedJSON != nil, "JavaScriptCore computes and accepts the same source fingerprint without browser APIs")
+        state = try validator.validate(JSONSerialization.jsonObject(with: Data(preparedJSON!.utf8)) as! [String: Any])
+        let analyzed = try JSONSerialization.jsonObject(with: builder.snapshot(state: state, now: now)) as! [String: Any]
+        let analyzedItems = analyzed["items"] as! [[String: Any]]
+        check(analyzedItems.count == 1 && analyzedItems[0]["title"] as? String == "Join science fair", "Analyzed activity reaches the native widget through the shared task gate")
+        check(analyzedItems[0]["startAt"] as? String == "2026-10-11T09:00:00.000Z", "Widget deadline is derived from verified source text")
+        check(analyzedItems[0]["analysisEvidence"] == nil && analyzedItems[0]["accountId"] == nil, "AI evidence and identities never cross into the display-only widget file")
+        var analysisSources = state["snapshots"] as! [String: [String: [String: Any]]]
+        var analysisPage = analysisSources["teams"]![teamsURL]!
+        var analysisPosts = analysisPage["posts"] as! [[String: Any]]
+        analysisPosts[0]["text"] = "The science fair has been cancelled."
+        analysisPage["posts"] = analysisPosts; analysisSources["teams"]![teamsURL] = analysisPage; state["snapshots"] = analysisSources
+        let stale = try JSONSerialization.jsonObject(with: builder.snapshot(state: state, now: now)) as! [String: Any]
+        check((stale["items"] as! [[String: Any]]).isEmpty, "Source edits invalidate both the cached native reader and its old AI task")
         check(CampusAgendaLink.day(from: URL(string: "campusdesk-theme://calendar?date=2026-10-10")!) == "2026-10-10", "Widget link routes a valid day")
         check(CampusAgendaLink.isTasks(URL(string: "campusdesk-theme://tasks")!), "Widget homework opens tasks without a fabricated date")
         for invalid in ["https://tasks", "campusdesk-theme://user@tasks", "campusdesk-theme://tasks:80", "campusdesk-theme://tasks/open", "campusdesk-theme://tasks?url=https://example.com", "campusdesk-theme://tasks#x"] {

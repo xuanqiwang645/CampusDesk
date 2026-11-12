@@ -38,6 +38,14 @@
   --gold: #e3bd78;
   --orange: #f0a27d;
   --danger: #ff9388;
+  --ink-2: var(--muted);
+  --sunken: var(--nav);
+  --soft: var(--nav);
+  --surface: var(--card);
+  --border: var(--line);
+  --text: var(--ink);
+  --glass-border: rgba(181, 196, 203, .16);
+  --glass-shadow: rgba(0, 0, 0, .16);
 }
 
 :root[data-color-theme] body { background: var(--paper); color: var(--ink); }
@@ -108,6 +116,39 @@
 :root[data-color-theme="midnight"] .gpa-kline-averages strong { color: var(--ink); }
 :root[data-color-theme="midnight"] .gpa-kline-averages [data-ma-ready="false"] strong { color: var(--muted); }
 
+/* Dark inset surfaces must not composite half-white over a dark card. */
+:root[data-color-theme="midnight"] :is(.hub-plan-row, .hub-search-result, .hub-attachment-card, .grade-goal-row, .focus-next-task) { background: color-mix(in srgb, var(--paper) 45%, var(--card)); border-color: var(--line); color: var(--ink); }
+:root[data-color-theme="midnight"] .hub-plan-main strong { color: var(--ink); }
+:root[data-color-theme="midnight"] :is(.hub-plan-main small, .hub-plan-control, .hub-drag, .hub-search-result p, .hub-trust-card p, .hub-change-row p, .focus-subtitle, .focus-course-count, .hub-kicker) { color: var(--muted); }
+:root[data-color-theme="midnight"] :is(.hub-plan-index, .hub-status-pill, .hub-change-source, .hub-attachment-kind, .task-tag, .post-kind) { background: var(--teal-soft); color: var(--accent-ink); border-color: var(--line); }
+:root[data-color-theme="midnight"] :is(.hub-trust-card, .conflict-clear, .class-tile, .browser-permission-guide, .legacy-connection, .schedule-rule-chip, .school-calendar-event, .requirements-text, .hub-cached-text pre) { background: var(--nav); border-color: var(--line); color: var(--ink); }
+:root[data-color-theme="midnight"] :is(.hub-trust-card.is-warning, .conflict-warning, .assistant-review-warning, .assistant-recovery:not(:empty)) { background: color-mix(in srgb, var(--gold) 9%, var(--card)); border-color: var(--line); color: var(--ink); }
+:root[data-color-theme="midnight"] .is-warning .hub-status-pill { background: color-mix(in srgb, var(--gold) 14%, var(--card)); color: var(--gold); }
+:root[data-color-theme="midnight"] :is(.hub-cached-text summary, .grade-goal-result, .focus-next-task small, .assistant-guide-number, .assistant-guide-chevron, .assistant-guide-body li::marker, .assistant-guide-troubleshooting > strong, .assistant-request-details > summary) { color: var(--accent-ink); }
+:root[data-color-theme="midnight"] .focus-view { background: linear-gradient(150deg, var(--card), var(--nav)); color: var(--ink); }
+:root[data-color-theme="midnight"] :is(.hub-plan-row.drop-before, .hub-plan-row.drop-after) { border-color: var(--accent-ink); }
+:root[data-color-theme="midnight"] .sidebar .nav-item > .icon { background: transparent; border-color: transparent; box-shadow: none; color: inherit; }
+:root[data-color-theme="midnight"] .sidebar .nav-item.active > .icon { background: color-mix(in srgb, var(--accent-ink) 8%, transparent); border-color: transparent; }
+:root[data-color-theme="midnight"] :is(.icon-button, .button-danger) { background: var(--card); border-color: var(--line); box-shadow: none; }
+:root[data-color-theme="midnight"] .icon-button { color: var(--ink); }
+:root[data-color-theme="midnight"] .icon-button:hover { background: var(--teal-soft); }
+:root[data-color-theme="midnight"] :is(.pill, .post-meta, .post-foot, .detail-meta, .detail-subtitle) { color: var(--muted); }
+:root[data-color-theme="midnight"] :is(.pill.active, .custom-day.active, .custom-mode.active, .schedule-row.current .class-tile, .schedule-row.custom-row .class-tile, .school-calendar-rule) { background: var(--teal-soft); border-color: var(--line); color: var(--ink); }
+:root[data-color-theme="midnight"] :is(.group-heading h2, .group-heading h3, .task-source-heading h2, .teams-post h3, .teams-groups-card .teams-recipient-group > h2) { color: var(--ink); }
+:root[data-color-theme="midnight"] :is(.post-original, .teams-guide p, .teams-guide small, .feedback-text) { color: var(--muted); }
+:root[data-color-theme="midnight"] .class-clock { background: var(--nav); border-color: var(--line); color: var(--ink); }
+:root[data-color-theme="midnight"] .class-clock .clock-value { color: var(--accent-ink); }
+:root[data-color-theme="midnight"] .settings-field { border-color: var(--line); }
+:root[data-color-theme="midnight"] .setup-wizard-rail { background: var(--nav); }
+:root[data-color-theme="midnight"] :is(.setup-connection-card, .setup-ai-preview, .setup-privacy-note, .setup-ai-status, .setup-rail-item > span, .setup-feature-list > div > span) { background: var(--teal-soft); color: var(--ink); }
+:root[data-color-theme="midnight"] :is(.setup-rail-item, .setup-rail-item.complete, .setup-privacy-note p) { color: var(--muted); }
+:root[data-color-theme="midnight"] :is(.setup-rail-item.active, .setup-rail-item.active > span, .setup-rail-item.complete > span, .setup-connection-card > span, .setup-ai-preview > span, .setup-done-icon) { background: var(--teal-soft); color: var(--accent-ink); }
+:root[data-color-theme="midnight"] #task-dialog { color: var(--ink); }
+:root[data-color-theme="midnight"] #task-dialog :is(.task-wheel-option[aria-selected="true"], .task-wheel-colon) { color: var(--accent-ink); }
+:root[data-color-theme="midnight"] #task-dialog .task-form-error { color: var(--danger); }
+#task-dialog #task-form > #task-category-label { display: block; margin-top: 16px; }
+#task-dialog #task-category { display: block; width: 100%; margin-top: 8px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 9px; }
+
 .color-theme-section { margin-top: 22px; padding-top: 19px; border-top: 1px solid var(--line); }
 .color-theme-section h3 { margin: 0 0 6px; font-size: 14px; color: var(--ink); }
 .color-theme-section > .settings-intro { margin: 0; }
@@ -130,6 +171,70 @@
 .color-theme-ember { --preview-accent: #7f4526; --preview-surface: #f0dfcf; }
 .color-theme-midnight { --preview-accent: #1c6b59; --preview-surface: #294139; }
 .appearance-candle-setting { margin-top: 17px; }
+
+/* Board course names inherit a light-only container color unless set explicitly. */
+:root[data-color-theme="midnight"] .app-shell[data-dashboard-theme="board"] .board-class-row { color: var(--ink); border-color: var(--line); }
+:root[data-color-theme="midnight"] .app-shell[data-dashboard-theme="board"] .board-class-row :is(span, small) { color: var(--muted); }
+:root[data-color-theme="midnight"] .app-shell[data-dashboard-theme="board"] .board-tip { background: var(--teal-soft); border-color: var(--line); }
+
+/* Teams classification is separate from source messages and completion state. */
+.app-shell[data-dashboard-theme="board"] .page-heading.task-page-heading { display: flex; }
+.task-category-tabs { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; }
+.task-category-tabs button { display: inline-flex; align-items: center; gap: 10px; padding: 10px 15px; border: 1px solid var(--line); border-radius: 10px; background: var(--card); color: var(--ink); }
+.task-category-tabs button[aria-pressed="true"] { background: var(--teal-soft); color: var(--accent-ink); border-color: var(--accent-ink); }
+.task-category-tabs button span { font-size: 11px; font-variant-numeric: tabular-nums; }
+.task-category-section + .task-category-section { margin-top: 24px; padding-top: 18px; border-top: 1px solid var(--line); }
+.task-category-heading { display: flex; align-items: center; gap: 9px; margin: 0 0 14px; color: var(--ink); font-size: 14px; font-weight: 600; }
+.task-category-heading span { color: var(--muted); font-size: 11px; font-weight: 400; }
+.task-category-empty { margin: 0 0 8px; font-size: 12px; }
+.teams-analysis-card { margin: 12px 0; padding: 12px 14px; background: color-mix(in srgb, var(--teal-soft) 45%, var(--card)); border: 1px solid var(--line); border-radius: 10px; color: var(--ink); }
+.teams-analysis-heading, .teams-analysis-queue { display: flex; align-items: center; flex-wrap: wrap; gap: 9px 16px; font-size: 11px; color: var(--accent-ink); }
+.teams-analysis-heading { justify-content: space-between; font-weight: 600; }
+.teams-analysis-card p, .teams-analysis-privacy { margin-top: 8px; font-size: 12px; line-height: 1.7; overflow-wrap: anywhere; }
+.teams-analysis-summary, .teams-analysis-evidence { white-space: pre-wrap; }
+.teams-analysis-correction { margin-top: 9px; font-size: 11px; color: var(--muted); }
+.teams-analysis-correction summary { cursor: pointer; width: fit-content; }
+.teams-analysis-correction > div { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 9px; }
+.teams-analysis-correction .button { padding: 6px 9px; font-size: 11px; }
+.teams-analysis-correction .button[aria-pressed="true"] { border-color: var(--accent-ink); color: var(--accent-ink); }
+.teams-analysis-evidence { margin: 12px 0; padding: 10px 14px; border-left: 3px solid var(--line); color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+.teams-analysis-privacy { color: var(--muted); }
+.teams-analysis-queue { margin: 15px 0 9px; color: var(--ink); }
+.manual-task-category { margin-top: 16px; display: grid; gap: 8px; }
+.manual-task-category select { width: 100%; padding: 9px; border: 1px solid var(--line); border-radius: 9px; }
+.task-review-status { margin: 14px 0; color: var(--muted); font-size: 12px; line-height: 1.7; }
+.task-review-summary { white-space: pre-wrap; overflow-wrap: anywhere; color: var(--ink); line-height: 1.75; }
+.task-review-error { color: var(--danger); font-size: 12px; margin: 10px 0; overflow-wrap: anywhere; }
+.task-review-recommendations { margin: 16px 0; padding-left: 22px; }
+.task-review-recommendations li { margin-bottom: 12px; padding-left: 5px; }
+.task-review-recommendations p { color: var(--muted); font-size: 12px; line-height: 1.65; margin-top: 5px; overflow-wrap: anywhere; }
+.task-review-recommendations .button-plain { text-align: left; overflow-wrap: anywhere; }
+.overview-heading-controls { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 12px; max-width: 100%; }
+.overview-task-review { width: 300px; max-width: 100%; padding: 12px 14px; border: 1px solid color-mix(in srgb, var(--accent-ink) 35%, var(--line)); border-radius: 14px; background: color-mix(in srgb, var(--teal-soft) 45%, var(--card)); color: var(--ink); }
+.overview-review-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 10px; }
+.overview-review-heading strong { font-size: 13px; font-weight: 650; color: var(--accent-ink); }
+.overview-review-toggle { display: flex; align-items: center; gap: 7px; flex-shrink: 0; }
+.overview-review-toggle > label:last-child { font-size: 11px; color: var(--ink); cursor: pointer; }
+.overview-review-controls { display: flex; align-items: center; gap: 8px; }
+.overview-review-controls > label { flex-shrink: 0; font-size: 11px; color: var(--muted); }
+.overview-review-controls select { min-width: 0; flex: 1; padding: 7px 9px; border: 1px solid var(--line); border-radius: 8px; font-size: 12px; }
+.overview-review-controls .button { flex-shrink: 0; padding: 8px 12px; min-height: 34px; font-size: 12px; }
+.overview-task-review .overview-review-status { margin: 9px 0 0; color: var(--muted); font-size: 10px; line-height: 1.5; overflow-wrap: anywhere; }
+.overview-review-priorities { margin-top: 10px; padding-top: 9px; border-top: 1px solid var(--line); }
+.overview-review-priorities > span, .overview-review-priorities summary { color: var(--muted); font-size: 10px; }
+.overview-review-priorities summary { cursor: pointer; margin-top: 7px; }
+.overview-review-priority { margin-top: 6px; }
+.overview-review-priority button { display: block; padding: 0; border: 0; background: transparent; color: var(--accent-ink); font: inherit; font-size: 12px; font-weight: 600; text-align: left; overflow-wrap: anywhere; }
+.overview-review-priority button:hover { text-decoration: underline; }
+.overview-task-review .overview-review-priority p { margin: 3px 0 0; color: var(--muted); font-size: 10px; line-height: 1.5; overflow-wrap: anywhere; }
+@media (max-width: 560px) {
+  #teams-analysis-settings .settings-field, #task-review-settings .settings-field { gap: 12px; align-items: flex-start; }
+  #task-review-settings .settings-field { flex-wrap: wrap; }
+  .task-category-tabs button { flex: 1; justify-content: center; }
+  .teams-analysis-card { padding: 10px; }
+  .overview-heading-controls, .overview-task-review { width: 100%; }
+  .overview-heading-controls { justify-content: flex-start; }
+}
 
 /* Keep the card-board preset coherent when its independently selected color theme changes. */
 .app-shell[data-dashboard-theme="board"][data-color-theme]:not([data-color-theme="sage"]) { background: var(--paper); }

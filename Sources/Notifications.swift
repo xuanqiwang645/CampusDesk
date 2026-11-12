@@ -5,10 +5,13 @@ import UserNotifications
 final class CampusNotifications: NSObject, UNUserNotificationCenterDelegate {
     var onEvent: (([String: Any]) -> Void)?
     var onOpen: ((String) -> Void)?
+    var onOpenTasks: (() -> Void)?
     private let center = UNUserNotificationCenter.current()
     private let prefix = "campus-teams-"
     private var revision = UUID()
     private var desiredIDs = Set<String>()
+    private var reviewRevision = UUID()
+    private var reviewIDs = Set<String>()
     private let fractional = ISO8601DateFormatter()
     private let ordinary = ISO8601DateFormatter()
 
@@ -27,6 +30,40 @@ final class CampusNotifications: NSObject, UNUserNotificationCenterDelegate {
                 if let error = error {
                     self.onEvent?(["type": "status", "source": "app", "busy": false,
                                    "message": "通知授权未完成：" + error.localizedDescription])
+                }
+            }
+        }
+    }
+    func cancelTaskReviewNotifications() {
+        reviewRevision = UUID()
+        center.removePendingNotificationRequests(withIdentifiers: Array(reviewIDs))
+        center.removeDeliveredNotifications(withIdentifiers: Array(reviewIDs))
+        reviewIDs.removeAll()
+    }
+
+    /// Authorization never prompts here. Recheck the native receipt and current
+    /// tasks after the async permission lookup, immediately before scheduling.
+    func notifyTaskReview(requestID: String, approve: @escaping () -> (summary: String, titles: [String])?) {
+        let expected = reviewRevision
+        center.getNotificationSettings { [weak self] settings in
+            DispatchQueue.main.async {
+                guard let self, self.reviewRevision == expected,
+                      settings.authorizationStatus == .authorized || settings.authorizationStatus == .provisional,
+                      let content = approve() else { return }
+                let id = "campus-task-review-" + requestID
+                // Keep native bookkeeping bounded even after months of use.
+                if self.reviewIDs.count >= 32 { self.cancelTaskReviewNotifications() }
+                self.reviewIDs.insert(id)
+                let notification = UNMutableNotificationContent()
+                notification.title = "学习助手 · 待办提醒"
+                notification.body = String((content.titles.joined(separator: "、") + "\n" + content.summary).prefix(500))
+                notification.sound = .default; notification.userInfo = ["taskReview": true]
+                self.center.add(UNNotificationRequest(identifier: id, content: notification, trigger: nil)) { [weak self] _ in
+                    DispatchQueue.main.async {
+                        guard let self, !self.reviewIDs.contains(id) else { return }
+                        self.center.removePendingNotificationRequests(withIdentifiers: [id])
+                        self.center.removeDeliveredNotifications(withIdentifiers: [id])
+                    }
                 }
             }
         }
@@ -119,6 +156,8 @@ final class CampusNotifications: NSObject, UNUserNotificationCenterDelegate {
                                 withCompletionHandler completionHandler: @escaping () -> Void) {
         let url = response.notification.request.content.userInfo["teamsURL"] as? String
         DispatchQueue.main.async { [weak self] in
+            if response.actionIdentifier == UNNotificationDefaultActionIdentifier,
+               response.notification.request.content.userInfo["taskReview"] as? Bool == true { self?.onOpenTasks?() }
             if response.actionIdentifier == UNNotificationDefaultActionIdentifier, let url = url,
                self?.isTeamsURL(url) == true { self?.onOpen?(url) }
             completionHandler()

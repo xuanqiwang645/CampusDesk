@@ -37,6 +37,7 @@
   const calendarKinds = new Set(['course', 'task', 'school', 'personal']);
   let widgetsStatus = { supported: false, updatedAt: null, busy: false, error: null };
   let taskFilter = 'open';
+  let taskCategoryFilter = 'homework';
   let taskSubjectFilter = 'all';
   let taskOverdueOpen = true;
   let lastTodoCountdownMinute = -1;
@@ -52,6 +53,9 @@
   let feedbackFilter = 'all';
   let gradeNotificationsFilter = 'all', gradeNotificationsLimit = 40;
   let teamsFilter = 'all';
+  let teamsAnalysisClient = null;
+  let taskReviewClient = null;
+  let teamsAnalysisResetting = false;
   let teamsChannelFilter = 'all';
   let ecQuery = '', ecDateFilter = 'all', renderedPage = null;
   let detailTaskId = null;
@@ -116,7 +120,7 @@
   let pendingImportRequestID = '';
   let nativeStateGeneration = null;
   let pendingImportEvents = [];
-  const stateScopedNativeEvents = new Set(['state', 'snapshot', 'graphBatch', 'graphReset', 'teamsAttachment', 'teamsAttachmentUnchanged', 'pinTeamsPage', 'schoolConfiguration', 'schoolConfigurationError', 'schoolCalendarFile', 'schoolCalendarPDF', 'schoolCalendarFileError', 'import', 'graphStatus', 'teamsAutoStatus', 'status']);
+  const stateScopedNativeEvents = new Set(['state', 'snapshot', 'graphBatch', 'graphReset', 'teamsAttachment', 'teamsAttachmentUnchanged', 'teamsAnalysisResult', 'taskReviewResult', 'taskReviewTick', 'pinTeamsPage', 'schoolConfiguration', 'schoolConfigurationError', 'schoolCalendarFile', 'schoolCalendarPDF', 'schoolCalendarFileError', 'import', 'graphStatus', 'teamsAutoStatus', 'status']);
   let quickConnectionSource = null, pendingQuickConnection = null;
   let pendingSchoolCalendarPDF = null;
   let teamsAuto = { running: false, phase: 'idle', message: '登录 Teams 后自动发现频道和聊天。', counts: {}, warnings: [], coverageItems: [] };
@@ -166,7 +170,7 @@
     '自编课表': 'Custom schedule', '添加自编课程': 'Add custom class', '课程名称': 'Class name', '教室（可选）': 'Room (optional)', '选择星期': 'Choose weekdays', '按节次': 'By period', '按时刻': 'By time', '第几节': 'Period', '开始时间': 'Start time', '结束时间': 'End time', '保存自编课程': 'Save custom class', '已添加': 'Added', '删除自编课程': 'Delete custom class', '请选择至少一天': 'Choose at least one weekday', '结束时间将自动补为开始时间后 45 分钟。': 'An empty or invalid end time is filled as 45 minutes after the start.', '按时间填写时，会按重叠比例自动归入对应节次。': 'Time-based entries are assigned by overlap with the matching period.', '周日': 'Sun', '周一': 'Mon', '周二': 'Tue', '周三': 'Wed', '周四': 'Thu', '周五': 'Fri', '周六': 'Sat',
     '上课日期': 'Class date', '操作': 'Action', '如：晨会、社团': 'e.g. morning meeting or club', '如：操场': 'e.g. playground', '如：调课后的课程': 'e.g. adjusted class name', '选择节次后自动带出时间': 'Choose a period to fill in the times', '填入开始时间后会自动识别节次': 'A period is suggested after you enter the start time', '将归入 ': 'Assigned to ', '未匹配节次，将按开始时间插入': 'No period match; will be placed by start time', '该节次暂无已读取的时间': 'No captured time is available for this period', '尚未设置节假日；设置后当天常规课表和每周自编课程会隐藏。': 'No holidays set. Adding one hides regular and weekly custom classes for that date.',
     '希悦网址': 'Seiue URL', '学校 ManageBac 网址': 'School ManageBac URL', '导出或恢复本机数据': 'Export or restore local data', '构建时配置；未配置时不会连接。': 'Configured at build time; no connection is made when it is empty.', '构建时配置；仅允许指定学校的精确地址。': 'Configured at build time; only the approved school address is allowed.',
-    'Teams 作业提醒': 'Teams assignment reminders', '截止前系统通知': 'System notifications before due dates', '提前多久提醒': 'Reminder lead time', '提醒学科': 'Reminder subjects', '取消某科可暂停该科通知；默认所有学科都可提醒。': 'Uncheck a subject to mute its reminders; all subjects are included by default.', '恢复全部学科': 'Include all subjects', '提醒筛选已更新。': 'Reminder filters updated.', '已恢复所有学科提醒。': 'Reminders are enabled for all subjects.', '暂无已读取学科；获取到 Teams 作业后会在这里列出。': 'No Teams subjects captured yet. Subjects will appear here after assignments are synced.', 'Teams 作业截止提醒': 'Teams assignment due reminders', '通知提醒只在 CampusDesk Mac 应用中可用。': 'Notifications are available in the CampusDesk Mac app only.', '系统通知未允许。请到 Mac 系统设置 → 通知 → CampusDesk 开启。': 'Notifications are off. Turn them on in macOS System Settings → Notifications → CampusDesk.', '如果提前提醒时间已过，将在截止时提醒。已逾期或已完成的作业不安排通知。': 'If the lead time has passed, the reminder is sent at the deadline. Overdue or completed assignments are not scheduled.', '截止时': 'At the deadline', '提前 10 分钟': '10 minutes before', '提前 30 分钟': '30 minutes before', '提前 1 小时': '1 hour before', '提前 1 天': '1 day before', '作业提醒时间已更新。': 'Reminder timing updated.',
+    'Teams 待办提醒': 'Teams to-do reminders', '截止前系统通知': 'System notifications before due dates', '提前多久提醒': 'Reminder lead time', '提醒学科': 'Reminder subjects', '取消某科可暂停该科通知；默认所有学科都可提醒。': 'Uncheck a subject to mute its reminders; all subjects are included by default.', '恢复全部学科': 'Include all subjects', '提醒筛选已更新。': 'Reminder filters updated.', '已恢复所有学科提醒。': 'Reminders are enabled for all subjects.', '暂无已读取学科；获取到 Teams 作业后会在这里列出。': 'No Teams subjects captured yet. Subjects will appear here after assignments are synced.', 'Teams 待办截止提醒': 'Teams to-do due reminders', '通知提醒只在 CampusDesk Mac 应用中可用。': 'Notifications are available in the CampusDesk Mac app only.', '系统通知未允许。请到 Mac 系统设置 → 通知 → CampusDesk 开启。': 'Notifications are off. Turn them on in macOS System Settings → Notifications → CampusDesk.', '如果提前提醒时间已过，将在截止时提醒。已逾期或已完成的作业不安排通知。': 'If the lead time has passed, the reminder is sent at the deadline. Overdue or completed assignments are not scheduled.', '截止时': 'At the deadline', '提前 10 分钟': '10 minutes before', '提前 30 分钟': '30 minutes before', '提前 1 小时': '1 hour before', '提前 1 天': '1 day before', '作业提醒时间已更新。': 'Reminder timing updated.',
     '课程成绩': 'Course grades', '学校 GPA': 'School GPA', '参考 GPA': 'Estimated GPA', '分档 GPA': 'Banded GPA', '线性折算 GPA': 'Linear GPA', '线性绩点': 'Linear points', '今日课程': 'Today\'s classes', '全部待办': 'All to-dos', '添加待办': 'Add to-do', '查看全部': 'View all',
     'Teams 作业': 'Teams assignments', 'ManageBac 作业': 'ManageBac assignments', '个人待办': 'Personal to-dos', '作业来源': 'Assignment source', '学科': 'Subject', '特别关注': 'Favorite', '已关注': 'Following',
     '未完成': 'Open', '已逾期': 'Overdue', '已完成': 'Completed', '全部': 'All', '全部学科': 'All subjects', '全部频道': 'All channels', '全部消息': 'All messages', '作业消息': 'Assignment messages', '其他通知': 'Other notifications',
@@ -190,8 +194,8 @@
     '打开成绩页面': 'Open grades', '学校公布': 'Published by school', '非官方 · 4.0 制': 'Unofficial · 4.0 scale', '尚未读取到学校公布的 GPA。这里不会用参考值替代。': 'No published school GPA has been captured. The estimate will not replace it.', '根据': 'Based on ', '门已读取课程': ' captured courses', '等权估算。': ' courses, equally weighted.', '分档按 A 至 F 的 12 档换算，93 分起为 4.0，90 分起为 3.7，60 分以下为 0；完整标准见换算表。仅使用能确认的当前学期课程总评，不把单次作业分数当总评；不含学分与 AP 加权，也不代表学校的换算规则。': 'Banded GPA uses 12 grades from A to F: 4.0 from 93%, 3.7 from 90%, and 0 below 60%; see the full conversion table. Only confirmed current-term course grades are used; individual assignment scores are not treated as final grades. Credits and AP weighting are excluded, and this is not the school\'s official conversion.', '你的成绩，值得准确地记录': 'Your grades deserve an accurate record', '登录 ManageBac 并打开当前学期成绩页面。读取到课程总评后，参考 GPA 会自动计算。': 'Sign in to ManageBac and open the current-term grades page. Estimated GPA is calculated after course grades are captured.',
     '课程表 · 上课时间 · 教室': 'Schedule · class times · rooms', '作业要求 · 提醒 · EC 通知': 'Assignment requirements · reminders · EC notices', '课程成绩 · 学校任务 · 老师反馈': 'Course grades · school tasks · teacher feedback', '尚未连接': 'Not connected', '最近读取：': 'Last read: ', '登录并连接': 'Sign in and connect', '退出登录': 'Sign out', '在浏览器打开 Teams': 'Open Teams in browser', '自动发现 · EC 附件 · 本机缓存': 'Automatic discovery · EC attachments · local cache', '浏览器自动同步': 'Browser automatic sync', '频道消息 · 作业要求 · EC 名单': 'Channel messages · assignments · EC rosters', '待首次配置': 'Initial setup needed', '等待登录': 'Waiting for sign-in', '已连接': 'Connected', '正在同步': 'Syncing', '正在读取': 'Reading', '已读取': 'Read', '缓存待更新': 'Cached · update pending', '需要登录': 'Sign-in required', '未配置学校地址': 'School URL not configured',
     'Teams 连接方式': 'Teams connection method', '浏览器模式复用你的学校登录。Graph 模式需要独立应用配置及学校授权。': 'Browser mode reuses your school sign-in. Graph mode needs separate app configuration and school authorization.', '浏览器自动发现': 'Browser automatic discovery', '微软 Graph 授权': 'Microsoft Graph authorization', '定时自动发现和同步': 'Scheduled discovery and sync', '关闭后停止当前自动读取，保留已同步内容。': 'Turn off to stop automatic reading while keeping synced content.', '也同步我参与的聊天': 'Also sync chats I participate in', '关闭后只自动读取团队频道。': 'When off, only team channels are read automatically.', '浏览器连接与授权': 'Browser connection & authorization', '学校账号只在 Chrome 或 Edge 中登录。CampusDesk 使用专用 Teams 同步标签读取消息和可访问附件；接口不可用时尝试页面读取。': 'Sign in to the school account only in Chrome or Edge. CampusDesk reads messages and accessible attachments from a dedicated Teams sync tab, with page reading as a fallback.', '用于 Teams 的浏览器': 'Browser for Teams', '选择你已安装并登录学校账号的浏览器。': 'Choose the browser where you are signed in to the school account.', '允许读取 Teams 浏览器页面': 'Allow reading Teams browser pages', '允许只读发现和同步账号可见的团队、频道、聊天及附件。不会发送消息、提交作业或修改学校数据；关闭后停止自动读取并保留缓存。': 'Allow read-only discovery and sync of teams, channels, chats, and attachments visible to the account. No messages, assignments, or school data are changed; turning this off stops automatic reading and keeps the cache.', '手动读取当前页面': 'Read the current page manually', '关注浏览器当前 Teams 页': 'Follow the current Teams page', '读取当前页': 'Read current page', '读取选中文字': 'Read selected text',
-    '系统通知已允许。仅为已确认截止时间的 Teams 未完成作业安排提醒。': 'System notifications are allowed. Reminders are scheduled only for unfinished Teams assignments with confirmed due dates.', '启用后将请求 macOS 通知权限。没有明确截止时间的作业可在“查看要求”中手动设置。': 'Enabling this will request macOS notification permission. Assignments without a clear due date can be set manually in “View requirements”.', '如果提前提醒时间已过，将在截止时提醒。已逾期或已完成的作业不安排通知。': 'If the lead time has passed, a reminder is sent at the deadline. Overdue or completed assignments are not scheduled.', '截止时': 'At due time', '提前 10 分钟': '10 minutes before', '提前 30 分钟': '30 minutes before', '提前 1 小时': '1 hour before', '提前 1 天': '1 day before', 'Teams 作业截止提醒': 'Teams assignment due reminders',
-    '经典面板保留原有的信息布局；卡片看板用更紧凑的统计卡和任务卡集中展示今天的重点。两种样式使用同一份本机数据，随时可切换。': 'The classic dashboard keeps the familiar information layout; the card board focuses today\'s priorities with compact metrics and task cards. Both styles use the same local data and can be switched at any time.', '允许 CampusDesk 读取 Teams 浏览器页面': 'Allow CampusDesk to read Teams browser pages', '首次同步时，按 Mac 提示允许 CampusDesk 控制 Google Chrome。也可在系统设置 → 隐私与安全性 → 自动化核对。': 'During the first sync, follow the Mac prompt to let CampusDesk control Google Chrome. You can also check System Settings → Privacy & Security → Automation.', '首次同步时，按 Mac 提示允许 CampusDesk 控制 ': 'During the first sync, follow the Mac prompt to let CampusDesk control ', '。也可在系统设置 → 隐私与安全性 → 自动化核对。': '. You can also check System Settings → Privacy & Security → Automation.', '浏览器需启用 Allow JavaScript from Apple Events（允许来自 Apple 事件的 JavaScript）。Chrome 位于“显示 → 开发者”。': 'Enable Allow JavaScript from Apple Events in the browser. In Chrome, it is under View → Developer.', '同步时请保留专用 Teams 标签，不要切换其中的页面。登录凭据仅在浏览器内使用；附件在本机解析，不上传外部 AI 服务。关闭应用后不会继续同步。': 'Keep the dedicated Teams tab open during sync. Sign-in credentials stay in the browser; attachments are parsed locally and are not sent to external AI services. Sync stops when the app closes.', '学校连接': 'School connections', '希悦和 ManageBac 配置后在应用内登录并读取页面。Teams 默认使用本机 Chrome 或 Edge 已登录页面读取，也可选配 Microsoft Graph 授权；应用运行时定期同步。权限不足、网络中断或接口限制会在同步状态中提示，现有内容作为缓存保留。': 'Sign in to Seiue and ManageBac after configuration. Teams uses a signed-in Chrome or Edge page by default, with optional Microsoft Graph authorization; the app syncs periodically while running. Permission, network, and API limits are shown in sync status, while existing content remains cached.', '连接校园，开始你的第一天': 'Connect your campus', '连接希悦、ManageBac 和 Teams，把课表、作业和通知放在一起。': 'Connect Seiue, ManageBac, and Teams to keep schedules, assignments, and notices together.',
+    '系统通知已允许。仅为已确认截止时间的 Teams 未完成作业或活动待办安排提醒。': 'System notifications are allowed. Reminders are scheduled only for unfinished Teams homework or activity to-dos with confirmed due dates.', '启用后将请求 macOS 通知权限。没有明确截止时间的作业可在“查看要求”中手动设置。': 'Enabling this will request macOS notification permission. Assignments without a clear due date can be set manually in “View requirements”.', '如果提前提醒时间已过，将在截止时提醒。已逾期或已完成的作业不安排通知。': 'If the lead time has passed, a reminder is sent at the deadline. Overdue or completed assignments are not scheduled.', '截止时': 'At due time', '提前 10 分钟': '10 minutes before', '提前 30 分钟': '30 minutes before', '提前 1 小时': '1 hour before', '提前 1 天': '1 day before', 'Teams 待办截止提醒': 'Teams to-do due reminders',
+    '经典面板保留原有的信息布局；卡片看板用更紧凑的统计卡和任务卡集中展示今天的重点。两种样式使用同一份本机数据，随时可切换。': 'The classic dashboard keeps the familiar information layout; the card board focuses today\'s priorities with compact metrics and task cards. Both styles use the same local data and can be switched at any time.', '允许 CampusDesk 读取 Teams 浏览器页面': 'Allow CampusDesk to read Teams browser pages', '首次同步时，按 Mac 提示允许 CampusDesk 控制 Google Chrome。也可在系统设置 → 隐私与安全性 → 自动化核对。': 'During the first sync, follow the Mac prompt to let CampusDesk control Google Chrome. You can also check System Settings → Privacy & Security → Automation.', '首次同步时，按 Mac 提示允许 CampusDesk 控制 ': 'During the first sync, follow the Mac prompt to let CampusDesk control ', '。也可在系统设置 → 隐私与安全性 → 自动化核对。': '. You can also check System Settings → Privacy & Security → Automation.', '浏览器需启用 Allow JavaScript from Apple Events（允许来自 Apple 事件的 JavaScript）。Chrome 位于“显示 → 开发者”。': 'Enable Allow JavaScript from Apple Events in the browser. In Chrome, it is under View → Developer.', '同步时请保留专用 Teams 标签，不要切换其中的页面。登录凭据仅在浏览器内使用；附件在本机解析；开启「Teams 自动整理」后，消息正文和已提取的附件文字会发送给 DeepSeek。关闭应用后不会继续同步。': 'Keep the dedicated Teams tab open during sync. Sign-in credentials stay in the browser; attachments are parsed locally and are not sent to external AI services. Sync stops when the app closes.', '学校连接': 'School connections', '希悦和 ManageBac 配置后在应用内登录并读取页面。Teams 默认使用本机 Chrome 或 Edge 已登录页面读取，也可选配 Microsoft Graph 授权；应用运行时定期同步。权限不足、网络中断或接口限制会在同步状态中提示，现有内容作为缓存保留。': 'Sign in to Seiue and ManageBac after configuration. Teams uses a signed-in Chrome or Edge page by default, with optional Microsoft Graph authorization; the app syncs periodically while running. Permission, network, and API limits are shown in sync status, while existing content remains cached.', '连接校园，开始你的第一天': 'Connect your campus', '连接希悦、ManageBac 和 Teams，把课表、作业和通知放在一起。': 'Connect Seiue, ManageBac, and Teams to keep schedules, assignments, and notices together.',
     '课表倒计时按北京时间每秒更新，依据已读取课节的结束和下一节开始时间计算。应用需定期运行并同步，才能发现新作业和截止时间变更；系统通知是否显示还受 Mac 通知和专注模式设置影响。': 'The class countdown updates every second in Beijing time using captured class end and next-start times. The app must run and sync periodically to discover new assignments and due-date changes; macOS notifications and Focus settings control whether alerts appear.',
     '未配置；编辑 SchoolConfig.json 后重新构建': 'Not configured; edit SchoolConfig.json and rebuild', '应用正在运行且电脑联网时，尝试更新已连接的数据。': 'Connected data is refreshed while the app is running and the Mac is online.', '只处理希悦明确给出时间的空白课节。': 'Only open periods with explicit times from Seiue are filled.', '在不同地区使用 Mac，也按北京的上课时间展示。': 'Classes are shown in Beijing time even when the Mac is used in another region.', '包含课程缓存、个人待办及 GPA 记录。也包含 Teams 消息、EC 通知和提醒设置。备份不包含登录会话或密码。': 'Includes schedule cache, personal to-dos, GPA records, Teams messages, EC notices, and reminder settings. Backups do not include sign-in sessions or passwords.', '本地预览版 · 独立学习工具，与希悦、ManageBac 及 Microsoft 无隶属关系。': 'Local preview · independent study tool, not affiliated with Seiue, ManageBac, or Microsoft.',
     '距离下课': 'Class ends in', '课间剩余': 'Break remaining', '午间休息剩余': 'Lunch break remaining', '距离第一节课': 'First class starts in', '今日课程已结束': 'Classes are finished for today', '等待今日课表': 'Waiting for today\'s schedule', '课表缓存待更新 · ': 'Schedule cache needs updating · ', '基于已读取课表 · ': 'Based on captured schedule · ', '今日课程倒计时': 'Today\'s class countdown', '时间待定': 'Time TBD', '已读取课节均已结束，可以查看接下来的待办。': 'All captured classes have ended; you can review the next to-dos.', '同步希悦当天课表后，这里显示课间倒计时。': 'After syncing today\'s schedule, break countdowns appear here.',
@@ -387,7 +391,38 @@
       catch (_) { toast('浏览器无法保存数据。请导出备份，或使用 Mac 应用。'); return false; }
     }
     syncReminders();
+    reconcileTeamsAnalysis();
     return true;
+  }
+  function reconcileTeamsAnalysis() {
+    if (teamsAnalysisResetting) return;
+    if (!teamsAnalysisClient && window.CampusTeamsAnalysisClient) {
+      teamsAnalysisClient = window.CampusTeamsAnalysisClient.create({
+        getState: () => state,
+        send,
+        canRun: () => {
+          const review = taskReviewClient?.getStatus();
+          const reviewDue = state.settings.taskReviewEnabled && review?.nextRunAt && Date.parse(review.nextRunAt) <= Date.now();
+          return native && themeEdition && !teamsAnalysisResetting && !pendingImportRequestID && !assistantBusy && navigator.onLine !== false && !review?.running && !review?.pending && !reviewDue;
+        },
+        onState: next => { state = next; persist(); requestBackgroundRender(); },
+        onStatus: () => { if (!teamsAnalysisResetting) { taskReviewClient?.reconcile(); requestBackgroundRender(); } }
+      });
+    }
+    teamsAnalysisClient?.reconcile();
+    if (!taskReviewClient && window.CampusTaskReviewClient) {
+      taskReviewClient = window.CampusTaskReviewClient.create({
+        getState: () => state, send,
+        canRun: () => native && themeEdition && !teamsAnalysisResetting && !pendingImportRequestID && !assistantBusy && navigator.onLine !== false && !teamsAnalysisClient?.getStatus().running,
+        onState: next => { state = next; persist(); requestBackgroundRender(); },
+        onStatus: () => { if (!teamsAnalysisResetting) requestBackgroundRender(); }
+      });
+    }
+    taskReviewClient?.reconcile();
+  }
+  function resetTeamsAnalysis() {
+    teamsAnalysisResetting = true;
+    try { teamsAnalysisClient?.reset(); taskReviewClient?.reset(); } finally { teamsAnalysisResetting = false; }
   }
   function invalidateDerivedCaches() {
     derivedCacheState = state;
@@ -424,6 +459,9 @@
     if (dashboardHidden()) return true;
     if (['task-dialog', 'detail-dialog', 'agenda-event-dialog', 'teams-page-dialog', 'calendar-preview-dialog', 'setup-wizard-dialog', 'quick-connect-dialog', 'assistant-confirm-dialog', 'grade-notifications-dialog'].some(id => document.getElementById(id)?.open)) return true;
     const active = document.activeElement;
+    // A committed toggle has no text draft or composition to protect. Keeping
+    // it focused must not indefinitely hide queue progress or the next review.
+    if (active?.tagName === 'INPUT' && ['checkbox', 'radio'].includes(active.getAttribute('type'))) return false;
     return Boolean(active && (['INPUT', 'TEXTAREA', 'SELECT'].includes(active.tagName) || active.isContentEditable) && document.getElementById('content')?.contains(active));
   }
   function flushBackgroundRender() {
@@ -449,6 +487,47 @@
     return memoized('open-tasks:' + (source || '*'), () => taskRowsForState().filter(task => !task.completed && (!source || task.source === source)));
   }
   function openTaskCountForState() { return memoized('open-task-count', () => openTasksForState().length); }
+  function taskCategory(task) { return task.category === 'activity' ? 'activity' : 'homework'; }
+  function taskCategoryLabel(category) { return assistantCopy(category === 'activity' ? '活动待办' : '作业待办', category === 'activity' ? 'Activities' : 'Homework'); }
+  function taskCategorySections(tasks, renderRows) {
+    return ['homework', 'activity'].map(category => {
+      const rows = tasks.filter(task => taskCategory(task) === category);
+      return '<section class="task-category-section" data-dom-key="category-' + category + '"><h3 class="task-category-heading">' + taskCategoryLabel(category) + '<span>' + rows.length + '</span></h3>' + (rows.length ? renderRows(rows) : '<p class="subtle task-category-empty">' + assistantCopy('暂无待完成事项。', 'No open items.') + '</p>') + '</section>';
+    }).join('');
+  }
+  function teamsAnalysisSummary() {
+    return memoized('teams-analysis-summary', () => Core.getTeamsAnalysisSummary ? Core.getTeamsAnalysisSummary(state) : { total: 0, ready: 0, pending: 0, failed: 0 });
+  }
+  function teamsAnalysisStatus() { return teamsAnalysisClient?.getStatus() || { running: false, activeIds: [], message: '', blocked: false }; }
+  function teamsAnalysisCategory(record) {
+    if (record?.manualOverride) return record.manualOverride.category;
+    if (record?.status !== 'ready') return 'pending';
+    if (record.classification !== 'actionable') return record.classification === 'notice' ? 'notice' : 'uncertain';
+    const kinds = new Set((record.tasks || []).map(taskCategory));
+    return kinds.size > 1 ? 'mixed' : kinds.has('activity') ? 'activity' : kinds.has('homework') ? 'homework' : 'uncertain';
+  }
+  function teamsAnalysisRecord(id) { return Core.getTeamsAnalysisRecord?.(state, id); }
+  function teamsAnalysisInput(id) {
+    const inputs = memoized('teams-analysis-inputs', () => new Map((Core.getTeamsAnalysisInputs?.(state) || []).map(input => [input.id, input])));
+    return inputs.get(id) || inputs.get('teams:' + id);
+  }
+  function teamsAnalysisCorrection(id, record) {
+    const chosen = record?.manualOverride?.category || 'automatic';
+    const input = teamsAnalysisInput(id), fingerprint = input?.sourceFingerprint || input?.fingerprint || '';
+    return '<details class="teams-analysis-correction"><summary>' + assistantCopy('纠正分类', 'Correct classification') + '</summary><div>' + [['homework', '作业', 'Homework'], ['activity', '活动', 'Activity'], ['notice', '普通通知', 'Notice'], ['automatic', '恢复 AI 判断', 'Use AI classification']].map(([category, zh, en]) => '<button type="button" class="button button-light" data-action="teams-analysis-override" data-id="' + esc(id) + '" data-fingerprint="' + esc(fingerprint) + '" data-category="' + category + '" aria-pressed="' + (chosen === category) + '">' + assistantCopy(zh, en) + '</button>').join('') + '</div><p>' + assistantCopy('只调整本机分类；原文变更后需重新核对。完成标记不会被清除。', 'Changes only the local category. Review again if the source changes; completion marks are retained.') + '</p></details>';
+  }
+  function teamsAnalysisHTML(id) {
+    const record = teamsAnalysisRecord(id), category = teamsAnalysisCategory(record), runtime = teamsAnalysisStatus();
+    const failed = record?.status === 'failed' && !record.manualOverride;
+    const active = (runtime.activeIds || []).some(value => value === id || value === 'teams:' + id);
+    const labels = { homework: ['作业', 'Homework'], activity: ['活动', 'Activity'], mixed: ['作业与活动', 'Homework and activity'], notice: ['普通通知', 'Notice'], uncertain: ['待核对', 'Needs review'] };
+    const label = record?.manualOverride ? assistantCopy('人工分类 · ', 'Manual category · ') + assistantCopy(...labels[category])
+      : record?.status === 'ready' ? assistantCopy('已分析 · ', 'Analyzed · ') + assistantCopy(...labels[category])
+      : failed ? assistantCopy('分析失败', 'Analysis failed')
+      : !state.settings.teamsAnalysisEnabled ? assistantCopy('自动整理未开启', 'Automatic organizing is off')
+      : active ? assistantCopy('分析中', 'Analyzing') : assistantCopy('待分析', 'Pending analysis');
+    return '<section class="teams-analysis-card" data-analysis-state="' + (record?.status || (active ? 'analyzing' : 'pending')) + '"><div class="teams-analysis-heading"><span>' + esc(label) + '</span>' + (failed && state.settings.teamsAnalysisEnabled ? button(assistantCopy('重试', 'Retry'), 'teams-analysis-retry', 'data-id="' + esc(id) + '"' + (!native || !themeEdition ? ' disabled' : '')) : '') + '</div>' + (record?.summary ? '<p class="teams-analysis-summary">' + esc(record.summary) + '</p>' : '') + (failed ? '<p>' + (record.error ? esc(record.error) + ' · ' : '') + assistantCopy('本条未生成待办；可重试或核对原文后纠正分类。', 'No to-do was created. Retry or check the source and correct its category.') + '</p>' : '') + teamsAnalysisCorrection(id, record) + '</section>';
+  }
   function courseRowsForState() { return memoized('courses', () => Core.getCourses(state)); }
   function feedbackRowsForState() { return memoized('feedback', () => Core.getFeedback(state)); }
   function scheduleRowsForState(date, includeSelfStudy) {
@@ -892,9 +971,9 @@
   }
   function postRows(posts) {
     return posts.map(post => {
-      const kind = ({ assignment: '作业消息', ec: 'EC 通知', general: '频道消息' }[post.kind] || '频道消息');
+      const kind = ({ assignment: '频道消息', ec: 'EC 通知', general: '频道消息' }[post.kind] || '频道消息');
       const published = post.publishedAt ? lastUpdated(post.publishedAt) : post.dateLabel ? (isEnglish() ? 'Original time: ' + post.dateLabel + ' (date unconfirmed)' : '原文时间：' + post.dateLabel + '（日期未确认）') : t('发布日期未确认');
-      return '<article id="post-' + esc(encodeURIComponent(post.id)) + '" class="teams-post" data-reading-anchor><div class="post-meta"><span class="post-kind">' + t(kind) + '</span><span>' + (isEnglish() ? 'Recipient: ' : '收件人：') + esc(postRecipient(post)) + '</span><span>' + (isEnglish() ? 'Channel: ' : '频道：') + esc(postChannel(post)) + '</span><span>' + esc(post.author || t('发送者未标明')) + '</span><span>' + esc(published) + '</span></div><h3>' + esc(post.title || (post.kind === 'ec' ? t('English Corner 通知') : t('频道消息'))) + '</h3><div id="post-text-' + esc(encodeURIComponent(post.id)) + '" data-selection-key class="post-original">' + esc(post.text || t('本条消息未读取到文字，请打开原页面。')) + '</div>' + attachmentsHTML(post.attachments, 'post:'+post.id) + '<div class="post-foot"><span>' + (isEnglish() ? 'Captured ' : '读取于 ') + esc(lastUpdated(post.capturedAt)) + '</span>' + (post.url ? button('查看 Teams 原文 ↗', 'open-source', 'data-source="teams" data-url="' + esc(post.url) + '"', 'button-plain') : '') + '</div></article>';
+      return '<article id="post-' + esc(encodeURIComponent(post.id)) + '" class="teams-post" data-reading-anchor><div class="post-meta"><span class="post-kind">' + t(kind) + '</span><span>' + (isEnglish() ? 'Recipient: ' : '收件人：') + esc(postRecipient(post)) + '</span><span>' + (isEnglish() ? 'Channel: ' : '频道：') + esc(postChannel(post)) + '</span><span>' + esc(post.author || t('发送者未标明')) + '</span><span>' + esc(published) + '</span></div><h3>' + esc(post.title || (post.kind === 'ec' ? t('English Corner 通知') : t('频道消息'))) + '</h3>' + teamsAnalysisHTML(post.id) + '<div id="post-text-' + esc(encodeURIComponent(post.id)) + '" data-selection-key class="post-original">' + esc(post.text || t('本条消息未读取到文字，请打开原页面。')) + '</div>' + attachmentsHTML(post.attachments, 'post:'+post.id) + '<div class="post-foot"><span>' + (isEnglish() ? 'Captured ' : '读取于 ') + esc(lastUpdated(post.capturedAt)) + '</span>' + (post.url ? button('查看 Teams 原文 ↗', 'open-source', 'data-source="teams" data-url="' + esc(post.url) + '"', 'button-plain') : '') + '</div></article>';
     }).join('');
   }
   function groupedTeamsPosts(posts) {
@@ -905,7 +984,8 @@
   function renderTeams() {
     const posts = teamsPosts(), watched = new Set(state.settings.focusTeamsChannels || []), filtered = [];
     for (const post of posts) {
-      if (teamsFilter !== 'all' && post.kind !== teamsFilter) continue;
+      const record = teamsAnalysisRecord(post.id), category = teamsAnalysisCategory(record);
+      if (teamsFilter === 'pending' ? record?.status === 'ready' || record?.manualOverride : teamsFilter !== 'all' && category !== teamsFilter && !(category === 'mixed' && ['homework', 'activity'].includes(teamsFilter))) continue;
       if (teamsChannelFilter === 'focus' && !watched.has(postChannel(post))) continue;
       filtered.push(post);
     }
@@ -913,9 +993,9 @@
     const remaining = Math.max(0, filtered.length - visible.length);
     const tasks = openTasksForState('teams');
     const rangeText = isEnglish() ? 'Showing ' + visible.length + ' / ' + filtered.length + ' captured message(s)' : '显示 ' + visible.length + ' / ' + filtered.length + ' 条已读取消息';
-    const controls = '<div class="page-tools teams-tools"><div class="filter-pills">' + [['all', '全部消息'], ['assignment', '作业消息'], ['general', '其他通知']].map(filter => '<button type="button" class="pill ' + (teamsFilter === filter[0] ? 'active' : '') + '" data-action="teams-filter" data-filter="' + filter[0] + '">' + filter[1] + '</button>').join('') + '</div><div class="filter-pills"><button type="button" class="pill ' + (teamsChannelFilter === 'all' ? 'active' : '') + '" data-action="teams-channel-filter" data-filter="all">全部频道</button><button type="button" class="pill ' + (teamsChannelFilter === 'focus' ? 'active' : '') + '" data-action="teams-channel-filter" data-filter="focus">特别关注</button></div><span class="subtle">' + rangeText + '</span></div>';
+    const controls = '<div class="page-tools teams-tools"><div class="filter-pills">' + [['all', '全部消息'], ['homework', assistantCopy('作业', 'Homework')], ['activity', assistantCopy('活动', 'Activities')], ['notice', assistantCopy('普通通知', 'Notices')], ['pending', assistantCopy('待分析 / 失败', 'Pending / failed')]].map(filter => '<button type="button" class="pill ' + (teamsFilter === filter[0] ? 'active' : '') + '" data-action="teams-filter" data-filter="' + filter[0] + '">' + filter[1] + '</button>').join('') + '</div><div class="filter-pills"><button type="button" class="pill ' + (teamsChannelFilter === 'all' ? 'active' : '') + '" data-action="teams-channel-filter" data-filter="all">全部频道</button><button type="button" class="pill ' + (teamsChannelFilter === 'focus' ? 'active' : '') + '" data-action="teams-channel-filter" data-filter="focus">特别关注</button></div><span class="subtle">' + rangeText + '</span></div>';
     const showMore = remaining ? '<div class="message-pagination">' + button(isEnglish() ? 'Show 40 more (' + remaining + ' remaining)' : '再显示 40 条（还剩 ' + remaining + ' 条）', 'teams-show-more', '', 'button-light') + '</div>' : '';
-    return heading('频道里的重要信息，在这里。', '按发件人和频道整理；特别关注仅影响 CampusDesk 的优先展示。', button(icon('link') + '打开 Teams', 'open-source', 'data-source="teams"')) + teamsGuide() + (tasks.length ? '<section class="card settings-section">' + cardHeader('tasks', 'Teams 待完成作业', goLink('tasks', '全部待办')) + taskRows(tasks, 5) + (tasks.length > 5 ? '<p class="gpa-note">另有 ' + (tasks.length - 5) + ' 项，可在待办中查看。</p>' : '') + '</section>' : '') + controls + '<section class="card teams-groups-card">' + (visible.length ? groupedTeamsPosts(visible) : empty('teams', teamsChannelFilter === 'focus' ? '还没有特别关注频道的已读取消息' : '还没有已读取的消息', teamsChannelFilter === 'focus' ? '在任意频道标题旁点“特别关注”，它会优先显示在这里。' : '连接学校 Microsoft 账号后，这里会自动汇总有权访问的频道消息。没有同步到消息不代表频道没有消息。')) + showMore + teamsWarning() + sourceFooter('teams') + '</section>';
+    return heading('频道里的重要信息，在这里。', '按发件人和频道整理；特别关注仅影响 CampusDesk 的优先展示。', button(icon('link') + '打开 Teams', 'open-source', 'data-source="teams"')) + teamsGuide() + (tasks.length ? '<section class="card settings-section">' + cardHeader('tasks', assistantCopy('Teams 待办', 'Teams to-dos'), goLink('tasks', '全部待办')) + taskCategorySections(tasks, rows => taskRows(rows, 5)) + (tasks.length > 5 ? '<p class="gpa-note">另有 ' + (tasks.length - 5) + ' 项，可在待办中查看。</p>' : '') + '</section>' : '') + controls + '<section class="card teams-groups-card">' + (visible.length ? groupedTeamsPosts(visible) : empty('teams', teamsChannelFilter === 'focus' ? '还没有特别关注频道的已读取消息' : '还没有已读取的消息', teamsChannelFilter === 'focus' ? '在任意频道标题旁点“特别关注”，它会优先显示在这里。' : '连接学校 Microsoft 账号后，这里会自动汇总有权访问的频道消息。没有同步到消息不代表频道没有消息。')) + showMore + teamsWarning() + sourceFooter('teams') + '</section>';
   }
   function ecDate(post) { return post.publishedAt ? Core.today(new Date(post.publishedAt)) : ''; }
   function searchText(value) { return String(value || '').normalize('NFKC').toLocaleLowerCase().replace(/\s+/g,' ').trim(); }
@@ -1109,8 +1189,8 @@
     const connected = Boolean(sourceStatus('seiue').lastCapturedAt || sourceStatus('managebac').lastCapturedAt || sourceStatus('teams').lastCapturedAt);
     const topText = course.current ? '正在上 ' + course.current.title + '，' + (course.current.end || '课后') + ' 结束。' : course.next ? '下一节是 ' + course.next.title + '，' + (course.next.start || '时间待定') + ' 开始。' : '课程、成绩和待办，在这里从容安排。';
     const date = new Date();
-    const taskPreview = taskSourceSections(openTasks, rows => taskRows(rows, 3));
-    return heading('今天，也有条不紊。', topText, '<div class="date-stamp">' + esc(fmtDate(date, { year: 'numeric', month: 'long', day: 'numeric', weekday: 'long' })) + '<span>BEIJING · ' + esc(Core.clock()) + '</span></div>') +
+    const taskPreview = taskCategorySections(openTasks, group => taskSourceSections(group, rows => taskRows(rows, 3)));
+    return heading('今天，也有条不紊。', topText, '<div class="overview-heading-controls">' + renderOverviewTaskReview() + '<div class="date-stamp">' + esc(fmtDate(date, { year: 'numeric', month: 'long', day: 'numeric', weekday: 'long' })) + '<span>BEIJING · ' + esc(Core.clock()) + '</span></div></div>') +
       (!native ? '<div class="browser-banner">你正在使用网页预览。个人待办可以本地保存；学校登录与自动同步需要打开 CampusDesk Mac 应用。</div>' : '') +
       (!connected ? '<div class="connect-banner"><div class="banner-icon">' + icon('cloud') + '</div><div class="banner-copy"><h3>连接校园，开始你的第一天</h3><p>连接希悦、ManageBac 和 Teams，把课表、作业和通知放在一起。</p></div><div class="banner-actions">' + button('连接希悦', 'open-source', 'data-source="seiue"', 'button-primary') + button('连接 ManageBac', 'open-source', 'data-source="managebac"') + teamsPrimaryButton() + '</div></div>' : '') +
       renderClassClock() + '<div class="overview-grid"><section class="card schedule-card">' + cardHeader('schedule', '今日课程', goLink('schedule', '完整课表')) + (classes.length ? scheduleRows(classes, today) : noSchedule(today)) + sourceFooter('seiue') + '</section>' + renderSchoolCalendar(today, false) +
@@ -1176,11 +1256,11 @@
       '</dl><dl class="board-grade-totals" aria-label="' + (en ? 'Grade point averages' : '平均绩点') + '">' +
       gradeMetric(gpa.official ? (en ? 'School GPA' : '学校 GPA') : (en ? 'Banded GPA estimate' : '分档参考 GPA'), displayGpa) +
       gradeMetric(en ? 'Linear GPA estimate' : '线性参考 GPA', gpa.linear) + '</dl></div>';
-    const boardTasks = boardTaskSourceColumns(openTasks, rows => boardTaskCards(rows, 6));
+    const boardTasks = taskCategorySections(openTasks, group => boardTaskSourceColumns(group, rows => boardTaskCards(rows, 6)));
     const taskSection = '<section class="board-task-section"><div class="board-section-heading"><h2>' + (en ? 'To-do' : '待办事项') + ' <small>' + openTasks.length + '</small></h2><div>' + button(icon('plus') + '添加待办', 'add-task', '', 'button-primary') + button('查看全部', 'go-tasks', '', 'button-light') + '</div></div><div class="board-source-groups">' + (openTasks.length ? boardTasks : boardTaskCards(openTasks)) + '</div></section>';
     const side = '<aside class="board-side-column"><section class="board-mini-card"><p>今日课程</p><h2>' + (classes.length ? classes.length + ' 节已读取课程' : '等待课表同步') + '</h2>' + (classPreview || '<p class="board-muted">登录希悦并打开课表后，这里会显示当天课程。</p>') + button((en ? 'View full schedule' : '查看完整课表') + icon('arrow'), 'go-today-schedule', '', 'button-plain') + '</section>' + renderSchoolCalendar(today, false) + '<section class="board-mini-card board-tip"><p>今日提示</p><h2>信息以原平台为准</h2><span>卡片只整理已经读取到的课程、成绩和作业；点击学校任务可查看原文要求。</span></section></aside>';
     const header = '<header class="board-hero"><div><h1>今日概览</h1><p><time datetime="' + esc(today) + '">' + esc(dateLabel) + '</time>' + classCount + '</p></div>' +
-      button(icon('settings') + '面板样式', 'appearance-settings', '', 'button-light') + '</header>';
+      '<div class="overview-heading-controls">' + renderOverviewTaskReview() + button(icon('settings') + '面板样式', 'appearance-settings', '', 'button-light') + '</div></header>';
     return '<section class="board-panel">' + header + boardClock + metrics + '<div class="board-layout">' + taskSection + side + '</div></section>';
   }
   function renderOverview() {
@@ -1723,10 +1803,10 @@
     return [...groups.entries()].sort((a, b) => Number(focused.has(b[0])) - Number(focused.has(a[0])) || a[0].localeCompare(b[0], 'zh-CN')).map(([subject, rows]) => '<section data-dom-key="subject-' + esc(subject) + '" class="task-subject-group"><div class="group-heading"><div><p>' + t('学科') + '</p><h2>' + esc(subject) + '<span>' + rows.length + (isEnglish() ? ' item(s)' : ' 项') + '</span></h2></div>' + focusButton('toggle-focus-subject', subject, focused.has(subject), '学科：' + subject) + '</div>' + (renderRows ? renderRows(rows) : taskRows(rows)) + '</section>').join('');
   }
   function taskSourceSection(source, title, rows, renderRows) {
-    return rows.length ? '<section data-dom-key="source-' + source + '" class="task-source-section task-source-' + source + '"><div class="task-source-heading"><div><p>' + t('作业来源') + '</p><h2>' + esc(t(title)) + '</h2></div><span>' + rows.length + (isEnglish() ? ' item(s)' : ' 项') + '</span></div><div class="task-source-subjects">' + taskSubjectGroups(rows, renderRows) + '</div></section>' : '';
+    return rows.length ? '<section data-dom-key="source-' + source + '" class="task-source-section task-source-' + source + '"><div class="task-source-heading"><div><p>' + assistantCopy('待办来源', 'Source') + '</p><h2>' + esc(t(title)) + '</h2></div><span>' + rows.length + (isEnglish() ? ' item(s)' : ' 项') + '</span></div><div class="task-source-subjects">' + taskSubjectGroups(rows, renderRows) + '</div></section>' : '';
   }
   function taskSourceSections(tasks, renderRows) {
-    const sources = [['teams', 'Teams 作业'], ['managebac', 'ManageBac 作业'], ['manual', '个人待办']];
+    const sources = [['teams', tasks.every(task => taskCategory(task) === 'activity') ? assistantCopy('Teams 活动', 'Teams activities') : 'Teams 作业'], ['managebac', 'ManageBac 作业'], ['manual', '个人待办']];
     const bySource = new Map(sources.map(([source]) => [source, []]));
     for (const task of tasks) { const bucket = bySource.get(task.source); if (bucket) bucket.push(task); }
     return '<div class="task-source-grid">' + sources.map(([source, title]) => taskSourceSection(source, title, bySource.get(source), renderRows)).join('') + '</div>';
@@ -1735,7 +1815,7 @@
     const bySource = new Map([['manual', []], ['teams', []], ['managebac', []]]);
     for (const task of tasks) { const bucket = bySource.get(task.source); if (bucket) bucket.push(task); }
     const manual = taskSourceSection('manual', '个人待办', bySource.get('manual'), renderRows);
-    const teams = taskSourceSection('teams', 'Teams 作业', bySource.get('teams'), renderRows);
+    const teams = taskSourceSection('teams', tasks.every(task => taskCategory(task) === 'activity') ? assistantCopy('Teams 活动', 'Teams activities') : 'Teams 作业', bySource.get('teams'), renderRows);
     const managebac = taskSourceSection('managebac', 'ManageBac 作业', bySource.get('managebac'), renderRows);
     return '<div class="board-task-columns"><div class="board-task-column board-task-column-left">' + manual + teams + '</div><div class="board-task-column board-task-column-right">' + managebac + '</div></div>';
   }
@@ -1770,7 +1850,7 @@
     const cardTitle = (isEnglish() ? 'Open task details: ' : '查看待办详情：') + task.title;
     return '<article data-dom-key="task-' + esc(task.id) + '" class="todo-deadline-card card todo-band-' + urgency.band + ' todo-source-' + source + '" data-due-ms="' + urgency.dueAt + '">' +
       '<button class="todo-card-hit" type="button" data-action="task-detail" data-id="' + esc(task.id) + '" aria-label="' + esc(cardTitle) + '"></button>' +
-      '<div class="todo-card-body"><div class="todo-card-top"><span class="todo-course"><i class="todo-course-dot" aria-hidden="true"></i><span>' + esc(course) + '</span></span><span class="todo-kind">' + esc(tag) + '</span><button class="todo-focus-button ' + (focused ? 'active' : '') + '" type="button" data-action="toggle-focus-subject" data-value="' + esc(course) + '" aria-label="' + esc((isEnglish() ? (focused ? 'Unfocus: ' : 'Focus: ') : (focused ? '取消特别关注：' : '特别关注：')) + course) + '" aria-pressed="' + focused + '">' + icon('focus') + '</button><span class="todo-urgency">' + esc(bandLabel) + '</span></div>' +
+      '<div class="todo-card-body"><div class="todo-card-top"><span class="todo-course"><i class="todo-course-dot" aria-hidden="true"></i><span>' + esc(course) + '</span></span><span class="todo-kind">' + esc(tag) + ' · ' + taskCategoryLabel(taskCategory(task)) + '</span><button class="todo-focus-button ' + (focused ? 'active' : '') + '" type="button" data-action="toggle-focus-subject" data-value="' + esc(course) + '" aria-label="' + esc((isEnglish() ? (focused ? 'Unfocus: ' : 'Focus: ') : (focused ? '取消特别关注：' : '特别关注：')) + course) + '" aria-pressed="' + focused + '">' + icon('focus') + '</button><span class="todo-urgency">' + esc(bandLabel) + '</span></div>' +
       '<h3>' + esc(task.title) + '</h3><div class="todo-urgency-bar" role="progressbar" aria-label="' + esc(isEnglish() ? 'Deadline urgency' : '截止紧迫度') + '" aria-valuemin="0" aria-valuemax="100" aria-valuenow="' + Math.round(urgency.progress * 100) + '"><span data-todo-progress style="width:' + (urgency.progress * 100).toFixed(1) + '%"></span></div>' + (dueNote ? '<p class="todo-date-note">' + esc(dueNote) + '</p>' : '') +
       '<div class="todo-card-footer"><button class="todo-complete-button ' + (task.completed ? 'completed' : '') + '" type="button" data-action="toggle-task" data-id="' + esc(task.id) + '" aria-label="' + esc((isEnglish() ? (task.completed ? 'Mark incomplete: ' : 'Mark complete: ') : (task.completed ? '标为未完成：' : '标为已完成：')) + task.title) + '" aria-pressed="' + Boolean(task.completed) + '">' + icon('check') + '</button><span class="todo-due-date">' + icon('clock') + '<span>' + esc(dueLabel) + '</span></span><span class="todo-time-left ' + (urgency.band === 'unknown' ? 'unknown' : '') + '" data-todo-countdown data-band="' + urgency.band + '">' + esc(urgency.leftText) + '</span>' + (task.url ? '<button class="todo-open-source" type="button" data-action="open-source" data-source="' + openSource + '" data-url="' + esc(task.url) + '">' + icon('arrow') + '<span>' + (isEnglish() ? 'Open website' : '打开网页') + '</span></button>' : '') + '</div></div></article>';
   }
@@ -1805,7 +1885,7 @@
     return '<div class="todo-deadline-grid">' + tasks.map(task => taskDeadlineCard(task, now)).join('') + '</div>';
   }
   function renderTasks() {
-    const all = taskRowsForState(), focused = new Set(state.settings.focusSubjects || []), filtered = all.filter(task => taskSubjectFilter !== 'focus' || focused.has(task.course || '未分类'));
+    const all = taskRowsForState(), focused = new Set(state.settings.focusSubjects || []), filtered = all.filter(task => taskCategory(task) === taskCategoryFilter && (taskSubjectFilter !== 'focus' || focused.has(task.course || '未分类')));
     const now = Date.now();
     const overdue = filtered.filter(task => {
       if (task.completed) return false;
@@ -1817,11 +1897,12 @@
     const foldedOverdue = taskFilter === 'open' ? overdue : taskFilter === 'all' ? overdue : [];
     const count = taskFilter === 'open' || taskFilter === 'all' ? tasks.length + foldedOverdue.length : tasks.length;
     const subtitle = isEnglish() ? count + ' open · Click a card for details; use the lower-right button to open the source page' : count + ' 项待完成 · 点卡片看详情，右下按钮打开原网页';
-    const controls = '<div class="page-tools task-tools"><div class="filter-pills">' + [['open', '未完成'], ['overdue', '已逾期'], ['done', '已完成'], ['all', '全部']].map(f => '<button type="button" class="pill ' + (taskFilter === f[0] ? 'active' : '') + '" data-action="task-filter" data-filter="' + f[0] + '">' + t(f[1]) + '</button>').join('') + '</div><div class="filter-pills"><button type="button" class="pill ' + (taskSubjectFilter === 'all' ? 'active' : '') + '" data-action="task-subject-filter" data-filter="all">' + t('全部学科') + '</button><button type="button" class="pill ' + (taskSubjectFilter === 'focus' ? 'active' : '') + '" data-action="task-subject-filter" data-filter="focus">' + t('特别关注') + '</button></div><span class="subtle">' + tasks.length + (isEnglish() ? ' item(s)' : ' 项') + '</span></div>';
+    const categoryTabs = '<div class="task-category-tabs" role="group" aria-label="' + assistantCopy('待办类别', 'To-do category') + '">' + ['homework', 'activity'].map(category => '<button type="button" data-action="task-category-filter" data-category="' + category + '" aria-pressed="' + (category === taskCategoryFilter) + '">' + taskCategoryLabel(category) + '<span>' + all.filter(task => taskCategory(task) === category && !task.completed).length + '</span></button>').join('') + '</div>';
+    const controls = categoryTabs + '<div class="page-tools task-tools"><div class="filter-pills">' + [['open', '未完成'], ['overdue', '已逾期'], ['done', '已完成'], ['all', '全部']].map(f => '<button type="button" class="pill ' + (taskFilter === f[0] ? 'active' : '') + '" data-action="task-filter" data-filter="' + f[0] + '">' + t(f[1]) + '</button>').join('') + '</div><div class="filter-pills"><button type="button" class="pill ' + (taskSubjectFilter === 'all' ? 'active' : '') + '" data-action="task-subject-filter" data-filter="all">' + t('全部学科') + '</button><button type="button" class="pill ' + (taskSubjectFilter === 'focus' ? 'active' : '') + '" data-action="task-subject-filter" data-filter="focus">' + t('特别关注') + '</button></div><span class="subtle">' + tasks.length + (isEnglish() ? ' item(s)' : ' 项') + '</span></div>';
     const emptyMessage = taskSubjectFilter === 'focus' ? '还没有特别关注学科的任务' : taskFilter === 'done' ? '完成的事情，会留在这里' : '这里暂时没有待办';
     const emptyDetail = taskSubjectFilter === 'focus' ? '点任务卡片上的星标，即可把这门学科加入特别关注。' : taskFilter === 'open' ? '连接 ManageBac 和 Teams 获取已读取的学校任务，或添加一个个人待办。' : '切换筛选条件，查看其他任务。';
     const overdueSection = foldedOverdue.length ? '<section class="todo-overdue-section"><button class="todo-overdue-toggle" type="button" data-action="todo-overdue-toggle" aria-expanded="' + taskOverdueOpen + '"><span>' + icon('alert') + '</span><strong>' + (isEnglish() ? 'Overdue · ' + foldedOverdue.length : '已逾期 ' + foldedOverdue.length + ' 项') + '</strong><span class="todo-overdue-state">' + (isEnglish() ? (taskOverdueOpen ? 'Collapse' : 'Expand') : (taskOverdueOpen ? '收起' : '展开')) + '</span>' + icon('arrow') + '</button>' + (taskOverdueOpen ? todoCardGrid(foldedOverdue) : '') + '</section>' : '';
-    return heading('待办事项', subtitle, button(icon('plus') + t('添加待办'), 'add-task', '', 'button-primary')) + controls + '<section class="todo-page-content">' + (tasks.length ? todoCardGrid(tasks) : empty('tasks', emptyMessage, emptyDetail, taskFilter === 'open' ? button(icon('plus') + t('添加待办'), 'add-task', '', 'button-primary') : '')) + overdueSection + '<div class="todo-source-status">' + sourceFooter('managebac') + sourceFooter('teams') + '</div></section>';
+    return heading('待办事项', subtitle, button(icon('plus') + t('添加待办'), 'add-task', '', 'button-primary')).replace('class="page-heading"', 'class="page-heading task-page-heading"') + controls + '<section class="todo-page-content">' + (tasks.length ? todoCardGrid(tasks) : empty('tasks', emptyMessage, emptyDetail, taskFilter === 'open' ? button(icon('plus') + t('添加待办'), 'add-task', '', 'button-primary') : '')) + overdueSection + '<div class="todo-source-status">' + sourceFooter('managebac') + sourceFooter('teams') + '</div></section>';
   }
   function renderFeedback() {
     const all = feedbackRowsForState(), items = all.filter(f => feedbackFilter === 'all' || !f.read);
@@ -1841,7 +1922,7 @@
   function permissionCopy() {
     if (!native) return '通知提醒只在 CampusDesk Mac 应用中可用。';
     if (notificationPermission === 'denied') return '系统通知未允许。请到 Mac 系统设置 → 通知 → CampusDesk 开启。';
-    if (notificationPermission === 'authorized' || notificationPermission === 'provisional' || notificationPermission === 'granted') return '系统通知已允许。仅为已确认截止时间的 Teams 未完成作业安排提醒。';
+    if (notificationPermission === 'authorized' || notificationPermission === 'provisional' || notificationPermission === 'granted') return '系统通知已允许。仅为已确认截止时间的 Teams 未完成作业或活动待办安排提醒。';
     return '启用后将请求 macOS 通知权限。没有明确截止时间的作业可在“查看要求”中手动设置。';
   }
   function renderGraphSourceCard() {
@@ -1887,7 +1968,7 @@
     return '<div id="teams-settings">' + renderTeamsAutoPanel(true) + '<section class="card settings-section"><div class="settings-field"><div><label for="teams-mode">Teams 连接方式</label><p>浏览器模式复用你的学校登录。Graph 模式需要独立应用配置及学校授权。</p></div><select id="teams-mode"><option value="browser" selected>浏览器自动发现</option><option value="graph">微软 Graph 授权</option></select></div><div class="settings-field"><div><label for="teams-auto-discover">定时自动发现和同步</label><p>关闭后停止当前自动读取，保留已同步内容。</p></div><input id="teams-auto-discover" type="checkbox" ' + (state.settings.teamsAutoDiscover ? 'checked' : '') + '></div><div class="settings-field"><div><label for="graph-include-chats">也同步我参与的聊天</label><p>关闭后只自动读取团队频道。</p></div><input id="graph-include-chats" type="checkbox" ' + (state.settings.graphIncludeChats ? 'checked' : '') + '></div></section>' + renderTeamsBrowserSettings() + renderReminderSettings() + '</div>';
   }
   function renderTeamsBrowserSettings() {
-    return '<section id="teams-browser-settings" class="card settings-section">' + cardHeader('teams', '浏览器连接与授权') + '<p class="settings-intro">学校账号只在 Chrome 或 Edge 中登录。CampusDesk 使用专用 Teams 同步标签读取消息和可访问附件；接口不可用时尝试页面读取。</p><div class="settings-fields"><div class="settings-field"><div><label for="teams-browser">用于 Teams 的浏览器</label><p>选择你已安装并登录学校账号的浏览器。</p></div><select id="teams-browser"><option value="chrome" ' + (state.settings.teamsBrowser !== 'edge' ? 'selected' : '') + '>Google Chrome</option><option value="edge" ' + (state.settings.teamsBrowser === 'edge' ? 'selected' : '') + '>Microsoft Edge</option></select></div><div class="settings-field"><div><label for="teams-browser-automation">允许读取 Teams 浏览器页面</label><p>允许只读发现和同步账号可见的团队、频道、聊天及附件。不会发送消息、提交作业或修改学校数据；关闭后停止自动读取并保留缓存。</p></div><label class="toggle" for="teams-browser-automation"><input id="teams-browser-automation" type="checkbox" ' + (state.settings.teamsBrowserAutomation ? 'checked' : '') + (!native ? ' disabled' : '') + ' aria-label="允许 CampusDesk 读取 Teams 浏览器页面"><span></span></label></div></div><div class="browser-permission-guide"><p>首次同步时，按 Mac 提示允许 CampusDesk 控制 ' + esc(teamsBrowserName()) + '。也可在系统设置 → 隐私与安全性 → 自动化核对。</p><p>浏览器需启用 Allow JavaScript from Apple Events（允许来自 Apple 事件的 JavaScript）。Chrome 位于“显示 → 开发者”。</p><p>同步时请保留专用 Teams 标签，不要切换其中的页面。登录凭据仅在浏览器内使用；附件在本机解析，不上传外部 AI 服务。关闭应用后不会继续同步。</p></div><details><summary>手动读取当前页面</summary>' + teamsBrowserButtons() + '</details></section>';
+    return '<section id="teams-browser-settings" class="card settings-section">' + cardHeader('teams', '浏览器连接与授权') + '<p class="settings-intro">学校账号只在 Chrome 或 Edge 中登录。CampusDesk 使用专用 Teams 同步标签读取消息和可访问附件；接口不可用时尝试页面读取。</p><div class="settings-fields"><div class="settings-field"><div><label for="teams-browser">用于 Teams 的浏览器</label><p>选择你已安装并登录学校账号的浏览器。</p></div><select id="teams-browser"><option value="chrome" ' + (state.settings.teamsBrowser !== 'edge' ? 'selected' : '') + '>Google Chrome</option><option value="edge" ' + (state.settings.teamsBrowser === 'edge' ? 'selected' : '') + '>Microsoft Edge</option></select></div><div class="settings-field"><div><label for="teams-browser-automation">允许读取 Teams 浏览器页面</label><p>允许只读发现和同步账号可见的团队、频道、聊天及附件。不会发送消息、提交作业或修改学校数据；关闭后停止自动读取并保留缓存。</p></div><label class="toggle" for="teams-browser-automation"><input id="teams-browser-automation" type="checkbox" ' + (state.settings.teamsBrowserAutomation ? 'checked' : '') + (!native ? ' disabled' : '') + ' aria-label="允许 CampusDesk 读取 Teams 浏览器页面"><span></span></label></div></div><div class="browser-permission-guide"><p>首次同步时，按 Mac 提示允许 CampusDesk 控制 ' + esc(teamsBrowserName()) + '。也可在系统设置 → 隐私与安全性 → 自动化核对。</p><p>浏览器需启用 Allow JavaScript from Apple Events（允许来自 Apple 事件的 JavaScript）。Chrome 位于“显示 → 开发者”。</p><p>同步时请保留专用 Teams 标签，不要切换其中的页面。登录凭据仅在浏览器内使用；附件在本机解析；开启「Teams 自动整理」后，消息正文和已提取的附件文字会发送给 DeepSeek。关闭应用后不会继续同步。</p></div><details><summary>手动读取当前页面</summary>' + teamsBrowserButtons() + '</details></section>';
   }
   function renderTeamsLegacySettings() {
     const pages = state.settings.teamsPages || [];
@@ -1898,7 +1979,54 @@
     const selected = new Set(state.settings.reminderSubjects), allSubjects = !state.settings.reminderSubjectsMuted && selected.size === 0;
     const resetSubjects = '<button class="button-plain reminder-subject-reset" type="button" data-action="reminder-subjects-all">' + t('恢复全部学科') + '</button>';
     const subjectControls = subjects.length ? '<div class="reminder-subject-options">' + subjects.map((subject, index) => '<label class="reminder-subject-option" for="reminder-subject-choice-' + index + '"><input id="reminder-subject-choice-' + index + '" type="checkbox" data-reminder-subject="' + esc(subject) + '" ' + (allSubjects || selected.has(subject) ? 'checked' : '') + (!native ? ' disabled' : '') + '><span>' + esc(subject) + '</span></label>').join('') + resetSubjects + '</div>' : '<div class="reminder-subject-options reminder-no-subjects"><p class="subtle">' + t('暂无已读取学科；获取到 Teams 作业后会在这里列出。') + '</p>' + resetSubjects + '</div>';
-    return '<section id="reminder-settings" class="card settings-section">' + cardHeader('bell', 'Teams 作业提醒') + '<div class="settings-fields"><div class="settings-field"><div><label for="teams-notifications">' + t('截止前系统通知') + '</label><p id="notification-status">' + esc(t(permissionCopy())) + '</p></div><label class="toggle" for="teams-notifications"><input id="teams-notifications" type="checkbox" ' + (state.settings.teamsNotifications ? 'checked' : '') + (!native ? ' disabled' : '') + ' aria-label="' + esc(t('Teams 作业截止提醒')) + '"><span></span></label></div><div class="settings-field"><div><label for="reminder-minutes">' + t('提前多久提醒') + '</label><p>' + t('如果提前提醒时间已过，将在截止时提醒。已逾期或已完成的作业不安排通知。') + '</p></div><select id="reminder-minutes">' + [[0, '截止时'], [10, '提前 10 分钟'], [30, '提前 30 分钟'], [60, '提前 1 小时'], [1440, '提前 1 天']].map(item => '<option value="' + item[0] + '" ' + (Number(state.settings.reminderMinutes) === item[0] ? 'selected' : '') + '>' + t(item[1]) + '</option>').join('') + '</select></div><div class="settings-field reminder-subject-setting"><div><label>' + t('提醒学科') + '</label><p>' + t('取消某科可暂停该科通知；默认所有学科都可提醒。') + '</p></div>' + subjectControls + '</div></div><p class="gpa-note">' + t('课表倒计时按北京时间每秒更新，依据已读取课节的结束和下一节开始时间计算。应用需定期运行并同步，才能发现新作业和截止时间变更；系统通知是否显示还受 Mac 通知和专注模式设置影响。') + '</p></section>';
+    return '<section id="reminder-settings" class="card settings-section">' + cardHeader('bell', 'Teams 待办提醒') + '<div class="settings-fields"><div class="settings-field"><div><label for="teams-notifications">' + t('截止前系统通知') + '</label><p id="notification-status">' + esc(t(permissionCopy())) + '</p></div><label class="toggle" for="teams-notifications"><input id="teams-notifications" type="checkbox" ' + (state.settings.teamsNotifications ? 'checked' : '') + (!native ? ' disabled' : '') + ' aria-label="' + esc(t('Teams 待办截止提醒')) + '"><span></span></label></div><div class="settings-field"><div><label for="reminder-minutes">' + t('提前多久提醒') + '</label><p>' + t('如果提前提醒时间已过，将在截止时提醒。已逾期或已完成的作业不安排通知。') + '</p></div><select id="reminder-minutes">' + [[0, '截止时'], [10, '提前 10 分钟'], [30, '提前 30 分钟'], [60, '提前 1 小时'], [1440, '提前 1 天']].map(item => '<option value="' + item[0] + '" ' + (Number(state.settings.reminderMinutes) === item[0] ? 'selected' : '') + '>' + t(item[1]) + '</option>').join('') + '</select></div><div class="settings-field reminder-subject-setting"><div><label>' + t('提醒学科') + '</label><p>' + t('取消某科可暂停该科通知；默认所有学科都可提醒。') + '</p></div>' + subjectControls + '</div></div><p class="gpa-note">' + t('课表倒计时按北京时间每秒更新，依据已读取课节的结束和下一节开始时间计算。应用需定期运行并同步，才能发现新作业和截止时间变更；系统通知是否显示还受 Mac 通知和专注模式设置影响。') + '</p></section>';
+  }
+  function renderTeamsAnalysisSettings() {
+    const counts = teamsAnalysisSummary(), runtime = teamsAnalysisStatus(), enabled = state.settings.teamsAnalysisEnabled === true;
+    const status = !themeEdition ? assistantCopy('Teams 自动整理需要 CampusDesk 主题版。', 'Teams automatic organizing requires CampusDesk Theme Edition.') : !enabled ? assistantCopy('已停用；原文、已保存分析和人工分类保留。', 'Off. Original messages, saved analysis and manual categories are retained.')
+      : !native ? assistantCopy('请在 CampusDesk Mac 应用中运行自动整理。', 'Run automatic organizing in the CampusDesk Mac app.')
+      : navigator.onLine === false ? assistantCopy('当前离线；等待联网后继续分析。', 'Offline. Analysis resumes when connected.')
+      : runtime.message || (runtime.running ? assistantCopy('正在由 DeepSeek 分析。', 'DeepSeek is analyzing captured content.') : assistantCopy('仅已确认的作业和活动进入待办；普通通知保留在消息页。', 'Only confirmed homework and activities enter to-dos. Notices remain in messages.'));
+    return '<section id="teams-analysis-settings" class="card settings-section">' + cardHeader('teams', assistantCopy('Teams 自动整理', 'Teams automatic organizing')) +
+      '<div class="settings-field"><div><label for="teams-analysis-enabled">' + assistantCopy('使用 DeepSeek 分析所有已读取的 Teams 内容', 'Analyze all captured Teams content with DeepSeek') + '</label><p>' + assistantCopy('先归纳，再区分作业、活动和普通通知。此设置独立于学习助手的聊天模式和提问资料范围。', 'Summarize first, then identify homework, activities and notices. This setting is separate from assistant chat mode and selected question sources.') + '</p></div><label class="toggle"><input id="teams-analysis-enabled" type="checkbox"' + (enabled ? ' checked' : '') + (!native || !themeEdition ? ' disabled' : '') + ' aria-label="' + assistantCopy('开启 Teams 自动整理', 'Enable Teams automatic organizing') + '"><span></span></label></div>' +
+      '<p class="teams-analysis-privacy">' + assistantCopy('开启后，所有已读取的 Teams 消息正文、作业、成绩与反馈信息，以及已提取的附件文字会发送给 DeepSeek，按你的 API 账户计费。不会发送登录 Cookie、令牌或密码。长内容分段分析；未分析完、失败或待核对的内容不自动生成待办。', 'When enabled, all captured Teams message bodies, assignments, grades, feedback and extracted attachment text are sent to DeepSeek and billed to your API account. Login cookies, tokens and passwords are excluded. Long content is analyzed in sections. Incomplete, failed or uncertain analysis does not automatically create to-dos.') + '</p>' +
+      '<div class="teams-analysis-queue" role="status" aria-live="polite"><span>' + assistantCopy('已分析', 'Analyzed') + ' ' + counts.ready + ' / ' + counts.total + '</span><span>' + assistantCopy('待分析', 'Pending') + ' ' + counts.pending + '</span><span>' + assistantCopy('失败', 'Failed') + ' ' + counts.failed + '</span></div><p class="subtle">' + esc(status) + '</p><div class="source-actions">' +
+      (enabled && native && themeEdition ? button(assistantCopy('重试待处理内容', 'Retry pending items'), 'teams-analysis-retry') : '') +
+      (themeEdition ? button(assistantCopy('配置 DeepSeek 密钥', 'Configure DeepSeek key'), 'teams-analysis-key') : '') +
+      goLink('teams', assistantCopy('查看消息与分析结果', 'View messages and analysis')) + '</div></section>';
+  }
+  function renderTaskReviewSettings() {
+    const enabled = state.settings.taskReviewEnabled === true, report = state.taskReview || {}, runtime = taskReviewClient?.getStatus() || {};
+    const available = native && themeEdition;
+    const tasks = new Map(openTasksForState().map(task => [task.id, task]));
+    const recommendations = (report.recommendations || []).slice(0, 3).filter(item => tasks.has(item.id));
+    const status = !available ? assistantCopy('请在 CampusDesk 主题版 Mac 应用中使用。', 'Available in the CampusDesk Theme Edition Mac app.')
+      : !enabled ? assistantCopy('已关闭，保留上次分析。', 'Off. The last review is retained.')
+      : navigator.onLine === false ? assistantCopy('当前离线，联网后继续。', 'Offline. Reviews resume when connected.')
+      : runtime.message || assistantCopy('等待下一次分析。', 'Waiting for the next review.');
+    return '<section id="task-review-settings" class="card settings-section">' + cardHeader('tasks', assistantCopy('定时待办分析与提醒', 'Scheduled to-do review and reminders')) +
+      '<div class="settings-field"><div><label for="task-review-enabled">' + assistantCopy('让 DeepSeek 定时整理当前待办', 'Have DeepSeek review current to-dos') + '</label><p>' + assistantCopy('仅在应用运行时生效。开启后首次分析从下一周期开始，也可手动立即分析。', 'Runs while the app is open. The first scheduled review starts after one interval; you can also run it now.') + '</p></div><label class="toggle"><input id="task-review-enabled" type="checkbox"' + (enabled ? ' checked' : '') + (!available ? ' disabled' : '') + ' aria-label="' + assistantCopy('开启定时待办分析', 'Enable scheduled to-do reviews') + '"><span></span></label></div>' +
+      '<div class="settings-field"><div><label for="task-review-interval">' + assistantCopy('分析间隔', 'Review interval') + '</label><p>' + assistantCopy('每次发送当前未完成的作业与活动待办给 DeepSeek，会产生 API 用量；最多推荐三项优先事项，不修改任务或完成状态。', 'Each review sends current unfinished homework and activity to-dos to DeepSeek and uses your API quota. It recommends up to three priorities without changing tasks or completion marks.') + '</p></div><select id="task-review-interval"' + (!available ? ' disabled' : '') + '>' + Array.from({ length: 10 }, (_, index) => index + 1).map(hours => '<option value="' + hours + '"' + (Number(state.settings.taskReviewIntervalHours || 2) === hours ? ' selected' : '') + '>' + assistantCopy('每 ' + hours + ' 小时', 'Every ' + hours + (hours === 1 ? ' hour' : ' hours')) + '</option>').join('') + '</select></div>' +
+      '<div class="task-review-status" role="status" aria-live="polite"><p>' + esc(status) + '</p>' + (runtime.nextRunAt && enabled ? '<p>' + assistantCopy('下次分析：', 'Next review: ') + esc(lastUpdated(runtime.nextRunAt)) + '</p>' : '') + (report.lastCompletedAt ? '<p>' + assistantCopy('上次完成：', 'Last completed: ') + esc(lastUpdated(report.lastCompletedAt)) + '</p>' : '') + '</div>' +
+      (report.error ? '<p class="task-review-error">' + esc(report.error) + '</p>' : '') + (report.summary ? '<p class="task-review-summary">' + esc(report.summary) + '</p>' : '') +
+      (recommendations.length ? '<ol class="task-review-recommendations">' + recommendations.map(item => '<li><button type="button" class="button-plain" data-action="task-detail" data-id="' + esc(item.id) + '">' + esc(tasks.get(item.id).title) + '</button><p>' + esc(item.reason) + '</p></li>').join('') + '</ol>' : '') +
+      '<div class="source-actions"><button type="button" class="button button-light" data-action="task-review-now"' + (!available || !enabled || runtime.running || runtime.pending ? ' disabled' : '') + '>' + assistantCopy(report.error ? '重试分析' : '立即分析', report.error ? 'Retry review' : 'Review now') + '</button>' + (available ? button(assistantCopy('允许系统提醒', 'Allow system notifications'), 'task-review-permission') : '') + (themeEdition ? button(assistantCopy('配置 DeepSeek 密钥', 'Configure DeepSeek key'), 'teams-analysis-key') : '') + '</div><p class="gpa-note">' + assistantCopy('系统提醒还需 macOS 通知权限；关闭本功能即停止后续定时分析。', 'System reminders also require macOS notification permission. Turning this feature off stops future scheduled reviews.') + '</p></section>';
+  }
+  function renderOverviewTaskReview() {
+    const enabled = state.settings.taskReviewEnabled === true, runtime = taskReviewClient?.getStatus() || {}, available = native && themeEdition;
+    const tasks = new Map(openTasksForState().map(task => [task.id, task]));
+    const recommendations = (state.taskReview?.recommendations || []).slice(0, 3).filter(item => tasks.has(item.id));
+    const recommendation = item => '<div class="overview-review-priority"><button type="button" data-action="task-detail" data-id="' + esc(item.id) + '">' + esc(tasks.get(item.id).title) + '</button><p>' + esc(item.reason) + '</p></div>';
+    const priorities = recommendations.length ? '<div class="overview-review-priorities"><span>' + assistantCopy(enabled ? '最近优先建议' : '上次建议 · 已暂停', enabled ? 'Latest priorities' : 'Last priorities · paused') + '</span>' + recommendation(recommendations[0]) + (recommendations.length > 1 ? '<details><summary>' + assistantCopy('另有 ' + (recommendations.length - 1) + ' 项建议', (recommendations.length - 1) + ' more priorities') + '</summary>' + recommendations.slice(1).map(recommendation).join('') + '</details>' : '') + '</div>' : '';
+    const label = assistantCopy('AI 任务提醒', 'AI task reminders');
+    const status = !available ? assistantCopy('在主题版 Mac 应用中使用', 'Use in the Theme Edition Mac app')
+      : !enabled ? assistantCopy('已关闭 · 开启后从下一周期开始', 'Off · first review after one interval')
+      : runtime.pending ? assistantCopy('已排队 · 当前分析结束后立即开始', 'Queued · starts after the current analysis')
+      : runtime.running ? assistantCopy('正在分析当前待办…', 'Reviewing current to-dos…')
+      : state.taskReview?.error ? assistantCopy('上次分析未完成，可立即重试', 'Last review failed; retry now')
+      : runtime.nextRunAt ? assistantCopy('下次分析 ', 'Next review ') + lastUpdated(runtime.nextRunAt)
+      : assistantCopy('等待下一次分析', 'Waiting for the next review');
+    return '<section class="overview-task-review" aria-label="' + label + '"><div class="overview-review-heading"><strong>' + label + '</strong><div class="overview-review-toggle"><label class="toggle"><input id="review-overview-enabled" type="checkbox"' + (enabled ? ' checked' : '') + (!available ? ' disabled' : '') + ' aria-label="' + assistantCopy('开启 AI 任务提醒', 'Enable AI task reminders') + '"><span></span></label><label for="review-overview-enabled">' + assistantCopy(enabled ? '已开启' : '开启', enabled ? 'On' : 'Enable') + '</label></div></div><div class="overview-review-controls"><label for="review-overview-interval">' + assistantCopy('间隔', 'Interval') + '</label><select id="review-overview-interval"' + (!available ? ' disabled' : '') + '>' + Array.from({ length: 10 }, (_, index) => index + 1).map(hours => '<option value="' + hours + '"' + (Number(state.settings.taskReviewIntervalHours || 2) === hours ? ' selected' : '') + '>' + assistantCopy(hours + ' 小时', hours + (hours === 1 ? ' hour' : ' hours')) + '</option>').join('') + '</select><button type="button" class="button button-primary" data-action="task-review-now"' + (!available || !enabled || runtime.running || runtime.pending ? ' disabled' : '') + '>' + assistantCopy('立即分析', 'Review now') + '</button></div><p class="overview-review-status" role="status" aria-live="polite">' + esc(status) + '</p>' + priorities + '</section>';
   }
   function appearanceStatusText() {
     const dark = Core.effectiveColorTheme(state.settings, systemAppearanceDark) === 'midnight';
@@ -2123,22 +2251,22 @@
       ? '<span class="assistant-key-state ready">' + assistantCopy('密钥已安全保存在此主题版的钥匙串中', 'Key is stored securely in this edition’s Keychain') + '</span>'
       : '<span class="assistant-key-state">' + assistantCopy('尚未设置 DeepSeek API 密钥', 'No DeepSeek API key saved') + '</span>';
     const stateLabel = provider === 'off' ? ['已关闭', 'Off'] : provider === 'ollama' ? ['仅本机 Ollama', 'Ollama only · Local'] : provider === 'deepseek' ? ['仅联网 DeepSeek', 'DeepSeek online only'] : ['联网 DeepSeek · 离线 Ollama', 'DeepSeek online · Ollama offline'];
-    const modelFields = (provider === 'deepseek' || provider === 'hybrid' ? renderAssistantModelSelect('deepseek', assistantCopy('DeepSeek 模型', 'DeepSeek model')) : '')
+    const modelFields = (provider === 'deepseek' || provider === 'hybrid' || state.settings.teamsAnalysisEnabled ? renderAssistantModelSelect('deepseek', assistantCopy('DeepSeek 模型', 'DeepSeek model')) : '')
       + (provider === 'ollama' || provider === 'hybrid' ? renderAssistantModelSelect('ollama', assistantCopy('本机 Ollama 模型', 'Local Ollama model')) : '');
     const showKeyEditor = assistantKeyEditing || (!assistantStatus.deepSeekKeyConfigured && !assistantKeyBlocked());
     const keyActions = (assistantKeyBlocked() ? assistantKeyRecoveryButton() : '') + (showKeyEditor
       ? '<input id="assistant-deepseek-key" type="password" maxlength="512" autocomplete="new-password" aria-label="DeepSeek API key" placeholder="DeepSeek API key"><button type="button" class="button button-light" data-action="assistant-save-key">' + assistantCopy('安全保存密钥', 'Save key securely') + '</button>' + (assistantKeyEditing ? '<button type="button" class="button button-plain" data-action="assistant-cancel-key-edit">' + assistantCopy('取消更换', 'Cancel replacement') + '</button>' : '')
       : '<button type="button" class="button button-light" data-action="assistant-edit-key">' + assistantCopy('更换密钥', 'Replace key') + '</button>') + (assistantStatus.deepSeekKeyConfigured ? '<button type="button" class="button button-plain" data-action="assistant-delete-key">' + assistantCopy('删除密钥', 'Delete key') + '</button>' : '');
-    const keyBox = provider === 'deepseek' || provider === 'hybrid'
+    const keyBox = provider === 'deepseek' || provider === 'hybrid' || state.settings.teamsAnalysisEnabled || assistantKeyEditing
       ? '<div class="assistant-key-box"><div>' + keyStatus + '<p>' + assistantCopy('密钥只通过原生安全桥保存到 macOS 钥匙串，不写入看板状态、备份或日志。仅联网 DeepSeek 模式会将发送内容发给 DeepSeek；混合模式联网时也会发给 DeepSeek，离线或网络请求失败时则发给本机 Ollama。', 'The key is stored through the native secure bridge in macOS Keychain, never in dashboard state, backups, or logs. DeepSeek-only mode sends submitted content to DeepSeek. Hybrid mode also sends it to DeepSeek online, and sends it to local Ollama offline or if DeepSeek cannot be reached.') + '</p></div><div class="assistant-key-actions">' + keyActions + '</div></div>' : '';
     const modeNote = provider === 'ollama'
-      ? '<div class="assistant-local-note">' + assistantCopy('仅使用本机 Ollama；不会连接 DeepSeek 或其他云端 AI。请先启动 Ollama 并下载模型。', 'Uses Ollama only on this Mac; it never contacts DeepSeek or another cloud AI. Start Ollama and download a model first.') + '</div>'
+      ? '<div class="assistant-local-note">' + assistantCopy('学习助手聊天仅使用本机 Ollama；Teams 自动整理独立设置。请先启动 Ollama 并下载模型。', 'Assistant chat uses Ollama only on this Mac. Teams automatic organizing is configured separately. Start Ollama and download a model first.') + '</div>'
       : provider === 'deepseek'
         ? '<div class="assistant-local-note">' + assistantCopy('仅使用 DeepSeek。没有网络时学习助手立即停用；任何情况下都不会改用 Ollama。', 'Uses DeepSeek only. The assistant is disabled without an internet connection and will never use Ollama.') + '</div>'
         : provider === 'hybrid'
           ? '<div class="assistant-local-note">' + assistantCopy('联网时优先使用 DeepSeek；离线时使用本机 Ollama。若 DeepSeek 请求因网络不可达而失败，会将同一份内容改发给 Ollama；此时请求可能已到达 DeepSeek。', 'Uses DeepSeek while online and local Ollama while offline. If a DeepSeek request fails because the network is unreachable, the same submitted content is sent to Ollama; DeepSeek may already have received it.') + '</div>'
         : '';
-    return '<section class="card settings-section assistant-settings"><div class="assistant-section-heading"><div><p class="setup-eyebrow">CAMPUSDESK · THEME EDITION</p><h2>' + assistantCopy('学习助手', 'Learning assistant') + '</h2><p>' + assistantCopy('明确选择关闭、仅本机 Ollama、仅联网 DeepSeek，或联网 DeepSeek／离线 Ollama。点击发送即可提问，也可按需查看发送内容。', 'Choose Off, Ollama only, DeepSeek online only, or DeepSeek online with Ollama offline. Send questions directly, or optionally view the request details.') + '</p></div><span class="assistant-state-pill">' + assistantCopy(stateLabel[0], stateLabel[1]) + '</span></div><div class="assistant-settings-grid"><label>' + assistantCopy('AI 接入方式', 'AI provider') + '<select id="assistant-provider" aria-label="' + assistantCopy('AI 接入方式', 'AI provider') + '">' + providerOptions.map(item => '<option value="' + item[0] + '"' + (provider === item[0] ? ' selected' : '') + '>' + assistantCopy(item[1], item[2]) + '</option>').join('') + '</select></label>' + modelFields + '</div>' + renderAssistantSetupGuides() + keyBox + modeNote + '<div class="assistant-context-picker"><div><h3>' + assistantCopy('允许本次提问使用哪些资料', 'Data available to questions') + '</h3><p>' + assistantCopy('点击发送时会附带勾选的资料。你可以随时调整范围，或取消全部勾选。', 'Checked data is included when you send. Adjust the scope or uncheck all sources at any time.') + '</p></div><div class="assistant-context-options">' + assistantContextOptions.map(item => '<label><input type="checkbox" data-ai-context="' + item[0] + '"' + (selected.has(item[0]) ? ' checked' : '') + '><span>' + assistantCopy(item[1], item[2]) + '</span></label>').join('') + '</div></div><div class="assistant-privacy-note"><strong>' + assistantCopy('可随时停用与清除', 'You stay in control') + '</strong><p>' + assistantCopy('问题、回答和草稿保存在这台 Mac，可在历史对话中查询和续问，并随数据备份保存。设置中的 API 密钥、学校密码、登录 Cookie 和浏览器会话不会写入聊天记录。', 'Questions, replies, and drafts are stored on this Mac for history and follow-ups, and included in data backups. API keys from Settings, school passwords, cookies, and browser sessions are not included in chat history.') + '</p></div></section>';
+    return '<section id="assistant-settings" class="card settings-section assistant-settings"><div class="assistant-section-heading"><div><p class="setup-eyebrow">CAMPUSDESK · THEME EDITION</p><h2>' + assistantCopy('学习助手', 'Learning assistant') + '</h2><p>' + assistantCopy('明确选择关闭、仅本机 Ollama、仅联网 DeepSeek，或联网 DeepSeek／离线 Ollama。点击发送即可提问，也可按需查看发送内容。', 'Choose Off, Ollama only, DeepSeek online only, or DeepSeek online with Ollama offline. Send questions directly, or optionally view the request details.') + '</p></div><span class="assistant-state-pill">' + assistantCopy(stateLabel[0], stateLabel[1]) + '</span></div><div class="assistant-settings-grid"><label>' + assistantCopy('AI 接入方式', 'AI provider') + '<select id="assistant-provider" aria-label="' + assistantCopy('AI 接入方式', 'AI provider') + '">' + providerOptions.map(item => '<option value="' + item[0] + '"' + (provider === item[0] ? ' selected' : '') + '>' + assistantCopy(item[1], item[2]) + '</option>').join('') + '</select></label>' + modelFields + '</div>' + renderAssistantSetupGuides() + keyBox + modeNote + '<div class="assistant-context-picker"><div><h3>' + assistantCopy('允许本次提问使用哪些资料', 'Data available to questions') + '</h3><p>' + assistantCopy('点击发送时会附带勾选的资料。你可以随时调整范围，或取消全部勾选。', 'Checked data is included when you send. Adjust the scope or uncheck all sources at any time.') + '</p></div><div class="assistant-context-options">' + assistantContextOptions.map(item => '<label><input type="checkbox" data-ai-context="' + item[0] + '"' + (selected.has(item[0]) ? ' checked' : '') + '><span>' + assistantCopy(item[1], item[2]) + '</span></label>').join('') + '</div></div><div class="assistant-privacy-note"><strong>' + assistantCopy('可随时停用与清除', 'You stay in control') + '</strong><p>' + assistantCopy('问题、回答和草稿保存在这台 Mac，可在历史对话中查询和续问，并随数据备份保存。设置中的 API 密钥、学校密码、登录 Cookie 和浏览器会话不会写入聊天记录。', 'Questions, replies, and drafts are stored on this Mac for history and follow-ups, and included in data backups. API keys from Settings, school passwords, cookies, and browser sessions are not included in chat history.') + '</p></div></section>';
   }
   function assistantPushReference(refs, source, rawURL, label) {
     if (!['seiue', 'managebac', 'teams'].includes(source)) return;
@@ -2578,7 +2706,7 @@
     }
   }
   function renderSettings() {
-    return heading('让它适合你的每一天。', '学校系统各自登录；课表、任务和频道原文保存在本机。') + (!native ? '<div class="browser-banner">这是网页预览。登录、会话管理与自动读取只在 Mac 应用中可用。</div>' : '') + renderSetupWizardSettings() + '<div class="source-grid">' + renderSourceCard('seiue') + renderSourceCard('managebac') + renderSourceCard('teams') + '</div>' + renderLanguageSettings() + renderAppearanceSettings() + (themeEdition ? renderAssistantSettings() : '') + renderTeamsSettings() + renderSchoolSettings() + '<section class="card settings-section">' + cardHeader('settings', '日常偏好') + '<div class="settings-fields"><div class="settings-field"><div><label for="refresh-minutes">自动刷新间隔</label><p>应用正在运行且电脑联网时，尝试更新已连接的数据。</p></div><select id="refresh-minutes">' + [[5, '每 5 分钟'], [15, '每 15 分钟'], [30, '每 30 分钟'], [60, '每小时']].map(o => '<option value="' + o[0] + '" ' + (Number(state.settings.refreshMinutes) === o[0] ? 'selected' : '') + '>' + o[1] + '</option>').join('') + '</select></div><div class="settings-field"><div><label for="self-study">空白课节显示为自习</label><p>只处理希悦明确给出时间的空白课节。</p></div><label class="toggle" for="self-study"><input id="self-study" type="checkbox" ' + (state.settings.selfStudy ? 'checked' : '') + ' aria-label="空白课节显示为自习"><span></span></label></div><div class="settings-field"><div><label>显示时区</label><p>在不同地区使用 Mac，也按北京的上课时间展示。</p></div><span class="subtle">Asia / Shanghai · UTC+8</span></div></div></section><section class="card settings-section">' + cardHeader('cloud', '数据与备份') + '<div class="settings-fields"><div class="settings-field"><div><label>导出或恢复本机数据</label><p>包含课程缓存、个人待办及 GPA 记录。也包含 Teams 消息、EC 通知和提醒设置。备份不包含登录会话或密码。</p></div><div class="backup-actions">' + button('导出备份', 'export') + button('导入备份', 'import') + '</div></div></div></section><div class="info-note">希悦和 ManageBac 配置后在应用内登录并读取页面。Teams 默认使用本机 Chrome 或 Edge 已登录页面读取，也可选配 Microsoft Graph 授权；应用运行时定期同步。权限不足、网络中断或接口限制会在同步状态中提示，现有内容作为缓存保留。</div><p class="footer-note">' + esc(appVersionLabel) + ' · ' + assistantCopy('独立学习工具，与希悦、ManageBac 及 Microsoft 无隶属关系。', 'Independent learning tool, not affiliated with Seiue, ManageBac, or Microsoft.') + '</p>';
+    return heading('让它适合你的每一天。', '学校系统各自登录；课表、任务和频道原文保存在本机。') + (!native ? '<div class="browser-banner">这是网页预览。登录、会话管理与自动读取只在 Mac 应用中可用。</div>' : '') + renderSetupWizardSettings() + '<div class="source-grid">' + renderSourceCard('seiue') + renderSourceCard('managebac') + renderSourceCard('teams') + '</div>' + renderLanguageSettings() + renderAppearanceSettings() + (themeEdition ? renderAssistantSettings() : '') + renderTeamsAnalysisSettings() + renderTaskReviewSettings() + renderTeamsSettings() + renderSchoolSettings() + '<section class="card settings-section">' + cardHeader('settings', '日常偏好') + '<div class="settings-fields"><div class="settings-field"><div><label for="refresh-minutes">自动刷新间隔</label><p>应用正在运行且电脑联网时，尝试更新已连接的数据。</p></div><select id="refresh-minutes">' + [[5, '每 5 分钟'], [15, '每 15 分钟'], [30, '每 30 分钟'], [60, '每小时']].map(o => '<option value="' + o[0] + '" ' + (Number(state.settings.refreshMinutes) === o[0] ? 'selected' : '') + '>' + o[1] + '</option>').join('') + '</select></div><div class="settings-field"><div><label for="self-study">空白课节显示为自习</label><p>只处理希悦明确给出时间的空白课节。</p></div><label class="toggle" for="self-study"><input id="self-study" type="checkbox" ' + (state.settings.selfStudy ? 'checked' : '') + ' aria-label="空白课节显示为自习"><span></span></label></div><div class="settings-field"><div><label>显示时区</label><p>在不同地区使用 Mac，也按北京的上课时间展示。</p></div><span class="subtle">Asia / Shanghai · UTC+8</span></div></div></section><section class="card settings-section">' + cardHeader('cloud', '数据与备份') + '<div class="settings-fields"><div class="settings-field"><div><label>导出或恢复本机数据</label><p>包含课程缓存、个人待办及 GPA 记录。也包含 Teams 消息、EC 通知和提醒设置。备份不包含登录会话或密码。</p></div><div class="backup-actions">' + button('导出备份', 'export') + button('导入备份', 'import') + '</div></div></div></section><div class="info-note">希悦和 ManageBac 配置后在应用内登录并读取页面。Teams 默认使用本机 Chrome 或 Edge 已登录页面读取，也可选配 Microsoft Graph 授权；应用运行时定期同步。权限不足、网络中断或接口限制会在同步状态中提示，现有内容作为缓存保留。</div><p class="footer-note">' + esc(appVersionLabel) + ' · ' + assistantCopy('独立学习工具，与希悦、ManageBac 及 Microsoft 无隶属关系。', 'Independent learning tool, not affiliated with Seiue, ManageBac, or Microsoft.') + '</p>';
   }
 
   const setupWizardSteps = [
@@ -2911,6 +3039,7 @@
     window.scrollTo(saved.x,Math.max(0,y));
   }
   function render() {
+    reconcileTeamsAnalysis();
     if (page !== 'settings' || state.settings.focusMode) {
       settingsEasterEggUnlocked = false;
       settingsEasterEggError = false;
@@ -3020,6 +3149,8 @@
   function openTaskDialog() {
     const dialog = document.getElementById('task-dialog');
     document.getElementById('task-title').value = '';
+    const category = document.getElementById('task-category');
+    if (category) { category.value = taskCategoryFilter; for (const option of category.options || []) option.textContent = taskCategoryLabel(option.value); }
     document.getElementById('task-due-date').value = '';
     document.getElementById('task-due-time').value = '';
     if (typeof dialog.showModal === 'function') dialog.showModal();
@@ -3082,8 +3213,11 @@
     detailTaskId = id;
     const teams = task.source === 'teams', manual = task.source === 'manual', due = taskDue(task), source = teams ? 'teams' : manual ? 'manual' : 'managebac';
     const localDeadline = localDateInput(task.dueAt).split('T');
-    const deadlineEditor = teams ? '<div class="due-editor"><label for="detail-due">本机提醒截止时间（北京时间）</label><input id="detail-due" type="datetime-local" value="' + esc(localDateInput(task.dueAt)) + '"><p class="field-hint">请核对原文后设置。这里只改变本机提醒，不会修改 Teams 作业。' + (task.originalDueAt ? '原文已读取截止时间：' + esc(lastUpdated(task.originalDueAt)) + '。' : '原文未读取到可确认的完整截止时间。') + '</p><div class="due-actions">' + button('保存截止时间', 'save-task-due', 'data-id="' + esc(task.id) + '"') + (task.dueOverride ? button('恢复原文时间', 'reset-task-due', 'data-id="' + esc(task.id) + '"') : '') + '</div></div>' : manual ? '<div class="due-editor"><strong>个人截止时间（北京时间，可选）</strong><div class="task-deadline-fields"><label for="manual-due-date">截止日期<input id="manual-due-date" type="text" maxlength="10" placeholder="YYYY-MM-DD" autocomplete="off" spellcheck="false" value="' + esc(localDeadline[0] || '') + '"></label><label for="manual-due-time">时间（24 小时制，可选）<input id="manual-due-time" type="text" inputmode="numeric" maxlength="5" placeholder="选填，默认 23:59" value="' + esc(localDeadline[1] ? localDeadline[1].slice(0, 5) : '') + '" autocomplete="off" spellcheck="false"></label></div><p class="field-hint">补录或修改后，待办卡片会显示截止时间、倒计时和紧急度进度条；选日期不填时间则默认为当天 23:59，清空日期和时间可移除截止时间。</p><div class="due-actions">' + button('保存个人截止时间', 'save-manual-task-due', 'data-id="' + esc(task.id) + '"') + '</div></div>' : '';
-    document.getElementById('detail-content').innerHTML = '<div class="dialog-heading"><span class="task-tag ' + (teams ? 'teams-tag' : '') + '">' + esc(sourceName(source)) + '</span><button class="icon-button" type="button" data-action="close-detail" aria-label="关闭任务详情">×</button></div><h2 id="detail-title">' + esc(task.title) + '</h2><div class="detail-meta"><span>' + esc(task.course || '') + '</span><span>' + esc(due.label) + (task.dueOverride ? ' · 本机设置' : '') + '</span><span>' + (task.completed ? '本机已完成' : '未完成') + '</span></div>' + (manual ? '' : '<h3 class="detail-subtitle">作业要求</h3><div class="requirements-text">' + esc(task.requirements || task.description || '尚未读取到这份作业的详细要求，请打开学校原页面查看。') + '</div>') + (task.attachments && task.attachments.length ? '<h3 class="detail-subtitle">原文附件</h3>' + attachmentsHTML(task.attachments) + '<p class="gpa-note">附件在浏览器打开，可能需要 Microsoft 登录。附件文字读取状态请逐项核对；未成功解析的请查看原件。</p>' : '') + deadlineEditor + '<div class="dialog-actions">' + button(task.completed ? '标为未完成' : '标为已完成', 'toggle-detail-task', 'data-id="' + esc(task.id) + '"') + (task.url ? button('打开原文 ↗', 'open-source', 'data-source="' + source + '" data-url="' + esc(task.url) + '"', 'button-primary') : '') + '</div>';
+    const deadlineEditor = teams ? '<div class="due-editor"><label for="detail-due">本机提醒截止时间（北京时间）</label><input id="detail-due" type="datetime-local" value="' + esc(localDateInput(task.dueAt)) + '"><p class="field-hint">请核对原文后设置。这里只改变本机提醒，不会修改 Teams 作业。' + (task.originalDueAt ? '原文已读取截止时间：' + esc(lastUpdated(task.originalDueAt)) + '。' : '原文未读取到可确认的完整截止时间。') + '</p><div class="due-actions">' + button('保存截止时间', 'save-task-due', 'data-id="' + esc(task.id) + '"') + (task.dueOverride ? button('恢复原文时间', 'reset-task-due', 'data-id="' + esc(task.id) + '"') : '') + '</div></div>' : manual ? '<div class="due-editor"><strong>个人截止时间（北京时间，可选）</strong><div class="task-deadline-fields"><label for="manual-due-date">截止日期<input id="manual-due-date" type="text" maxlength="10" placeholder="YYYY-MM-DD" autocomplete="off" spellcheck="false" value="' + esc(localDeadline[0] || '') + '"></label><label for="manual-due-time">时间（24 小时制，可选）<input id="manual-due-time" type="text" inputmode="numeric" maxlength="5" placeholder="选填，默认 23:59" value="' + esc(localDeadline[1] ? localDeadline[1].slice(0, 5) : '') + '" autocomplete="off" spellcheck="false"></label></div><p class="field-hint">补录或修改后，待办卡片会显示截止时间、倒计时和紧急度进度条；选日期不填时间则默认为当天 23:59，清空日期和时间可移除截止时间。</p><div class="due-actions">' + button(assistantCopy('保存个人设置', 'Save personal settings'), 'save-manual-task-due', 'data-id="' + esc(task.id) + '"') + '</div></div>' : '';
+    const analysisID = task.analysisSourceId || task.id;
+    const categoryEditor = manual ? '<label class="manual-task-category" for="manual-task-category">' + assistantCopy('待办类别', 'To-do category') + '<select id="manual-task-category"><option value="homework"' + (taskCategory(task) === 'homework' ? ' selected' : '') + '>' + taskCategoryLabel('homework') + '</option><option value="activity"' + (taskCategory(task) === 'activity' ? ' selected' : '') + '>' + taskCategoryLabel('activity') + '</option></select></label>' : '';
+    const analysisDetails = teams ? (task.analysisSummary ? '<p class="teams-analysis-summary">' + esc(task.analysisSummary) + '</p>' : '') + teamsAnalysisHTML(analysisID) + (task.analysisEvidence ? '<h3 class="detail-subtitle">' + assistantCopy('原文依据', 'Source evidence') + '</h3><blockquote class="teams-analysis-evidence">' + esc(task.analysisEvidence) + '</blockquote>' : '') : '';
+    document.getElementById('detail-content').innerHTML = '<div class="dialog-heading"><span class="task-tag ' + (teams ? 'teams-tag' : '') + '">' + esc(sourceName(source)) + '</span><button class="icon-button" type="button" data-action="close-detail" aria-label="关闭任务详情">×</button></div><h2 id="detail-title">' + esc(task.title) + '</h2><div class="detail-meta"><span>' + esc(task.course || '') + '</span><span>' + esc(due.label) + (task.dueOverride ? ' · 本机设置' : '') + '</span><span>' + (task.completed ? '本机已完成' : '未完成') + '</span><span>' + taskCategoryLabel(taskCategory(task)) + '</span></div>' + analysisDetails + categoryEditor + (manual ? '' : '<h3 class="detail-subtitle">' + assistantCopy(taskCategory(task) === 'activity' ? '活动原文与安排' : '作业原文与要求', taskCategory(task) === 'activity' ? 'Activity source and details' : 'Homework source and requirements') + '</h3><div class="requirements-text">' + esc(task.requirements || task.description || '尚未读取到这份作业的详细要求，请打开学校原页面查看。') + '</div>') + (task.attachments && task.attachments.length ? '<h3 class="detail-subtitle">原文附件</h3>' + attachmentsHTML(task.attachments) + '<p class="gpa-note">附件在浏览器打开，可能需要 Microsoft 登录。附件文字读取状态请逐项核对；未成功解析的请查看原件。</p>' : '') + deadlineEditor + '<div class="dialog-actions">' + button(task.completed ? '标为未完成' : '标为已完成', 'toggle-detail-task', 'data-id="' + esc(task.id) + '"') + (task.url ? button('打开原文 ↗', 'open-source', 'data-source="' + source + '" data-url="' + esc(task.url) + '"', 'button-primary') : '') + '</div>';
     showDialog('detail-dialog');
   }
   function openTeamsPageDialog(id, candidate) {
@@ -3117,7 +3251,7 @@
       const due = new Date(task.dueAt || '').getTime(), url = Core.safeURL(task.url, 'teams');
       if (!Number.isFinite(due) || due <= now || !url) return null;
       const fire = due - lead > now ? due - lead : due;
-      return { id: task.id, title: task.title, body: (task.course ? task.course + ' · ' : '') + '作业即将截止，请查看要求。', fireAt: new Date(fire).toISOString(), source: 'teams', url: url };
+      return { id: task.id, title: task.title, body: (task.course ? task.course + ' · ' : '') + (taskCategory(task) === 'activity' ? assistantCopy('活动待办即将截止，请查看安排。', 'An activity to-do is due soon. Check the details.') : assistantCopy('作业即将截止，请查看要求。', 'Homework is due soon. Check the requirements.')), fireAt: new Date(fire).toISOString(), source: 'teams', url: url };
     }).filter(Boolean).sort((a, b) => a.fireAt.localeCompare(b.fireAt)).slice(0, 60) : [];
     const signature = JSON.stringify(items);
     if (signature !== lastReminderSignature) { send('syncReminders', { items: items }); lastReminderSignature = signature; }
@@ -3136,6 +3270,7 @@
       const candidate = verified ? Core.validateState(input) : Core.importBackup(input, { allowLegacy: rawLegacy }).state;
       if (!window.confirm('导入将替换当前课程缓存、个人待办与 GPA 记录。确定恢复这份备份吗？')) return;
       if (native) {
+        resetTeamsAnalysis();
         pendingImportRequestID = 'import-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10);
         pendingImportEvents = [];
         setImportInteractionBlocked(true);
@@ -3178,6 +3313,7 @@
     if (event.success === true || (event.state && Object.keys(event.state).length)) next = Core.validateState(event.state);
     else if (event.state && typeof event.state === 'object') next = Core.emptyState();
     const queued = pendingImportEvents;
+    resetTeamsAnalysis();
     state = next;
     if (generation !== null) nativeStateGeneration = generation;
     pendingImportRequestID = ''; pendingImportEvents = [];
@@ -3211,7 +3347,40 @@
     if (!target) return;
     if (target.dataset.page) { navigate(target.dataset.page); return; }
     const action = target.dataset.action;
-    if (action === 'settings-easter-egg-lock') {
+    if (action === 'task-review-now') {
+      if (!native || !themeEdition || !state.settings.taskReviewEnabled || pendingImportRequestID) return;
+      taskReviewClient?.runNow(); requestBackgroundRender();
+    }
+    else if (action === 'task-review-permission') { if (native && themeEdition) send('requestNotifications'); }
+    else if (action === 'teams-analysis-retry') {
+      if (!native || !themeEdition || !state.settings.teamsAnalysisEnabled || pendingImportRequestID) return;
+      teamsAnalysisClient?.retry(target.dataset.id || undefined); requestBackgroundRender();
+    }
+    else if (action === 'teams-analysis-key') {
+      if (!themeEdition) return;
+      assistantKeyEditing = true; navigate('settings');
+      document.getElementById('assistant-settings')?.scrollIntoView({ block: 'start' });
+      document.getElementById('assistant-deepseek-key')?.focus();
+    }
+    else if (action === 'teams-analysis-override') {
+      if (pendingImportRequestID || !['homework', 'activity', 'notice', 'automatic'].includes(target.dataset.category)) return;
+      try {
+        const input = teamsAnalysisInput(target.dataset.id);
+        if (!input || !target.dataset.fingerprint || target.dataset.fingerprint !== (input.sourceFingerprint || input.fingerprint)) throw new Error('stale source');
+        state = Core.setTeamsAnalysisOverride(state, target.dataset.id, target.dataset.category);
+        persist(); render();
+        if (document.getElementById('detail-dialog').open) {
+          if (taskRowsForState().some(item => item.id === detailTaskId)) openTaskDetail(detailTaskId);
+          else { closeDialog('detail-dialog'); detailTaskId = null; }
+        }
+        toast(assistantCopy('本机分类已更新，完成标记已保留。', 'Local classification updated. Completion marks are retained.'));
+      } catch (_) { toast(assistantCopy('原文已变更，请刷新后重新核对分类。', 'The source changed. Refresh and review its category again.')); }
+    }
+    else if (action === 'task-category-filter') {
+      if (!['homework', 'activity'].includes(target.dataset.category)) return;
+      taskCategoryFilter = target.dataset.category; render();
+    }
+    else if (action === 'settings-easter-egg-lock') {
       settingsEasterEggUnlocked = false;
       settingsEasterEggError = false;
       render();
@@ -3475,6 +3644,8 @@
       const due = makeBeijingDeadline(dateInput && dateInput.value || '', timeInput && timeInput.value || '');
       if (dateInput && dateInput.validity && dateInput.validity.badInput) { toast('截止日期无效，请重新选择。'); dateInput.focus(); return; }
       if (due.error) { toast(due.error); (due.field === 'time' ? timeInput : dateInput).focus(); return; }
+      task.category = document.getElementById('manual-task-category')?.value === 'activity' ? 'activity' : 'homework';
+      taskCategoryFilter = task.category;
       task.dueAt = due.date ? due.date.toISOString() : null;
       task.dueLabel = '';
       persist(); render(); openTaskDetail(task.id); toast(due.date ? '个人截止时间已保存，卡片倒计时和紧急度已更新。' : '已移除个人截止时间。');
@@ -3617,7 +3788,23 @@
       if (['auto', 'low-power'].includes(el.value)) { state.settings.graphicsMode = el.value; persist(); render(); window.CampusGlassInvalidate?.(); }
       return;
     }
-    if (el.id === 'assistant-provider' || el.id === 'setup-ai-provider') {
+    if (['task-review-enabled', 'review-overview-enabled'].includes(el.id)) {
+      if (!native || !themeEdition || pendingImportRequestID) { el.checked = state.settings.taskReviewEnabled === true; return; }
+      state.settings.taskReviewEnabled = Boolean(el.checked);
+      state.settings.taskReviewEnabledAt = el.checked ? new Date().toISOString() : null;
+      persist(); if (el.checked) send('requestNotifications'); render();
+    }
+    else if (['task-review-interval', 'review-overview-interval'].includes(el.id)) {
+      const hours = Number(el.value);
+      if (!native || !themeEdition || pendingImportRequestID || !Number.isInteger(hours) || hours < 1 || hours > 10) return;
+      state.settings.taskReviewIntervalHours = hours; persist(); render();
+    }
+    else if (el.id === 'teams-analysis-enabled') {
+      if (!native || !themeEdition || pendingImportRequestID) { el.checked = state.settings.teamsAnalysisEnabled === true; return; }
+      state.settings.teamsAnalysisEnabled = Boolean(el.checked);
+      persist(); render();
+    }
+    else if (el.id === 'assistant-provider' || el.id === 'setup-ai-provider') {
       const provider = el.value;
       if (!themeEdition || !['off', 'ollama', 'deepseek', 'hybrid'].includes(provider)) return;
       const oldRemoteModel = String(state.settings.aiModel || '');
@@ -3700,7 +3887,7 @@
       if (!native) { el.checked = false; toast('通知提醒需要使用 CampusDesk Mac 应用。'); return; }
       state.settings.teamsNotifications = Boolean(el.checked);
       if (el.checked) send('requestNotifications');
-      persist(); toast(el.checked ? '已启用 Teams 截止提醒，请允许 Mac 通知。' : 'Teams 作业提醒已关闭。');
+      persist(); toast(el.checked ? '已启用 Teams 截止提醒，请允许 Mac 通知。' : 'Teams 待办提醒已关闭。');
     }
     else if (el.id === 'reminder-minutes') { state.settings.reminderMinutes = Number(el.value); persist(); toast(t('作业提醒时间已更新。')); }
     else if (el.matches('[data-reminder-subject]')) {
@@ -3718,8 +3905,8 @@
       captureSchoolConfigurationDraft();
     }
   });
-  window.addEventListener('online', () => { if (themeEdition && page === 'assistant' && ['deepseek', 'hybrid'].includes(assistantProvider())) { ensureAssistantModels(); render(); } });
-  window.addEventListener('offline', () => { if (themeEdition && page === 'assistant' && ['deepseek', 'hybrid'].includes(assistantProvider())) render(); });
+  window.addEventListener('online', () => { reconcileTeamsAnalysis(); if (themeEdition && page === 'assistant' && ['deepseek', 'hybrid'].includes(assistantProvider())) { ensureAssistantModels(); render(); } });
+  window.addEventListener('offline', () => { reconcileTeamsAnalysis(); if (themeEdition && page === 'assistant' && ['deepseek', 'hybrid'].includes(assistantProvider())) render(); });
   document.addEventListener('compositionstart', event => {
     if (event.target && event.target.id === 'assistant-question') assistantQuestionComposing = true;
   });
@@ -3996,13 +4183,14 @@
     const { title, due, error } = updateTaskDraft(true);
     if (error) return;
     const id = 'manual-' + (window.crypto && window.crypto.randomUUID ? window.crypto.randomUUID() : Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10));
-    state.manualTasks.push({ id: id, title: title, course: '个人待办', dueAt: due.date ? due.date.toISOString() : null, dueLabel: '', status: 'open', createdAt: new Date().toISOString() });
+    state.manualTasks.push({ id: id, title: title, course: '个人待办', category: document.getElementById('task-category')?.value === 'activity' ? 'activity' : 'homework', dueAt: due.date ? due.date.toISOString() : null, dueLabel: '', status: 'open', createdAt: new Date().toISOString() });
     if (persist() === false) {
       state.manualTasks.pop(); invalidateDerivedCaches();
       const message = document.getElementById('task-form-error');
       message.textContent = isEnglish() ? 'Could not save. Your entries are kept here; please try again.' : '未能保存，已保留填写内容，请重试。'; message.hidden = false;
       return;
     }
+    taskCategoryFilter = taskCategory(state.manualTasks[state.manualTasks.length - 1]);
     closeTaskDialog(); render(); toast('个人待办已添加。');
   });
   document.getElementById('import-file').addEventListener('change', async event => {
@@ -4092,6 +4280,8 @@
           // (for example Teams sign-out/account replacement) may advance it.
           if (nativeStateGeneration !== null && generation !== nativeStateGeneration && !(event.type === 'state' && event.replaceState === true)) return;
         }
+        if (event.type === 'taskReviewResult' || event.type === 'taskReviewTick') { taskReviewClient?.receive(event); return; }
+        if (event.type === 'teamsAnalysisResult') { teamsAnalysisClient?.receive(event); return; }
         if (event.type === 'assistantStatus') {
           const keyWasReady = assistantKeyReady();
           assistantStatus.deepSeekKeyConfigured = event.deepSeekKeyConfigured === true;
@@ -4105,6 +4295,7 @@
           else if (event.notice === 'keyRestored') toast(assistantCopy('已恢复密钥访问，可继续使用学习助手。', 'Key access restored. The assistant is ready.'));
           else if (event.notice === 'keyDeleted') toast(assistantCopy('DeepSeek API 密钥已删除。', 'DeepSeek API key deleted.'));
           if (event.errorCode) toast(assistantErrorText(event.errorCode));
+          reconcileTeamsAnalysis();
           if (themeEdition && ['assistant', 'settings'].includes(page)) { ensureAssistantModels(); render(); }
         }
         else if (event.type === 'assistantGuideResult') {
@@ -4165,6 +4356,7 @@
           else assistantTranscript.push({ role: 'assistant', content: assistantPartialAnswer, display: (assistantPartialAnswer ? assistantPartialAnswer + '\n\n' : '') + assistantErrorText(event.errorCode), contextKey: assistantActiveContextKey, failed: true });
           assistantPartialAnswer = '';
           saveAssistantConversation();
+          reconcileTeamsAnalysis();
           if (page === 'assistant') render();
           if (event.errorCode) toast(assistantErrorText(event.errorCode));
         }
@@ -4179,7 +4371,7 @@
         }
         else if (event.type === 'state') {
           const incoming = event.state && Object.keys(event.state).length ? Core.validateState(event.state) : Core.emptyState();
-          if (event.replaceState === true) resetAssistantConversationRuntime();
+          if (event.replaceState === true) { resetTeamsAnalysis(); resetAssistantConversationRuntime(); }
           const retainConversation = themeEdition && assistantHistoryHydrated && event.replaceState !== true;
           if (retainConversation) {
             // Routine native state broadcasts may precede our last chat save.
@@ -4287,6 +4479,7 @@
           scheduleGraphBatchRender();
         }
         else if (event.type === 'graphReset') {
+          resetTeamsAnalysis();
           state = Core.resetTeamsData(state);
           graphStatus.connected = false; graphStatus.busy = false; graphStatus.displayName = ''; graphStatus.counts = {}; graphStatus.coverage = ''; graphStatus.message = ''; graphStatus.requiresAdminConsent = false; graphStatus.authRequired = false; graphStatus.warnings = [];
           statuses.teams = { busy: false, message: 'Teams 已退出，已清除本机 Teams 缓存。' };

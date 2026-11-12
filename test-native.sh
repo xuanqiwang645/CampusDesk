@@ -65,7 +65,7 @@ campus_arch="$(uname -m)"
   "$campus_root/Sources/KeychainAccess.swift" "$campus_root/Sources/SecurityValidation.swift" \
   "$campus_root/Sources/AssistantCredentialIdentity.swift" "$campus_root/Sources/AssistantCredentialBridge.swift" \
   "$campus_root/Sources/AssistantKeyStore.swift" "$campus_root/Sources/AssistantAI.swift" \
-  "$campus_root/Sources/AssistantTransport.swift" "$campus_root/Sources/AssistantModels.swift" \
+  "$campus_root/Sources/AssistantTransport.swift" "$campus_root/Sources/AssistantModels.swift" "$campus_root/Sources/TeamsAnalysis.swift" "$campus_root/Sources/TaskReview.swift" \
   "$campus_root/Tests/assistant-keychain-smoke.swift" \
   -o "$campus_tests/assistant-keychain-smoke"
 "$campus_tests/assistant-keychain-smoke"
@@ -77,9 +77,27 @@ campus_arch="$(uname -m)"
   "$campus_root/Sources/KeychainAccess.swift" "$campus_root/Sources/SecurityValidation.swift" \
   "$campus_root/Sources/AssistantCredentialIdentity.swift" "$campus_root/Sources/AssistantCredentialBridge.swift" \
   "$campus_root/Sources/AssistantKeyStore.swift" "$campus_root/Sources/AssistantAI.swift" \
-  "$campus_root/Sources/AssistantTransport.swift" "$campus_root/Sources/AssistantModels.swift" \
+  "$campus_root/Sources/AssistantTransport.swift" "$campus_root/Sources/AssistantModels.swift" "$campus_root/Sources/TeamsAnalysis.swift" "$campus_root/Sources/TaskReview.swift" \
   "$campus_root/Tests/assistant-stream-smoke.swift" -o "$campus_tests/assistant-stream-smoke"
 "$campus_tests/assistant-stream-smoke"
+/usr/bin/xcrun swiftc -swift-version 5 -O -target "$campus_arch-apple-macosx12.0" \
+  "$campus_root/Sources/KeychainAccess.swift" "$campus_root/Sources/SecurityValidation.swift" \
+  "$campus_root/Sources/AssistantCredentialIdentity.swift" "$campus_root/Sources/AssistantCredentialBridge.swift" \
+  "$campus_root/Sources/AssistantKeyStore.swift" "$campus_root/Sources/AssistantAI.swift" \
+  "$campus_root/Sources/AssistantTransport.swift" "$campus_root/Sources/AssistantModels.swift" \
+  "$campus_root/Sources/TeamsAnalysis.swift" "$campus_root/Sources/TaskReview.swift" "$campus_root/Sources/NativeWorkQueue.swift" \
+  "$campus_root/Tests/teams-analysis-smoke.swift" -o "$campus_tests/teams-analysis-smoke"
+"$campus_tests/teams-analysis-smoke"
+/usr/bin/xcrun swiftc -swift-version 5 -O -target "$campus_arch-apple-macosx12.0" \
+  -framework JavaScriptCore \
+  "$campus_root/Sources/KeychainAccess.swift" "$campus_root/Sources/SecurityValidation.swift" \
+  "$campus_root/Sources/AssistantCredentialIdentity.swift" "$campus_root/Sources/AssistantCredentialBridge.swift" \
+  "$campus_root/Sources/AssistantKeyStore.swift" "$campus_root/Sources/AssistantAI.swift" \
+  "$campus_root/Sources/AssistantTransport.swift" "$campus_root/Sources/AssistantModels.swift" \
+  "$campus_root/Sources/TeamsAnalysis.swift" "$campus_root/Sources/TaskReview.swift" \
+  "$campus_root/Sources/StateValidation.swift" "$campus_root/Sources/NativeWorkQueue.swift" \
+  "$campus_root/Tests/task-review-smoke.swift" -o "$campus_tests/task-review-smoke"
+"$campus_tests/task-review-smoke" "$campus_root"
 /usr/bin/xcrun swiftc -swift-version 5 -O -target "$campus_arch-apple-macosx12.0" \
   "$campus_root/Sources/AssistantSetupGuide.swift" "$campus_root/Tests/assistant-setup-smoke.swift" \
   -o "$campus_tests/assistant-setup-smoke"

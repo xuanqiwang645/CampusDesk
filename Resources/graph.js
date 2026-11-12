@@ -159,7 +159,7 @@
         recipient: clip(batch.kind === 'chatMessages' ? text(chat.topic) : text(team.displayName), 300, '收件人'),
         channel: clip(label, 300, '频道名称'), date, dateLabel: date, kind: classify(label, title, content), attachments: files,
         replyToId: isReply ? graphID('channel', text(team.id), text(channel.id), text(parentID || message.replyToId || batch.rootMessageId)) : '',
-        capturedAt });
+        capturedAt, officialAssignment: false, textTruncated: content.length > MAX_TEXT });
       coverage.messages += 1;
       for (const reply of list(message.replies)) addMessage(reply, text(message.id));
     }
@@ -185,7 +185,8 @@
       const status = ['submitted', 'returned', 'excused'].includes(submissionStatus) ? 'submitted' : submissionStatus === 'reassigned' ? 'reassigned' : 'open';
       const task = { id: aid, title, course: clip(text(cls.displayName || team.displayName), 300, '班级名称'), dueAt: due || null,
         dueLabel: due ? '' : '未提供明确截止时间', status, submissionStatus, url,
-        requirements: clip(bodyText(assignment.instructions), MAX_TEXT, '作业要求'), attachments: attachments(assignment, assignment.resources, url, warn), capturedAt,
+        requirements: clip(bodyText(assignment.instructions), MAX_TEXT, '作业要求'), attachments: attachments(assignment, assignment.resources, url, warn), capturedAt, officialAssignment: true,
+        sourceIncomplete: bodyText(assignment.instructions).length > MAX_TEXT || !provided.includes('instructions'),
         graphProvidedFields: provided.filter(field => ['instructions', 'resources', 'submissions'].includes(field)) };
       snapshot.tasks.push(task); coverage.assignments = 1;
       for (const s of candidates) for (const outcome of list(s.outcomes)) {

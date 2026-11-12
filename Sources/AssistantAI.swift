@@ -35,6 +35,16 @@ enum CampusAssistantAI {
 
     static func keyForModelCatalog() throws -> String { try keyStore.read() }
 
+    @discardableResult static func analyzeTeams(_ batch: TeamsAnalysisBatch,
+        completion: @escaping (Result<[[String: Any]], TeamsAnalysisError>) -> Void) -> AssistantRequestHandle {
+        TeamsAnalysisOperation(batch: batch, keyProvider: { try keyStore.read() }, completion: completion).start()
+    }
+
+    @discardableResult static func reviewTasks(_ batch: TaskReviewBatch,
+        completion: @escaping (Result<[String: Any], TeamsAnalysisError>) -> Void) -> AssistantRequestHandle {
+        CampusDeepSeekJSONOperation(batch: batch, keyProvider: { try keyStore.read() }, completion: completion).start()
+    }
+
     /// Completion and chunks are ordered on a background serial queue. Even
     /// validation failures and cancellation complete asynchronously exactly once.
     @discardableResult static func request(provider: String, model: String, fallbackModel: String?, networkAvailable: Bool,

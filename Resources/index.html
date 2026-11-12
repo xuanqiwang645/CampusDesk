@@ -48,6 +48,7 @@
       <div class="dialog-heading"><h2 id="task-dialog-title">添加待办</h2><button class="icon-button" type="button" data-action="close-task" aria-label="关闭">×</button></div>
       <p class="subtle task-local-note">仅保存在这台 Mac，不会提交至学校系统。</p>
       <label for="task-title">要做什么<input id="task-title" name="title" required maxlength="180" placeholder="例如：整理今天的化学笔记" autocomplete="off" aria-describedby="task-form-error"></label>
+      <label id="task-category-label" for="task-category">待办类别<select id="task-category" name="category"><option value="homework">作业待办</option><option value="activity">活动待办</option></select></label>
       <div class="task-deadline-heading"><strong>截止时间（选填）</strong><span>北京时间 · 24 小时制</span></div>
       <div class="task-deadline-fields">
         <div class="task-date-panel">
@@ -87,6 +88,8 @@
   <input id="import-file" type="file" accept="application/json,.json" hidden>
   <input id="school-calendar-file" type="file" accept=".ics,.pdf,text/calendar,application/pdf" hidden>
   <script src="core.js"></script>
+  <script src="teams-analysis-client.js"></script>
+  <script src="task-review-client.js"></script>
   <script src="agenda.js"></script>
   <script src="grade-planner.js"></script>
   <script src="graph.js"></script>
