@@ -1,0 +1,24 @@
+CampusDesk v2.0.0 Tarantula · 通用原位升级补丁
+
+使用方法
+1. 打开“CampusDesk 更新补丁.app”。无需终端或开发工具。
+2. 核对原应用位置。更新器自动匹配早期普通版与主题版；同时装有两版时选择本次要升级的那个。
+3. 点击“安装更新”。更新器正常退出所选版本，备份应用和本机资料，校验后原位升级。
+4. 成功后自动打开 CampusDesk，更新器自动退出并清理自身。升级失败时保留更新器和备份。
+
+自动清理
+解压运行时，将更新器 .app 移入废纸篓。从仅包含更新器和说明的 DMG 运行时，自动卸载并将该补丁镜像移入废纸篓。原 ZIP、其他文件、主程序与备份不会被遍历删除。文件被占用、来源不唯一或磁盘只读等异常情况下保留文件，不强制清理；可在本次备份的 Cleanup-Result.json 查看结果。
+
+数据与登录
+普通版保留 local.campusdesk.mac 标识及 CampusDesk 资料目录；主题版保留 local.campusdesk.mac.themeedition 标识及原主题版资料目录，不互相搬迁或覆盖。网页 Cookie、LocalStorage、Microsoft 登录资料、学校配置和钥匙串条目不重置；更新器不读取或删除实际密钥，也不操作 Chrome／Edge 资料。
+安装以前一版本正常退出后的资料为基准，备份并比对文件内容、权限和链接。校验失败会恢复原应用，不用旧备份覆盖用户新修改。新程序启动后的正常同步和用户操作仍会保存新记录。
+较早的临时签名或旧密钥访问方式，可能需要 macOS 一次原有钥匙串访问授权；原凭据保留。服务端令牌到期或要求重新认证不由补丁控制。
+
+兼容范围
+Apple Silicon Mac、macOS 12 或更新版本。覆盖仓库已发布的普通版与主题版旧版本；对主题版 Build 54–100 和普通版多个历史版本执行了兼容矩阵检查。不降级较新的版本，不更新 Windows 程序。
+
+备份
+当前用户 Library/Application Support 下，普通版保存在 CampusDesk Backups，主题版保存在 CampusDesk-local-campusdesk-mac-themeedition Backups。更新成功后保留完整旧版、资料和校验收据，不随更新器清理。
+
+离线安装，不附带个人资料、会话或 API Key。应用使用持久签名，尚未经过 Apple Developer ID 公证。
+发布记录：https://github.com/xuanqiwang645/CampusDesk/releases

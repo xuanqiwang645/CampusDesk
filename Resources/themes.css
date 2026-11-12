@@ -213,6 +213,10 @@
 .overview-task-review { width: 300px; max-width: 100%; padding: 12px 14px; border: 1px solid color-mix(in srgb, var(--accent-ink) 35%, var(--line)); border-radius: 14px; background: color-mix(in srgb, var(--teal-soft) 45%, var(--card)); color: var(--ink); }
 .overview-review-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 10px; }
 .overview-review-heading strong { font-size: 13px; font-weight: 650; color: var(--accent-ink); }
+.overview-review-disclosure { display: inline-flex; align-items: center; gap: 7px; min-height: 28px; padding: 0; border: 0; background: transparent; color: var(--accent-ink); font: inherit; cursor: pointer; text-align: left; }
+.overview-review-disclosure > span { width: 16px; font-size: 18px; text-align: center; }
+.overview-task-review[data-collapsed="true"] .overview-review-heading { margin-bottom: 0; }
+.overview-task-review .overview-review-toggle[hidden], .overview-task-review #overview-review-body[hidden] { display: none; }
 .overview-review-toggle { display: flex; align-items: center; gap: 7px; flex-shrink: 0; }
 .overview-review-toggle > label:last-child { font-size: 11px; color: var(--ink); cursor: pointer; }
 .overview-review-controls { display: flex; align-items: center; gap: 8px; }
@@ -227,6 +231,10 @@
 .overview-review-priority button { display: block; padding: 0; border: 0; background: transparent; color: var(--accent-ink); font: inherit; font-size: 12px; font-weight: 600; text-align: left; overflow-wrap: anywhere; }
 .overview-review-priority button:hover { text-decoration: underline; }
 .overview-task-review .overview-review-priority p { margin: 3px 0 0; color: var(--muted); font-size: 10px; line-height: 1.5; overflow-wrap: anywhere; }
+@media (min-width: 1000px) {
+  .overview-heading-controls { flex: 1; min-width: 0; flex-wrap: nowrap; }
+  .overview-task-review { flex: 1 1 300px; width: auto; min-width: 0; }
+}
 @media (max-width: 560px) {
   #teams-analysis-settings .settings-field, #task-review-settings .settings-field { gap: 12px; align-items: flex-start; }
   #task-review-settings .settings-field { flex-wrap: wrap; }

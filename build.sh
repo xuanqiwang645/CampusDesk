@@ -46,7 +46,11 @@ mkdir -p "$campus_build/Contents/MacOS" "$campus_build/Contents/Resources"
 if [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$campus_info_plist")" == 'local.campusdesk.mac.themeedition' ]]; then
   CAMPUSDESK_SIGN_IDENTITY="$campus_signing_identity" bash "$campus_root/scripts/build-widgets.sh" "$campus_build"
 fi
-CAMPUSDESK_SIGN_IDENTITY="$campus_signing_identity" bash "$campus_root/scripts/build-credential-helper.sh" "$campus_build/Contents/Helpers/CampusDeskCredentials"
+if [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$campus_info_plist")" == 'local.campusdesk.mac' ]]; then
+  CAMPUSDESK_SIGN_IDENTITY="$campus_signing_identity" bash "$campus_root/scripts/build-classic-credential-helper.sh" "$campus_build/Contents/Helpers/CampusDeskCredentials"
+else
+  CAMPUSDESK_SIGN_IDENTITY="$campus_signing_identity" bash "$campus_root/scripts/build-credential-helper.sh" "$campus_build/Contents/Helpers/CampusDeskCredentials"
+fi
 /usr/bin/xattr -cr "$campus_build"
 # The helper is already signed and must stay byte-identical across releases.
 # --deep --force would re-sign nested code and undo that guarantee.

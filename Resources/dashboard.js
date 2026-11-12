@@ -10,7 +10,7 @@
   const toolbarButtonIDs = ['grade-notifications-button', 'focus-button', 'sync-button'];
   let lastToolbarState = '';
   const themeEdition = window.CampusDeskThemeEdition === true;
-  const appVersionInfo = window.CampusDeskAppVersion || { version: themeEdition ? '1.2.0' : '0.5.13', name: themeEdition ? 'Lagoon' : '' };
+  const appVersionInfo = window.CampusDeskAppVersion || { version: themeEdition ? '2.0.0' : '0.5.13', name: themeEdition ? 'Tarantula' : '' };
   const setupWizardReleaseVersion = String(appVersionInfo.version || 'unversioned').slice(0, 40);
   const appVersionLabel = 'CampusDesk v' + String(appVersionInfo.version || '').slice(0, 40) + (appVersionInfo.name ? ' ' + String(appVersionInfo.name).slice(0, 60) : '');
   const storageKey = 'campusdesk.browser.v1';
@@ -2019,6 +2019,7 @@
     const recommendation = item => '<div class="overview-review-priority"><button type="button" data-action="task-detail" data-id="' + esc(item.id) + '">' + esc(tasks.get(item.id).title) + '</button><p>' + esc(item.reason) + '</p></div>';
     const priorities = recommendations.length ? '<div class="overview-review-priorities"><span>' + assistantCopy(enabled ? '最近优先建议' : '上次建议 · 已暂停', enabled ? 'Latest priorities' : 'Last priorities · paused') + '</span>' + recommendation(recommendations[0]) + (recommendations.length > 1 ? '<details><summary>' + assistantCopy('另有 ' + (recommendations.length - 1) + ' 项建议', (recommendations.length - 1) + ' more priorities') + '</summary>' + recommendations.slice(1).map(recommendation).join('') + '</details>' : '') + '</div>' : '';
     const label = assistantCopy('AI 任务提醒', 'AI task reminders');
+    const collapsed = state.settings.taskReviewPanelCollapsed === true;
     const status = !available ? assistantCopy('在主题版 Mac 应用中使用', 'Use in the Theme Edition Mac app')
       : !enabled ? assistantCopy('已关闭 · 开启后从下一周期开始', 'Off · first review after one interval')
       : runtime.pending ? assistantCopy('已排队 · 当前分析结束后立即开始', 'Queued · starts after the current analysis')
@@ -2026,7 +2027,7 @@
       : state.taskReview?.error ? assistantCopy('上次分析未完成，可立即重试', 'Last review failed; retry now')
       : runtime.nextRunAt ? assistantCopy('下次分析 ', 'Next review ') + lastUpdated(runtime.nextRunAt)
       : assistantCopy('等待下一次分析', 'Waiting for the next review');
-    return '<section class="overview-task-review" aria-label="' + label + '"><div class="overview-review-heading"><strong>' + label + '</strong><div class="overview-review-toggle"><label class="toggle"><input id="review-overview-enabled" type="checkbox"' + (enabled ? ' checked' : '') + (!available ? ' disabled' : '') + ' aria-label="' + assistantCopy('开启 AI 任务提醒', 'Enable AI task reminders') + '"><span></span></label><label for="review-overview-enabled">' + assistantCopy(enabled ? '已开启' : '开启', enabled ? 'On' : 'Enable') + '</label></div></div><div class="overview-review-controls"><label for="review-overview-interval">' + assistantCopy('间隔', 'Interval') + '</label><select id="review-overview-interval"' + (!available ? ' disabled' : '') + '>' + Array.from({ length: 10 }, (_, index) => index + 1).map(hours => '<option value="' + hours + '"' + (Number(state.settings.taskReviewIntervalHours || 2) === hours ? ' selected' : '') + '>' + assistantCopy(hours + ' 小时', hours + (hours === 1 ? ' hour' : ' hours')) + '</option>').join('') + '</select><button type="button" class="button button-primary" data-action="task-review-now"' + (!available || !enabled || runtime.running || runtime.pending ? ' disabled' : '') + '>' + assistantCopy('立即分析', 'Review now') + '</button></div><p class="overview-review-status" role="status" aria-live="polite">' + esc(status) + '</p>' + priorities + '</section>';
+    return '<section class="overview-task-review" data-collapsed="' + collapsed + '" aria-label="' + label + '"><div class="overview-review-heading"><button type="button" class="overview-review-disclosure" data-action="toggle-overview-review" aria-expanded="' + !collapsed + '" aria-controls="overview-review-body" aria-label="' + assistantCopy(collapsed ? '展开 AI 任务提醒' : '收起 AI 任务提醒', collapsed ? 'Expand AI task reminders' : 'Collapse AI task reminders') + '"><span aria-hidden="true">' + (collapsed ? '▸' : '▾') + '</span><strong>' + label + '</strong></button><div class="overview-review-toggle"' + (collapsed ? ' hidden' : '') + '><label class="toggle"><input id="review-overview-enabled" type="checkbox"' + (enabled ? ' checked' : '') + (!available ? ' disabled' : '') + ' aria-label="' + assistantCopy('开启 AI 任务提醒', 'Enable AI task reminders') + '"><span></span></label><label for="review-overview-enabled">' + assistantCopy(enabled ? '已开启' : '开启', enabled ? 'On' : 'Enable') + '</label></div></div><div id="overview-review-body"' + (collapsed ? ' hidden' : '') + '><div class="overview-review-controls"><label for="review-overview-interval">' + assistantCopy('间隔', 'Interval') + '</label><select id="review-overview-interval"' + (!available ? ' disabled' : '') + '>' + Array.from({ length: 10 }, (_, index) => index + 1).map(hours => '<option value="' + hours + '"' + (Number(state.settings.taskReviewIntervalHours || 2) === hours ? ' selected' : '') + '>' + assistantCopy(hours + ' 小时', hours + (hours === 1 ? ' hour' : ' hours')) + '</option>').join('') + '</select><button type="button" class="button button-primary" data-action="task-review-now"' + (!available || !enabled || runtime.running || runtime.pending ? ' disabled' : '') + '>' + assistantCopy('立即分析', 'Review now') + '</button></div><p class="overview-review-status" role="status" aria-live="polite">' + esc(status) + '</p>' + priorities + '</div></section>';
   }
   function appearanceStatusText() {
     const dark = Core.effectiveColorTheme(state.settings, systemAppearanceDark) === 'midnight';
@@ -3347,6 +3348,10 @@
     if (!target) return;
     if (target.dataset.page) { navigate(target.dataset.page); return; }
     const action = target.dataset.action;
+    if (action === 'toggle-overview-review') {
+      state.settings.taskReviewPanelCollapsed = !state.settings.taskReviewPanelCollapsed;
+      persist(); render(); return;
+    }
     if (action === 'task-review-now') {
       if (!native || !themeEdition || !state.settings.taskReviewEnabled || pendingImportRequestID) return;
       taskReviewClient?.runNow(); requestBackgroundRender();

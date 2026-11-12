@@ -57,11 +57,12 @@ final class GraphAuth: NSObject, ASWebAuthenticationPresentationContextProviding
         return URLSession(configuration: c, delegate: self, delegateQueue: .main)
     }()
 
-    init(resources: URL) {
+    init(resources: URL, compatibility: [String: String] = [:]) {
         super.init()
         let bundled = (try? Data(contentsOf: resources.appendingPathComponent("MicrosoftGraphConfig.json")))
             .flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] } ?? [:]
-        let saved = UserDefaults.standard.dictionary(forKey: "CampusDesk.GraphConfiguration") ?? bundled
+        let defaults = (bundled["clientId"] as? String ?? "").isEmpty ? compatibility as [String: Any] : bundled
+        let saved = UserDefaults.standard.dictionary(forKey: "CampusDesk.GraphConfiguration") ?? defaults
         let proposedID = (saved["clientId"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         let proposedTenant = (saved["tenant"] as? String ?? "organizations").trimmingCharacters(in: .whitespacesAndNewlines)
         if Self.validClientID(proposedID), Self.validTenant(proposedTenant) {

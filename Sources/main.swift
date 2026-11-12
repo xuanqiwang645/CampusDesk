@@ -6,6 +6,7 @@ import Vision
 import WidgetKit
 
 let campusDeskBundleIdentifier = Bundle.main.bundleIdentifier ?? "local.campusdesk.mac"
+let campusDeskUsesThemeInterface = campusDeskBundleIdentifier == "local.campusdesk.mac.themeedition" || (campusDeskBundleIdentifier == "local.campusdesk.mac" && Bundle.main.object(forInfoDictionaryKey: "CampusDeskThemeInterface") as? Bool == true)
 let campusDeskSupportFolderName = campusDeskBundleIdentifier == "local.campusdesk.mac"
     ? "CampusDesk"
     : "CampusDesk-" + campusDeskBundleIdentifier.replacingOccurrences(of: ".", with: "-")
@@ -14,7 +15,11 @@ let campusDeskSupportDirectory = FileManager.default.urls(for: .applicationSuppo
 let userSchoolConfigURL = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first?
     .appendingPathComponent(campusDeskSupportFolderName, isDirectory: true)
     .appendingPathComponent("SchoolConfig.json", isDirectory: false)
-var schoolEndpoints = CampusSchoolConfiguration.load(resources: Bundle.main.resourceURL, userConfig: userSchoolConfigURL)
+let campusDeskUpgradeCompatibility = CampusUpgradeCompatibility.load(home: FileManager.default.homeDirectoryForCurrentUser,
+    bundleID: campusDeskBundleIdentifier, build: Int(Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "0") ?? 0,
+    application: Bundle.main.bundleURL)
+var schoolEndpoints = CampusSchoolConfiguration.load(resources: Bundle.main.resourceURL, userConfig: userSchoolConfigURL,
+    compatibility: campusDeskUpgradeCompatibility.schoolHomes)
 var sourceHomes: [String: String] { schoolEndpoints.homes.merging(["teams": "https://teams.microsoft.com/"]) { _, teams in teams } }
 var sourceHosts: [String: [String]] { sourceHomes.reduce(into: [:]) { result, entry in
     if let host = URL(string: entry.value)?.host { result[entry.key] = [host] }
@@ -74,7 +79,7 @@ enum StateReadError: LocalizedError {
 
 let nativeStateValidator: Result<CampusStateValidator, Error> = Result {
     guard let resources = Bundle.main.resourceURL else { throw StateReadError.invalid }
-    return try CampusStateValidator(resources: resources, themeEdition: campusDeskBundleIdentifier == "local.campusdesk.mac.themeedition")
+    return try CampusStateValidator(resources: resources, themeEdition: campusDeskUsesThemeInterface)
 }
 
 func readSavedState(_ url: URL) throws -> [String: Any] {
@@ -436,7 +441,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
     var attachmentGeneration = UUID()
     var attachmentRequests = Set<String>()
     var attachmentsParsed = 0
-    lazy var graphAuth = GraphAuth(resources: resources)
+    lazy var graphAuth = GraphAuth(resources: resources, compatibility: campusDeskUpgradeCompatibility.graphConfiguration)
     lazy var teamsGraph = TeamsGraph(tokenProvider: { [weak self] forceRefresh, completion in
         guard let self = self else { completion(.failure(NSError(domain: "CampusDesk", code: -1, userInfo: [NSLocalizedDescriptionKey: "应用已关闭"]))); return }
         self.graphAuth.accessToken(forceRefresh: forceRefresh, completion: completion)
@@ -552,7 +557,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         let config = WKWebViewConfiguration()
         config.websiteDataStore = .nonPersistent()
         config.userContentController.add(self, name: "campus")
-        let themeEdition = campusDeskBundleIdentifier == "local.campusdesk.mac.themeedition"
+        let themeEdition = campusDeskUsesThemeInterface
         let appVersion = ["version": Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "", "name": Bundle.main.object(forInfoDictionaryKey: "CampusDeskReleaseName") as? String ?? ""]
         let bootstrap = "window.CampusDeskJSONStateSaves = true;window.CampusSchoolConfig = " + (json(schoolEndpoints.frontend) ?? "{}") + ";window.CampusDeskThemeEdition = " + (themeEdition ? "true" : "false") + ";window.CampusDeskAppVersion = " + (json(appVersion) ?? "{}") + ";"
         config.userContentController.addUserScript(WKUserScript(source: bootstrap, injectionTime: .atDocumentStart, forMainFrameOnly: true))
@@ -563,7 +568,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         dashboard.navigationDelegate = self
         dashboard.uiDelegate = self
         window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1220, height: 850), styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
-        window.title = campusDeskBundleIdentifier == "local.campusdesk.mac.themeedition" ? "CampusDesk · 主题版" : "CampusDesk · 学习看板"
+        window.title = campusDeskBundleIdentifier == "local.campusdesk.mac.themeedition" ? "CampusDesk · 主题版" : campusDeskUsesThemeInterface ? "CampusDesk · Tarantula" : "CampusDesk · 学习看板"
         window.minSize = NSSize(width: 900, height: 640)
         window.isReleasedWhenClosed = false
         dashboardAppearance = CampusDashboardAppearance(window: window, settings: appearanceSettings) { [weak self] dark in
@@ -632,55 +637,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         statusItem.menu = tray
     }
     func prepareThemeEditionFreshSetup() {
-        guard campusDeskBundleIdentifier == "local.campusdesk.mac.themeedition" else { return }
-        let migrationKey = "CampusDesk.ThemeEdition.FreshSetup.42"
-        guard !UserDefaults.standard.bool(forKey: migrationKey) else { return }
-        freshThemeSetupInProgress = true
-        teamsAutoBridge.cancel(); teamsBrowserBridge.cancel()
-        let graphCredentialsRemoved = graphAuth.signOut()
-        let assistantKeyRemoved = CampusAssistantAI.deleteDeepSeekKey()
-        clearGraphIdentity()
-        teamsBrowserAccount = nil
-        var teamsSessionFilesRemoved = true
-        for url in [teamsBrowserIdentityURL, teamsAutoCheckpointURL, teamsAutoStatusURL] where FileManager.default.fileExists(atPath: url.path) {
-            do { try FileManager.default.removeItem(at: url) }
-            catch { teamsSessionFilesRemoved = false }
-        }
-        teamsSessionFilesRemoved = teamsSessionFilesRemoved
-            && !FileManager.default.fileExists(atPath: teamsBrowserIdentityURL.path)
-            && !FileManager.default.fileExists(atPath: teamsAutoCheckpointURL.path)
-            && !FileManager.default.fileExists(atPath: teamsAutoStatusURL.path)
-
-        var stateSaved = true
-        if !state.isEmpty {
-            var settings = state["settings"] as? [String: Any] ?? [:]
-            settings["setupWizardCompleted"] = false
-            settings["setupWizardStep"] = 0
-            settings["teamsBrowserAutomation"] = false
-            state["settings"] = settings
-            stateSaved = persistState()
-        }
-
-        // WKWebsiteDataStore is scoped by bundle identifier on disk. Clear only
-        // this side-by-side edition's school cookies, never the original app's.
-        let store = WKWebsiteDataStore.default()
-        store.fetchDataRecords(ofTypes: WKWebsiteDataStore.allWebsiteDataTypes()) { [weak self] records in
-            guard let self else { return }
-            let hosts = Set(sourceHosts.values.flatMap { $0 }.map { $0.lowercased() })
-            let selected = records.filter { record in
-                let domain = record.displayName.lowercased()
-                return hosts.contains(domain) || hosts.contains(where: { domain.hasSuffix("." + $0) })
-            }
-            let finish = {
-                self.freshThemeSetupInProgress = false
-                if graphCredentialsRemoved && assistantKeyRemoved && teamsSessionFilesRemoved && stateSaved {
-                    UserDefaults.standard.set(true, forKey: migrationKey)
-                }
-                if self.ready { self.sync() }
-            }
-            guard !selected.isEmpty else { finish(); return }
-            store.removeData(ofTypes: WKWebsiteDataStore.allWebsiteDataTypes(), for: selected, completionHandler: finish)
-        }
+        // A new installation already has an empty profile. An upgrade must keep
+        // every existing cookie, account, key and setup preference, including
+        // profiles created before the historical fresh-setup marker existed.
+        freshThemeSetupInProgress = false
     }
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool { showDashboard(); return true }
@@ -710,7 +670,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
     }
     @objc func showDashboard() { window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true) }
     func application(_ application: NSApplication, open urls: [URL]) {
-        guard campusDeskBundleIdentifier == "local.campusdesk.mac.themeedition",
+        guard campusDeskUsesThemeInterface,
               let url = urls.first(where: { CampusAgendaLink.day(from: $0) != nil || CampusAgendaLink.isTasks($0) }) else { return }
         pendingAgendaDay = CampusAgendaLink.day(from: url)
         pendingWidgetTasks = CampusAgendaLink.isTasks(url)
@@ -1175,7 +1135,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         }
     }
     func startTeamsAnalysis(_ body: [String: Any]) {
-        guard campusDeskBundleIdentifier == "local.campusdesk.mac.themeedition" else { return }
+        guard campusDeskUsesThemeInterface else { return }
         let batch: TeamsAnalysisBatch
         do { batch = try TeamsAnalysisBatch(body) }
         catch {
@@ -1239,7 +1199,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         notifications.cancelTaskReviewNotifications()
     }
     func startTaskReview(_ body: [String: Any]) {
-        guard campusDeskBundleIdentifier == "local.campusdesk.mac.themeedition" else { return }
+        guard campusDeskUsesThemeInterface else { return }
         let batch: TaskReviewBatch
         do { batch = try TaskReviewBatch(body) }
         catch {
@@ -1298,7 +1258,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         }
     }
     func configureTaskReviewTimer() {
-        guard taskReviewTimer == nil, campusDeskBundleIdentifier == "local.campusdesk.mac.themeedition" else { return }
+        guard taskReviewTimer == nil, campusDeskUsesThemeInterface else { return }
         let timer = Timer(timeInterval: 60, repeats: true) { [weak self] _ in self?.emitTaskReviewTick() }
         timer.tolerance = 5; RunLoop.main.add(timer, forMode: .common); taskReviewTimer = timer
     }
@@ -1427,17 +1387,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
             resumeAfterImportAcknowledgement = false
             if shouldResume { syncTeams() }
         case "assistantOpenGuide":
-            guard campusDeskBundleIdentifier == "local.campusdesk.mac.themeedition",
+            guard campusDeskUsesThemeInterface,
                   let id = body["id"] as? String, let url = CampusAssistantSetupGuide.url(for: id) else { return }
             if !NSWorkspace.shared.open(url) { emit(["type": "assistantGuideResult", "operation": "open", "success": false]) }
         case "assistantCopyGuideCommand":
-            guard campusDeskBundleIdentifier == "local.campusdesk.mac.themeedition",
+            guard campusDeskUsesThemeInterface,
                   let id = body["id"] as? String, let command = CampusAssistantSetupGuide.commands[id] else { return }
             NSPasteboard.general.clearContents()
             let copied = NSPasteboard.general.setString(command, forType: .string)
             emit(["type": "assistantGuideResult", "operation": "copy", "success": copied])
         case "assistantRestoreDeepSeekKey":
-            guard campusDeskBundleIdentifier == "local.campusdesk.mac.themeedition", !assistantKeyRecoveryInFlight else { return }
+            guard campusDeskUsesThemeInterface, !assistantKeyRecoveryInFlight else { return }
             assistantKeyRecoveryInFlight = true
             DispatchQueue.global(qos: .userInitiated).async { [weak self] in
                 var errorCode: String?
@@ -1455,7 +1415,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
                 }
             }
         case "assistantSaveDeepSeekKey":
-            guard campusDeskBundleIdentifier == "local.campusdesk.mac.themeedition", !assistantKeyRecoveryInFlight, let key = body["key"] as? String else { return }
+            guard campusDeskUsesThemeInterface, !assistantKeyRecoveryInFlight, let key = body["key"] as? String else { return }
             do {
                 try CampusAssistantAI.saveDeepSeekKey(key)
                 cancelBackgroundAnalysis(notify: true); teamsAnalysisCooldown = nil
@@ -1469,14 +1429,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
                 emit(event)
             }
         case "assistantDeleteDeepSeekKey":
-            guard campusDeskBundleIdentifier == "local.campusdesk.mac.themeedition", !assistantKeyRecoveryInFlight else { return }
+            guard campusDeskUsesThemeInterface, !assistantKeyRecoveryInFlight else { return }
             let removed = CampusAssistantAI.deleteDeepSeekKey()
             if removed { cancelBackgroundAnalysis(notify: true); teamsAnalysisCooldown = nil }
             var event = CampusAssistantAI.status()
             if removed { event["notice"] = "keyDeleted" } else { event["errorCode"] = "keyStore" }
             emit(event)
         case "assistantListModels":
-            guard campusDeskBundleIdentifier == "local.campusdesk.mac.themeedition",
+            guard campusDeskUsesThemeInterface,
                   let provider = body["provider"] as? String, ["deepseek", "ollama"].contains(provider),
                   let requestID = body["requestId"] as? String,
                   requestID.range(of: "^[A-Za-z0-9-]{1,100}$", options: .regularExpression) != nil else { return }
@@ -1511,7 +1471,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
                 }
             }
         case "assistantRequest":
-            guard campusDeskBundleIdentifier == "local.campusdesk.mac.themeedition",
+            guard campusDeskUsesThemeInterface,
                   let requestID = body["requestId"] as? String,
                   requestID.range(of: "^[A-Za-z0-9-]{1,100}$", options: .regularExpression) != nil,
                   let requestedProvider = body["provider"] as? String,

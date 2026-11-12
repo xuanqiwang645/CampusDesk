@@ -45,8 +45,11 @@ struct CampusSchoolConfiguration {
               let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
         return object
     }
-    static func load(resources: URL?, userConfig: URL? = nil) -> CampusSchoolConfiguration {
-        var values = read(resources?.appendingPathComponent("SchoolConfig.json")) ?? [:]
+    static func load(resources: URL?, userConfig: URL? = nil, compatibility: [String: String] = [:]) -> CampusSchoolConfiguration {
+        var values: [String: Any] = compatibility
+        if let bundled = read(resources?.appendingPathComponent("SchoolConfig.json")) {
+            for source in sources where (bundled[source] as? String)?.isEmpty == false { values[source] = bundled[source] }
+        }
         if let local = read(userConfig) {
             // Only the two known keys can override the public defaults. Empty
             // values deliberately disable one provider without affecting the other.

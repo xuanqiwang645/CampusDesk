@@ -179,6 +179,13 @@ test('overview reminder panel controls scheduling beside the title and opens cur
     const { page, errors } = await openFixture(browser, 'overview', state, true);
     const panel = page.locator('.overview-heading-controls .overview-task-review');
     assert.equal(await panel.count(), 1);
+    const regularWidth = (await panel.boundingBox()).width;
+    assert.ok(regularWidth > 420, 'desktop reminder uses the blank space beside the heading');
+    await page.setViewportSize({ width: 1440, height: 850 });
+    const widePanel = await panel.boundingBox(), styleControl = await page.locator('.overview-heading-controls > [data-action="appearance-settings"]').boundingBox();
+    assert.ok(widePanel.width > regularWidth + 100, 'reminder border expands with the available space');
+    assert.ok(Math.abs(widePanel.x + widePanel.width + 12 - styleControl.x) <= 1, 'reminder keeps its existing right-side anchor beside the style control');
+    await page.setViewportSize({ width: 1100, height: 850 });
     assert.equal(await panel.locator('select option').count(), 10);
     assert.match(await panel.innerText(), /上次建议 · 已暂停/);
     assert.doesNotMatch(await panel.innerText(), /Stale item/);
@@ -195,8 +202,45 @@ test('overview reminder panel controls scheduling beside the title and opens cur
     await page.locator('[data-action="dashboard-theme"][data-theme="classic"]').click();
     await page.locator('[data-page="overview"]').first().click();
     assert.equal(await page.locator('.overview-heading-controls .overview-task-review').count(), 1);
+    assert.ok(await page.locator('#content').evaluate(el => el.scrollWidth <= el.clientWidth + 1), 'classic heading remains within the content width');
     await page.setViewportSize({ width: 390, height: 850 });
     assert.ok(await page.locator('#content').evaluate(el => el.scrollWidth <= el.clientWidth + 1));
+    assert.deepEqual(errors, []);
+  } finally { await browser.close(); }
+});
+
+test('overview reminder fully collapses, persists its preference and keeps scheduled analysis enabled', optional, async () => {
+  const browser = await launchChromium();
+  try {
+    const state = fixture();
+    Object.assign(state.settings, { teamsAnalysisEnabled: false, taskReviewEnabled: true, taskReviewIntervalHours: 1, taskReviewEnabledAt: new Date().toISOString() });
+    state.manualTasks = [{ id: 'collapse-task', title: 'Keep the upcoming task', status: 'open', category: 'homework' }];
+    const { page, errors } = await openFixture(browser, 'overview', state, true);
+    const panel = page.locator('.overview-task-review'), disclosure = panel.locator('[data-action="toggle-overview-review"]');
+    const expanded = await panel.boundingBox();
+    await disclosure.click();
+    await page.waitForFunction(() => document.querySelector('.overview-task-review').dataset.collapsed === 'true');
+    assert.equal(await disclosure.getAttribute('aria-expanded'), 'false');
+    assert.equal(await panel.locator('#review-overview-enabled').isVisible(), false);
+    assert.equal(await panel.locator('#review-overview-interval').isVisible(), false);
+    assert.equal(await panel.locator('[data-action="task-review-now"]').isVisible(), false);
+    assert.ok((await panel.boundingBox()).height < expanded.height - 30);
+    const saved = await page.evaluate(() => uiMessages.filter(message => message.action === 'saveState').at(-1).state);
+    assert.equal(saved.settings.taskReviewEnabled, true); assert.equal(saved.settings.taskReviewIntervalHours, 1);
+    assert.equal(saved.settings.taskReviewPanelCollapsed, true);
+    saved.settings.taskReviewEnabledAt = new Date(Date.now() - 3700000).toISOString();
+    await page.evaluate(state => CampusDesk.receive({ type: 'state', state, stateGeneration: 3 }), saved);
+    await page.evaluate(() => CampusDesk.receive({ type: 'taskReviewTick', stateGeneration: 3 }));
+    await page.waitForFunction(() => uiMessages.some(message => message.action === 'taskReviewAnalyze'));
+    assert.equal(await disclosure.getAttribute('aria-expanded'), 'false', 'scheduled work does not expand the panel');
+    const persisted = await page.evaluate(() => uiMessages.filter(message => message.action === 'saveState').at(-1).state);
+    await page.reload();
+    await page.evaluate(state => { CampusDesk.receive({ type: 'state', state, stateGeneration: 3 }); document.querySelectorAll('dialog[open]').forEach(dialog => dialog.close()); }, persisted);
+    await page.waitForFunction(() => document.querySelector('.overview-task-review')?.dataset.collapsed === 'true');
+    await disclosure.press('Enter');
+    await page.waitForFunction(() => document.querySelector('.overview-task-review').dataset.collapsed === 'false');
+    assert.equal(await panel.locator('#review-overview-interval').inputValue(), '1');
+    assert.equal(await panel.locator('#review-overview-enabled').isChecked(), true);
     assert.deepEqual(errors, []);
   } finally { await browser.close(); }
 });

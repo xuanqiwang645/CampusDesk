@@ -8,8 +8,8 @@
     <key>CFBundleIdentifier</key><string>local.campusdesk.mac.themeedition.widgets</string>
     <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
     <key>CFBundlePackageType</key><string>XPC!</string>
-    <key>CFBundleShortVersionString</key><string>1.2.0</string>
-    <key>CFBundleVersion</key><string>99</string>
+    <key>CFBundleShortVersionString</key><string>2.0.0</string>
+    <key>CFBundleVersion</key><string>101</string>
     <key>CFBundleSupportedPlatforms</key><array><string>MacOSX</string></array>
     <key>LSMinimumSystemVersion</key><string>14.0</string>
     <key>NSExtension</key><dict><key>NSExtensionPointIdentifier</key><string>com.apple.widgetkit-extension</string></dict>

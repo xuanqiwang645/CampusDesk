@@ -1,19 +1,28 @@
-# CampusDesk Theme Edition · Lagoon
+# CampusDesk · v2.0.0 Tarantula
 
 面向使用M系列 mac 的国际部学生打造的集中查看希悦课表、ManageBac课程总评和GPA估算、待办与可识别的教师反馈。同时，对北京101国际部特色活动English Corner（EC）有特别优化
 
 
-**最新版本：v1.2.0 Lagoon · 主题版 · 构建 99。** 适用于 Apple Silicon（M 系列芯片）Mac，最低 macOS 12；桌面小组件需要 macOS 14，原生玻璃工具栏需要 macOS 26 或更新版本。
+**最新版本：v2.0.0 Tarantula · Build 101。** 普通版与主题版均提供 Apple Silicon（M 系列）Mac 安装包，最低 macOS 12；主题版桌面小组件需要 macOS 14，原生玻璃工具栏需要 macOS 26 或更新版本。
 
-[下载 DMG 安装包](https://github.com/xuanqiwang645/CampusDesk/releases/download/v1.2.0-build99/CampusDesk-Theme-Edition-v1.2.0-build99-macOS-arm64.dmg) · [下载 ZIP 压缩包](https://github.com/xuanqiwang645/CampusDesk/releases/download/v1.2.0-build99/CampusDesk-Theme-Edition-v1.2.0-build99-macOS-arm64.zip) · [发布说明](https://github.com/xuanqiwang645/CampusDesk/releases/tag/v1.2.0-build99) · [SHA-256 校验文件](https://github.com/xuanqiwang645/CampusDesk/releases/download/v1.2.0-build99/SHA256SUMS.txt)
+[通用升级补丁 DMG](https://github.com/xuanqiwang645/CampusDesk/releases/download/v2.0.0/CampusDesk-v2.0.0-Tarantula-build101-Update-Patch1-macOS-arm64.dmg) · [主题版完整安装包](https://github.com/xuanqiwang645/CampusDesk/releases/download/v2.0.0/CampusDesk-Theme-Edition-v2.0.0-build101-macOS-arm64.dmg) · [普通版完整安装包](https://github.com/xuanqiwang645/CampusDesk/releases/download/v2.0.0/CampusDesk-v2.0.0-build101-macOS-arm64.dmg) · [全部 ZIP、发布说明与下载](https://github.com/xuanqiwang645/CampusDesk/releases/tag/v2.0.0) · [SHA-256 校验文件](https://github.com/xuanqiwang645/CampusDesk/releases/download/v2.0.0/SHA256SUMS.txt)
 
-打开 DMG 后，将 **CampusDesk Theme Edition.app** 拖入 Applications。更新时请替换原来的主题版安装位置；如果原应用位于个人 `~/Applications`，请仍放回该目录。应用使用本机持久签名，尚未经过 Apple Developer ID 公证。
+已安装任一旧普通版或主题版，请使用通用补丁：双击更新器，核对原应用后安装。它保持原应用标识和路径，先备份并逐文件核验本机资料与登录会话，再替换应用；成功后重新打开新版，更新器自动退出并移入废纸篓。两版可以并存，补丁一次更新所选版本，不合并资料。详见[补丁使用与兼容说明](Updater/README.md)。
+
+首次安装使用对应的完整 DMG，将应用拖入 Applications。普通版升级后也有新界面和 AI 功能，小组件由主题版提供。安装包使用本机持久签名，尚未经过 Apple Developer ID 公证。
 
 -如果需要windows操作系统版本，移步到https://github.com/zhyunran/ManageBac-packer
 
 如发现任何值得改进的地方，欢迎联系我！邮箱：xuanqiwang645@gmail.com
 
-## Build 99 更新
+## v2.0.0 Tarantula 更新
+
+- 总览「AI 任务提醒」保持原右侧位置，边框向左扩展，开关、1～10 小时间隔和「立即分析」清晰可见。
+- 标题旁的小三角可完全折叠全部控制与建议；重开后记住状态，定时分析继续按用户的开关与间隔工作。
+- 新增兼容旧普通版与旧主题版的通用原位补丁，保留各自数据与登录、备份和失败回退；成功后自动清理更新器。
+- 移除旧版首次启动标记缺失时可能重置登录的流程；延续早期应用内的学校连接和公共 Graph 配置，保留原凭据命名空间。
+
+详见 [v2.0.0 发布说明](releases/v2.0.0.md)。本版本同时包含以下 Build 99 功能：
 
 - Teams 抓取与待办分离：仅因为消息来自 HOMEWORK 频道，不再把通知直接当作作业。
 - 开启「Teams 自动整理」后，已抓取的消息正文和已读取的附件全文先送至 DeepSeek 归纳；只有确认需要行动的内容进入「作业待办」或「活动待办」。普通通知、待分析、失败和待确认信息保留在消息页。
@@ -25,7 +34,7 @@
 
 详见 [Build 99 发布说明](releases/v1.2.0-build99.md)。保留 Build 98 的跟随 macOS 自动外观与已有课表、同步、彩蛋锁定修复。
 
-## Lagoon 主题版有什么
+## 功能
 
 - **学习助手**：支持关闭、仅本机 Ollama、仅联网 DeepSeek、联网 DeepSeek／离线 Ollama 四种模式。对话页可直接切换接入方式；联网时也能选择本机模型。修复连续追问的单击发送、模型发现及失败重试。历史对话可搜索标题和完整问答，重启后恢复并继续追问；每段聊天独立保存草稿，新对话不删除旧记录。
 - **首次设置与配置教程**：引导连接学校平台、设置主题和学习助手；内置 DeepSeek API 注册与接入、Ollama 安装和模型下载教程，提供官网入口与下载命令复制。模型从可用列表选择。
@@ -67,7 +76,9 @@ DeepSeek API 密钥通过原生组件保存在 macOS 钥匙串中。安装包不
 
 ## 版本记录
 
-提交链、GPT 托管工作树和实机验收范围见[开发历史与工作树交接](docs/development-history.md)。Build 99 增加 Teams 自动归纳与作业、活动分类；应用版本仍为 v1.2.0 Lagoon，使用独立发布标签 `v1.2.0-build99`。
+提交链、托管工作树和实机验收范围见[开发历史与工作树交接](docs/development-history.md)。v2.0.0 Tarantula 使用标签 `v2.0.0`，历史标签保持不变。
+
+- [v2.0.0 Tarantula · Build 101](releases/v2.0.0.md) — 可完全折叠的宽版提醒、普通版与主题版通用升级、资料保留与更新器自动清理。
 
 - [v1.2.0 Lagoon · 主题版 · 构建 99](releases/v1.2.0-build99.md) — Teams 先分析后进入待办、作业与活动分类、全文分段分析和人工纠错。
 - [v1.2.0 Lagoon · 主题版 · 构建 98](releases/v1.2.0-build98.md) — 跟随系统自动切换深浅外观、独立白天配色、原生工具栏及图表玻璃配色同步。
@@ -103,7 +114,7 @@ Teams 默认模式在 Teams 页面内使用当前账号会话访问内部服务�
 
 ## 主题版源码构建
 
-仓库现在包含主题版完整源码。默认 `bash build.sh` 仍构建原版 CampusDesk；构建主题版请使用：
+仓库包含两版完整源码。默认 `bash build.sh` 构建普通版 v2.0.0；构建主题版请使用：
 
 ```sh
 CAMPUSDESK_INFO_PLIST="$PWD/Info-ThemeEdition.plist" bash build.sh
@@ -190,7 +201,7 @@ CAMPUSDESK_BUILD_DIR="$(mktemp -d /private/tmp/CampusDesk-build.XXXXXX)" bash bu
 
 - 学习缓存、同步状态和提取的附件文字保存在本机应用数据目录；仓库原版使用 `~/Library/Application Support/CampusDesk/`，主题版使用独立数据目录。这些内容可能包含学生、教师或同学的个人信息，不应公开分享。
 - 浏览器模式不把浏览器访问令牌导出给原生进程；可选 Graph 模式由原生客户端管理授权，令牌保存在 macOS 钥匙串，不在项目配置文件中。
-- 本项目没有配套的开发者收集服务器。读取会访问 Microsoft 或你配置的学校平台；主题版启用联网学习助手后，发送内容也会交给 DeepSeek。本地缓存不代表所有功能完全离线。
+- 本项目没有配套的开发者收集服务器。读取会访问 Microsoft 或你配置的学校平台；启用联网学习助手后，发送内容也会交给 DeepSeek。本地缓存不代表所有功能完全离线。
 - 没有发送 Teams 消息、提交作业或修改学校成绩的功能。
 - 导出的备份也含学习数据。上传 Issue 前，删除姓名、学校、账号 ID、消息正文、文件名、链接、会话标识和凭据。
 - 本次源码发布排除了本机缓存、构建产物、私人诊断脚本及真实成绩夹具。既有 Git 提交历史保持不变。

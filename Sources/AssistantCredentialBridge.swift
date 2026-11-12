@@ -18,7 +18,12 @@ enum AssistantCredentialBridge {
     static func remove(_ query: [String: Any]) -> OSStatus { invoke("delete", query: query).status }
 
     private static func invoke(_ action: String, query: [String: Any], allowInteraction: Bool = false) -> (status: OSStatus, body: [String: Any]) {
-        guard query[kSecAttrService as String] as? String == AssistantCredentialIdentity.service,
+        #if CREDENTIAL_TEST_FIXTURE
+        let expectedService = AssistantCredentialIdentity.service
+        #else
+        let expectedService = (Bundle.main.bundleIdentifier ?? AssistantCredentialIdentity.appIdentifier) + ".assistant.deepseek"
+        #endif
+        guard query[kSecAttrService as String] as? String == expectedService,
               let account = query[kSecAttrAccount as String] as? String,
               let executable = Bundle.main.executableURL else {
             NSLog("CampusDesk credential bridge: invalid local query"); return (errSecParam, [:])

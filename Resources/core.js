@@ -502,7 +502,7 @@
     const state = { version: VERSION, settings: { timezone: 'Asia/Shanghai', refreshMinutes: 15, selfStudy: true,
       seiueURL: configuredSchools.seiue, managebacURL: configuredSchools.managebac, teamsPages: [], teamsNotifications: false,
       teamsBrowser: 'chrome', teamsBrowserAutomation: false, teamsMode: 'browser', teamsAutoDiscover: true, graphIncludeChats: true,
-      reminderMinutes: 30, reminderSubjects: [], reminderSubjectsMuted: false, teamsDueOverrides: {}, teamsAnalysisEnabled: false, taskReviewEnabled: false, taskReviewIntervalHours: 2, taskReviewEnabledAt: null, dashboardTheme: 'classic', colorTheme: 'sage', appearanceMode: 'manual', dayColorTheme: 'sage', gpaCandleColors: 'red-up', language: 'zh-CN', focusSubjects: [], focusTeamsChannels: [], customLessons: [],
+      reminderMinutes: 30, reminderSubjects: [], reminderSubjectsMuted: false, teamsDueOverrides: {}, teamsAnalysisEnabled: false, taskReviewEnabled: false, taskReviewPanelCollapsed: false, taskReviewIntervalHours: 2, taskReviewEnabledAt: null, dashboardTheme: 'classic', colorTheme: 'sage', appearanceMode: 'manual', dayColorTheme: 'sage', gpaCandleColors: 'red-up', language: 'zh-CN', focusSubjects: [], focusTeamsChannels: [], customLessons: [],
       scheduleHolidays: [], scheduleWeekAnchor: '', scheduleOverrides: [], focusMode: false, graphicsMode: 'auto', planOrder: [], taskMinutes: {}, taskPriority: {}, gradeGoals: {}, gradePlans: {}, gpaTermDates: {}, ecIdentityNames: [] }, snapshots: { seiue: {}, managebac: {}, teams: {} },
       manualTasks: [], personalEvents: [], taskChecks: {}, teamsAnalysis: {}, teamsAnalysisOverrides: {}, taskReview: normalizeTaskReview(), feedbackRead: {}, gradeHistory: [], gradeUpdates: [], gradeUpdateRead: {}, gradeUpdateBaselines: [], gradeUpdateCaptures: [], changeLog: [], schoolCalendar: { fileName: '', importedAt: '', events: [] } };
     if (themeEdition) {
@@ -989,6 +989,7 @@
     s.settings.teamsNotifications = bool(settings.teamsNotifications, false);
     s.settings.teamsAnalysisEnabled = bool(settings.teamsAnalysisEnabled, false);
     s.settings.taskReviewEnabled = bool(settings.taskReviewEnabled, false);
+    s.settings.taskReviewPanelCollapsed = bool(settings.taskReviewPanelCollapsed, false);
     s.settings.taskReviewIntervalHours = settings.taskReviewIntervalHours === undefined ? 2 : finite(settings.taskReviewIntervalHours, 1, 10, false);
     if (!Number.isInteger(s.settings.taskReviewIntervalHours)) fail('待办复盘间隔应为整数小时');
     s.settings.taskReviewEnabledAt = zonedISO(settings.taskReviewEnabledAt, true);
