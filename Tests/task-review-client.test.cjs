@@ -1,12 +1,14 @@
 'use strict';
 const test = require('node:test'), assert = require('node:assert/strict');
 const fs = require('node:fs'), vm = require('node:vm'), path = require('node:path');
+const Core = require('../Resources/core.js');
 function harness(count = 4, hours = 2) {
   let instant = Date.parse('2026-11-12T10:00:00Z'), sequence = 0, allowed = true;
   let state = { settings: { taskReviewEnabled: true, taskReviewIntervalHours: hours, taskReviewEnabledAt: new Date(instant).toISOString(), aiModel: 'deepseek-flash' }, taskReview: {},
     tasks: Array.from({ length: count }, (_, i) => ({ id: 'task:' + i, title: 'Task ' + i, category: i % 2 ? 'activity' : 'homework', dueAt: '2026-11-13T12:00:00Z', completed: false })) };
   const timers = new Map(), sent = [];
-  const ctx = { CampusCore: { teamsAnalysisModel: state => state.settings.aiModel, getTasks: state => state.tasks }, setTimeout, clearTimeout };
+  const ctx = { CampusCore: { teamsAnalysisModel: state => state.settings.aiModel, getTasks: state => state.tasks,
+    taskReviewInputFingerprint: Core.taskReviewInputFingerprint }, setTimeout, clearTimeout };
   vm.createContext(ctx); vm.runInContext(fs.readFileSync(path.join(__dirname, '../Resources/task-review-client.js'), 'utf8'), ctx);
   const client = ctx.CampusTaskReviewClient.create({ getState: () => state, onState: next => { state = next; },
     send: (action, payload) => { sent.push({ action, ...payload }); return true; }, now: () => instant, canRun: () => allowed,
@@ -94,4 +96,83 @@ test('Manual review exposes pending priority while busy and clears it on dispatc
   h.allow(false); h.client.runNow(); h.tick(); h.client.reset(); assert.equal(h.client.getStatus().pending, false);
   h.client.runNow(); h.tick(); h.setState({ ...h.state, settings: { ...h.state.settings, taskReviewEnabled: false } });
   h.client.reconcile(); h.tick(); assert.equal(h.client.getStatus().pending, false);
+});
+
+test('A retry stops before sending tasks that were completed during its waiting period', () => {
+  const h = harness(); h.client.runNow(); h.tick(); h.fail('network');
+  h.setState({ ...h.state, tasks: h.state.tasks.map((task, i) => ({ ...task, completed: i === 0 })) });
+  h.tick(30000);
+  assert.equal(h.requests().length, 1, 'completed work must not enter a later API retry');
+  assert.equal(h.client.getStatus().errorCode, 'stale');
+  assert.equal(h.sent.filter(x => x.action === 'taskReviewNotify').length, 0);
+});
+
+test('A paused multi-batch review does not dispatch outdated remaining work', () => {
+  const h = harness(150); h.client.runNow(); h.tick(); h.allow(false); h.success();
+  h.setState({ ...h.state, tasks: h.state.tasks.map((task, i) => ({ ...task, title: i === 120 ? 'Revised instructions' : task.title })) });
+  h.allow(true); h.client.reconcile(); h.tick();
+  assert.equal(h.requests().length, 1);
+  assert.equal(h.client.getStatus().errorCode, 'stale');
+});
+
+test('Provider cooldown longer than five minutes is respected without consuming retries early', () => {
+  const h = harness(); h.client.runNow(); h.tick();
+  h.client.receive({ type: 'taskReviewResult', requestId: h.requests()[0].requestId, success: false, errorCode: 'rateLimited', retryAfterSeconds: 1800 });
+  h.periodic(300000); assert.equal(h.requests().length, 1);
+  h.periodic(1499999); assert.equal(h.requests().length, 1);
+  h.periodic(1); assert.equal(h.requests().length, 2);
+  h.success(); assert.equal(h.sent.filter(x => x.action === 'taskReviewNotify').length, 1);
+});
+
+test('A review resumed after a long offline wait starts its next interval after completion', () => {
+  const h = harness(4, 1); h.client.runNow(); h.tick(); h.fail('network'); h.allow(false);
+  h.tick(2 * 3600000); h.allow(true); h.client.reconcile(); h.tick(); h.success();
+  h.periodic(0); assert.equal(h.requests().length, 2, 'completion must not immediately trigger a second review');
+  h.periodic(3600000 - 1); assert.equal(h.requests().length, 2);
+  h.periodic(1); assert.equal(h.requests().length, 3);
+});
+
+test('Saved reviews carry a fingerprint of their complete input and survive task reordering', () => {
+  const h = harness(); h.client.runNow(); h.tick();
+  h.setState({ ...h.state, tasks: h.state.tasks.slice().reverse() }); h.success();
+  assert.equal(h.sent.filter(x => x.action === 'taskReviewNotify').length, 1);
+  assert.equal(h.state.taskReview.inputFingerprint, Core.taskReviewInputFingerprint(h.state.tasks, h.state.settings.aiModel));
+  assert.match(h.state.taskReview.inputFingerprint, /^[a-f0-9]{64}$/);
+  assert.equal(h.state.taskReview.inputFingerprint.includes('Task'), false, 'report adds only an opaque digest, not task contents');
+});
+
+test('Saved priorities become stale after task edits, completion or model changes without deleting their history', () => {
+  const original = Core.emptyState();
+  original.manualTasks = [{ id: 'local-essay', title: 'Write essay', dueAt: '2026-11-14T12:00:00Z', course: 'English' }];
+  const tasks = Core.getTasks(original);
+  original.taskReview = { lastAttemptAt: '2026-11-12T10:00:00Z', lastCompletedAt: '2026-11-12T10:01:00Z',
+    summary: 'Do the upcoming essay.', recommendations: [{ id: tasks[0].id, reason: 'The deadline is approaching.' }], error: '',
+    inputFingerprint: Core.taskReviewInputFingerprint(tasks, Core.teamsAnalysisModel(original)) };
+  const baseline = Core.validateState(original), savedReport = JSON.stringify(baseline.taskReview);
+  assert.equal(Core.taskReviewIsCurrent(baseline), true);
+  for (const change of [
+    state => { state.manualTasks[0].dueAt = '2026-12-31T12:00:00Z'; },
+    state => { state.manualTasks[0].title = 'Different assignment'; },
+    state => { state.taskChecks[tasks[0].id] = true; },
+    state => { state.settings.aiModel = 'deepseek-reasoner'; }
+  ]) {
+    const state = structuredClone(baseline); change(state);
+    assert.equal(Core.taskReviewIsCurrent(state), false);
+    assert.equal(JSON.stringify(state.taskReview), savedReport, 'stale history is retained for backup, not erased');
+  }
+  baseline.settings.taskReviewPanelCollapsed = true;
+  assert.equal(Core.taskReviewIsCurrent(baseline), true, 'folding does not alter reviewed task inputs');
+});
+
+test('Historical reports without fingerprints remain readable but are not treated as current advice', () => {
+  const state = Core.emptyState();
+  state.taskReview = { lastAttemptAt: '2026-11-12T10:00:00Z', lastCompletedAt: '2026-11-12T10:01:00Z',
+    summary: 'Legacy review', recommendations: [{ id: 'legacy-task', reason: 'Legacy reason' }], error: '' };
+  const restored = Core.validateState(state);
+  assert.equal(restored.taskReview.summary, 'Legacy review');
+  assert.equal(restored.taskReview.recommendations[0].reason, 'Legacy reason');
+  assert.equal(Date.parse(restored.taskReview.lastCompletedAt), Date.parse(state.taskReview.lastCompletedAt));
+  assert.equal(restored.taskReview.inputFingerprint, '');
+  assert.equal(Core.taskReviewIsCurrent(restored), false);
+  assert.throws(() => Core.validateState({ ...state, taskReview: { ...state.taskReview, inputFingerprint: 'not-a-valid-digest' } }));
 });

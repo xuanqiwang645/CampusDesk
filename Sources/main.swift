@@ -373,7 +373,7 @@ final class SyncWorker: NSObject, WKNavigationDelegate {
         for link in sorted {
             guard let raw = link["url"] as? String, let url = schoolURL(raw, source: source) else { continue }
             let path = url.path
-            let readOnly = ["/student/home", "/student/grades", "/student/reports", "/student/academics"].contains(path) || path.range(of: "^/student/classes/[0-9]+(?:/core_tasks(?:/[0-9]+)?)?/?$", options: .regularExpression) != nil
+            let readOnly = CampusSchoolCrawlPolicy.isReadOnlyManageBacPath(path)
             guard readOnly, !visited.contains(raw), !queue.contains(where: { $0.absoluteString == raw }) else { continue }
             if link["kind"] as? String == "feedback" { queue.append(url) }
             else { queue.insert(url, at: 0) }
@@ -1249,7 +1249,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         notifications.notifyTaskReview(requestID: requestID) { [weak self] in
             guard let self, var receipt = self.taskReviewReceipt, !self.teamsAnalysisSuspended,
                   self.stateBridge.acceptsMutation(receipt.ticket.generation), self.taskReviewEnabled,
-                  let unfinished = try? nativeStateValidator.get().unfinishedTasks(self.state, among: taskIDs, schools: schoolEndpoints.frontend) else { return nil }
+                  let unfinished = try? nativeStateValidator.get().unfinishedTasks(self.state, among: taskIDs, schools: schoolEndpoints.frontend, requireCurrentReview: true) else { return nil }
             let content = receipt.consume(requestID: requestID, taskIDs: taskIDs, generation: self.stateBridge.generation,
                 account: self.teamsAnalysisAccountScope, model: TeamsAnalysisBatch.effectiveModel(settings: self.teamsAnalysisSettings),
                 enabled: self.taskReviewEnabled, unfinished: unfinished)

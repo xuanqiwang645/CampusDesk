@@ -19,12 +19,18 @@
         dueAt: task.dueAt || '', course: String(task.course || '').slice(0, 300),
         summary: String(task.analysisSummary || task.summary || task.requirements || '').slice(0, 800) }));
     }
+    function fingerprint(items = candidates(), model = Core.teamsAnalysisModel(getState())) {
+      return Core.taskReviewInputFingerprint(items, model);
+    }
     function nextDue(state) {
       if (state.settings?.taskReviewEnabled !== true) return null;
       const attempted = Date.parse(state.taskReview?.lastAttemptAt || '') || 0;
+      const completed = Date.parse(state.taskReview?.lastCompletedAt || '') || 0;
       const enabled = Date.parse(state.settings.taskReviewEnabledAt || '') || 0;
       const hours = Math.max(1, Math.min(10, Number(state.settings.taskReviewIntervalHours) || 2));
-      return Math.max(attempted, enabled, !attempted && !enabled ? now() : 0) + hours * 3600000;
+      // A retry can wait through a long outage or provider cooldown. Completing
+      // that review starts a fresh interval instead of immediately firing again.
+      return Math.max(attempted, completed, enabled, !attempted && !completed && !enabled ? now() : 0) + hours * 3600000;
     }
     function publish(errorCode = status.errorCode) {
       const state = getState(), due = nextDue(state);
@@ -65,6 +71,9 @@
     }
     function dispatch() {
       if (!active || active.requestId) return;
+      // Recheck after a retry or between batches, before sending the old
+      // snapshot again. Finished or edited tasks must not be analyzed as current.
+      if (fingerprint() !== active.signature) { finishError('stale'); return; }
       if (!canRun()) { schedule(30000); return; }
       if (deferUntil > now()) { schedule(Math.min(30000, deferUntil - now())); return; }
       const run = active;
@@ -87,8 +96,8 @@
       forced = false;
       const items = candidates();
       saveReport({ lastAttemptAt: iso(), error: '' });
-      if (!items.length) { saveReport({ lastCompletedAt: iso(), summary: '当前没有未完成的待办。', recommendations: [], error: '' }); publish(''); return; }
-      active = { model: Core.teamsAnalysisModel(state), signature: JSON.stringify(items), original: new Map(items.map(item => [item.id, item])),
+      if (!items.length) { saveReport({ lastCompletedAt: iso(), summary: '当前没有未完成的待办。', recommendations: [], error: '', inputFingerprint: fingerprint(items) }); publish(''); return; }
+      active = { model: Core.teamsAnalysisModel(state), signature: fingerprint(items), original: new Map(items.map(item => [item.id, item])),
         batches: batches(items), index: 0, selected: [], requestId: '', failures: 0, watchdog: null, round: 0 };
       dispatch();
     }
@@ -102,7 +111,11 @@
       if (event.success !== true) {
         const code = String(event.errorCode || 'badResponse');
         if (['busy', 'rateLimited', 'serviceUnavailable', 'network'].includes(code) && ++run.failures <= 2) {
-          run.requestId = ''; deferUntil = now() + Math.min(300000, Math.max(30000, (Number(event.retryAfterSeconds) || 0) * 1000)); schedule(30000); publish(code);
+          const seconds = Number(event.retryAfterSeconds);
+          // Match the native transport's 24-hour maximum. Shortening Retry-After
+          // consumes retries against the native cooldown before it can expire.
+          const delay = Math.max(30000, Number.isFinite(seconds) ? Math.min(86400, Math.max(0, seconds)) * 1000 : 0);
+          run.requestId = ''; deferUntil = now() + delay; schedule(30000); publish(code);
         } else finishError(code);
         return true;
       }
@@ -114,7 +127,7 @@
           result.recommendations.some(item => !allowed.has(item.id) || typeof item.reason !== 'string' || !item.reason.trim() || item.reason.length > 300)) {
         finishError('badResponse'); return true;
       }
-      if (JSON.stringify(candidates()) !== run.signature) { finishError('stale'); return true; }
+      if (fingerprint() !== run.signature) { finishError('stale'); return true; }
       run.selected.push(...result.recommendations); run.failures = 0;
       if (++run.index < run.batches.length) { run.requestId = ''; dispatch(); return true; }
       if (run.batches.length > 1 && run.selected.length) {
@@ -125,7 +138,7 @@
       const recommendations = run.selected.slice(0, 3);
       const requestId = run.requestId; active = null; deferUntil = 0;
       const summary = run.batches.length === 1 ? result.summary : '已分析当前待办，建议优先完成以下任务。';
-      saveReport({ lastCompletedAt: iso(), summary, recommendations, error: '' });
+      saveReport({ lastCompletedAt: iso(), summary, recommendations, error: '', inputFingerprint: run.signature });
       // Native only accepts IDs from this completed request and checks its
       // epoch. Titles for the notification always come from submitted tasks.
       if (recommendations.length) send('taskReviewNotify', { requestId, summary, taskIDs: recommendations.map(item => item.id) });

@@ -17,7 +17,7 @@ function stateFor(dashboardTheme = 'board', colorTheme = 'sage', language = 'zh-
   state.manualTasks = [task('personal', '整理明天的实验笔记与需要核对的问题', '个人安排')];
   const teamsURL = 'https://teams.microsoft.com/v2/';
   state.snapshots.teams[teamsURL] = { source: 'teams', url: teamsURL, title: 'Synthetic class', capturedAt: '2026-10-08T00:00:00Z', coverage: 'visible', warnings: [],
-    tasks: [task('science', 'Review the experimental observations and prepare a short explanation', 'Science'), task('english', 'Read and annotate the next chapter', 'English')], posts: [] };
+    tasks: [task('science', 'Review the experimental observations and prepare a short explanation', 'Science'), task('english', 'Read and annotate the next chapter', 'English')].map(task => ({ ...task, officialAssignment: true })), posts: [] };
   const mbURL = schools.managebac + 'tasks';
   state.snapshots.managebac[mbURL] = { source: 'managebac', url: mbURL, title: 'Synthetic assignments', capturedAt: '2026-10-08T00:00:00Z', warnings: [], courses: [],
     tasks: [task('math', 'Complete the practice questions', 'Mathematics'), task('art', 'Organize reference materials for class', 'Art')], feedback: [], officialGPA: null };

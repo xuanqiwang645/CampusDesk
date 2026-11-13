@@ -1436,27 +1436,44 @@
     const snapshots = entries(state, 'managebac');
     let cohort;
     for (const s of snapshots) {
-      cohort = (s.courses || []).find(c => c.isCurrentTerm === true && c.isCourseGrade === true);
+      // A newly selected current term may not have any published totals yet.
+      // Its explicit term label still supersedes the previous term's grades.
+      cohort = (s.courses || []).find(c => c.isCurrentTerm === true && termKey(c.term));
       if (cohort) break;
     }
     const chosenTerm = cohort ? termKey(cohort.term) : null;
-    const seen = new Map(), result = [];
+    const observations = [];
     for (const s of snapshots) for (const course of s.courses || []) {
       if (course.isCurrentTerm === false) continue;
-      if (chosenTerm !== null && termKey(course.term) !== chosenTerm) continue;
+      const term = termKey(course.term);
+      if (chosenTerm !== null && term && term !== chosenTerm) continue;
+      const hasGradeData = Number.isFinite(course.percentage) || (course.gradeComponents || []).length > 0;
+      observations.push({ course, snapshot: s, rank: term ? course.isCurrentTerm === true ? 0 : 1 : hasGradeData ? 2 : 3 });
+    }
+    // Directory links establish that a course exists, not that it has a
+    // current grade. Keep them visible, but let observed course pages win even
+    // when the directory was captured more recently.
+    observations.sort((a, b) => a.rank - b.rank);
+    const seen = new Map(), result = [];
+    for (const { course, snapshot: s, rank } of observations) {
       const key = course.id || course.name.toLowerCase();
-      const existingIndex = seen.get(key), existing = existingIndex === undefined ? null : result[existingIndex];
-      const row = Object.assign({}, existing || {}, course, { capturedAt: s.capturedAt, sourceURL: s.url });
-      if (existing && Number.isFinite(existing.percentage)) {
-        row.percentage = existing.percentage;
-        row.isCourseGrade = existing.isCourseGrade;
+      const previous = seen.get(key), existing = previous ? result[previous.index] : null;
+      if (existing && rank !== previous.rank) continue;
+      const row = existing ? Object.assign({}, existing) : Object.assign({}, course, { capturedAt: s.capturedAt, sourceURL: s.url });
+      // Within the same verified scope, older pages may fill missing totals or
+      // components. They must not overwrite newer labels or eligibility flags.
+      if (existing && !Number.isFinite(existing.percentage) && Number.isFinite(course.percentage)) {
+        row.percentage = course.percentage;
+        row.isCourseGrade = course.isCourseGrade;
       }
-      if (existing && (existing.gradeComponents || []).length) row.gradeComponents = existing.gradeComponents;
-      if (existing) { row.capturedAt = existing.capturedAt; row.sourceURL = existing.sourceURL; }
+      if (existing && !(existing.gradeComponents || []).length && (course.gradeComponents || []).length) row.gradeComponents = course.gradeComponents;
+      if (existing && !row.url) row.url = course.url;
+      if (previous === undefined) { seen.set(key, { index: result.length, rank }); result.push(row); }
+      else result[previous.index] = row;
+    }
+    for (const row of result) {
       row.gpaEligible = row.isCurrentTerm === true && row.gpaEligible !== false &&
         ((row.isCourseGrade === true && row.percentage !== null && row.percentage !== undefined) || (row.gradeComponents || []).length > 0);
-      if (existingIndex === undefined) { seen.set(key, result.length); result.push(row); }
-      else result[existingIndex] = row;
     }
     return result.sort((a, b) => a.name.localeCompare(b.name));
   }
@@ -1668,11 +1685,29 @@
     if (value.id !== undefined) task.id = teamsID(value.id);
     return task;
   }
+  function taskReviewInputFingerprint(tasks, model) {
+    // Hash only the fields supplied to the reviewer, keeping source text out of
+    // the saved report. Reordering the same task list does not invalidate it.
+    const due = value => value && Number.isFinite(Date.parse(value)) ? new Date(value).toISOString() : value || '';
+    const inputs = tasks.filter(task => !task.completed).map(task => [task.id,
+      String(task.title || '').slice(0, 500), task.category === 'activity' ? 'activity' : 'homework',
+      due(task.dueAt), String(task.course || '').slice(0, 300),
+      String(task.analysisSummary || task.summary || task.requirements || '').slice(0, 800)])
+      .sort((a, b) => a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0);
+    return teamsAnalysisDigest(JSON.stringify(['task-review-v1', model, inputs]));
+  }
+  function taskReviewIsCurrent(state) {
+    const fingerprint = state.taskReview?.inputFingerprint;
+    return typeof fingerprint === 'string' && /^[a-f0-9]{64}$/.test(fingerprint) &&
+      fingerprint === taskReviewInputFingerprint(getTasks(state), teamsAnalysisModel(state));
+  }
   function normalizeTaskReview(value) {
-    if (value === undefined) return { lastAttemptAt: null, lastCompletedAt: null, summary: '', recommendations: [], error: '' };
+    if (value === undefined) return { lastAttemptAt: null, lastCompletedAt: null, summary: '', recommendations: [], error: '', inputFingerprint: '' };
     record(value, '待办复盘');
+    const inputFingerprint = value.inputFingerprint === undefined ? '' : str(value.inputFingerprint, 64);
+    if (inputFingerprint && !/^[a-f0-9]{64}$/.test(inputFingerprint)) fail('待办复盘指纹无效');
     return { lastAttemptAt: zonedISO(value.lastAttemptAt, true), lastCompletedAt: zonedISO(value.lastCompletedAt, true),
-      summary: str(value.summary, 1200), error: str(value.error, 500), recommendations: array(value.recommendations, '复盘建议', 3).map(row => {
+      inputFingerprint, summary: str(value.summary, 1200), error: str(value.error, 500), recommendations: array(value.recommendations, '复盘建议', 3).map(row => {
         record(row, '复盘建议'); return { id: id(row.id), reason: str(row.reason, 300) };
       }) };
   }
@@ -1692,8 +1727,17 @@
         row.status = raw.status; row.classification = raw.classification;
         row.model = str(raw.model, 100); if (teamsAnalysisModel({ settings: { aiModel: row.model } }) !== row.model) fail('Teams 分析模型无效');
         row.summary = str(raw.summary, 1200); row.error = str(raw.error, 500);
+        if (raw.primaryTaskIdentity !== undefined) {
+          record(raw.primaryTaskIdentity, 'Teams 原任务标识');
+          row.primaryTaskIdentity = { title: str(raw.primaryTaskIdentity.title, 180), evidence: str(raw.primaryTaskIdentity.evidence, 600) };
+          if (!row.primaryTaskIdentity.title || !analysisWhitespace(row.primaryTaskIdentity.evidence)) fail('Teams 原任务标识无效');
+        }
         row.analyzedAt = raw.analyzedAt ? dateISO(raw.analyzedAt, false) : '';
         row.tasks = array(raw.tasks, 'Teams 分析待办', 8).map(analysisTask);
+        if (raw.taskIdentities !== undefined) {
+          row.taskIdentities = array(raw.taskIdentities, 'Teams 历史任务标识', 8).map(analysisTask);
+          if (row.taskIdentities.some(task => !task.id) || new Set(row.taskIdentities.map(task => task.id)).size !== row.taskIdentities.length) fail('Teams 历史任务标识无效');
+        }
         if ((row.status === 'failed' || row.classification !== 'actionable') && row.tasks.length) fail('Teams 非待办分析包含任务');
         if (row.classification === 'actionable' && !row.tasks.length) fail('Teams 待办分析为空');
         if (new Set(row.tasks.map(task => task.id)).size !== row.tasks.length || row.tasks.some(task => !task.id)) fail('Teams 分析待办标识无效');
@@ -1721,12 +1765,13 @@
     for (const source of sources.values()) {
       const rows = Object.values(source.rows).sort((a, b) => a.field.localeCompare(b.field) || a.row.id.localeCompare(b.row.id));
       const task = source.rows.tasks && source.rows.tasks.row, post = source.rows.posts && source.rows.posts.row;
-      const main = task || post || rows[0].row, sections = [], files = new Map(), evidence = [];
+      const main = task || post || rows[0].row, sections = [], files = new Map(), evidence = [], deadlines = [];
       const title = main.title || 'Teams 信息', channel = main.course || main.channel || '';
       const publishedAt = post && knownPublishedDate(post.date) || null;
       let sourceIncomplete = false;
       for (const { row, field } of rows) {
         for (const key of ['text', 'requirements', 'feedback']) if (row[key]) evidence.push(row[key]);
+        for (const key of ['dueLabel', 'dueAt']) if (row[key]) deadlines.push(row[key]);
         if (row.title && !(row.attachments || []).some(file => file.title === row.title)) evidence.push(row.title);
         for (const [key, label] of [['title','标题'],['text','正文'],['requirements','要求'],['feedback','反馈'],['dueLabel','原始截止字段'],['dueAt','原始截止时间'],['status','原始状态'],['submissionStatus','提交状态'],['dateLabel','发布时间原文'],['author','作者'],['recipient','收件范围']]) {
           if (row[key] && !sections.includes(label + '：' + row[key])) sections.push(label + '：' + row[key]);
@@ -1756,7 +1801,8 @@
         fingerprint: teamsAnalysisDigest(JSON.stringify([1, model, canonical])), url: main.url || source.url, sourceURL: source.url }));
       source.input = input; source.task = task; source.post = post;
       source.evidenceText = analysisWhitespace(evidence.join('\n\n'));
-      source.deadlineEvidenceText = analysisWhitespace(input.text);
+      // Publishing dates, authors and generated labels are context, not deadline evidence.
+      source.deadlineEvidenceText = analysisWhitespace(evidence.concat(deadlines).join('\n\n'));
       inputs.push(input); byID.set(source.id, source);
     }
     cache = { model, inputs: Object.freeze(inputs), byID };
@@ -1764,12 +1810,26 @@
     return cache;
   }
   function getTeamsAnalysisInputs(state) { return teamsAnalysisIndex(state).inputs; }
+  function uniqueTeamsAnalysisTasks(tasks, checks) {
+    const rows = [], positions = new Map();
+    for (const task of tasks) {
+      const key = JSON.stringify([analysisWhitespace(task.title), analysisWhitespace(task.evidence)]);
+      if (!positions.has(key)) { positions.set(key, rows.length); rows.push(task); continue; }
+      const index = positions.get(key), old = rows[index];
+      if (old.category !== task.category || analysisWhitespace(old.deadlineText) !== analysisWhitespace(task.deadlineText)) return null;
+      // Older releases could save the same action twice. Keep an existing
+      // completed copy visible; never erase either saved completion marker.
+      if (checks[task.id] === true && checks[old.id] !== true) rows[index] = task;
+    }
+    return rows;
+  }
   function validTeamsAnalysisRecord(state, source) {
     const row = (state.teamsAnalysis || {})[source.id];
     if (!row || row.accountId !== source.accountId || row.fingerprint !== source.input.fingerprint || row.model !== teamsAnalysisModel(state)) return undefined;
     if (row.classification === 'actionable' && row.tasks.some(task => !analysisWhitespace(task.evidence) || !source.evidenceText.includes(analysisWhitespace(task.evidence)) ||
         (task.deadlineText && !source.deadlineEvidenceText.includes(analysisWhitespace(task.deadlineText))))) return Object.assign({}, row, { classification: 'uncertain', tasks: [] });
-    return row;
+    const tasks = uniqueTeamsAnalysisTasks(row.tasks, state.taskChecks);
+    return tasks ? (tasks.length === row.tasks.length ? row : Object.assign({}, row, { tasks })) : Object.assign({}, row, { classification: 'uncertain', tasks: [] });
   }
   function validTeamsAnalysisOverride(state, source) {
     if (!source) return undefined;
@@ -1813,23 +1873,53 @@
       const row = { accountId: source.accountId, fingerprint: source.input.fingerprint, model: index.model,
         status: result.status || 'ready', classification: result.classification || 'uncertain', summary: str(result.summary, 1200),
         error: str(result.error, 500), analyzedAt: result.analyzedAt ? dateISO(result.analyzedAt, false) : new Date().toISOString(), tasks: [] };
+      const previous = analysis[source.id]?.accountId === source.accountId ? analysis[source.id] : undefined;
+      const identityTasks = previous && (previous.tasks.length ? previous.tasks : previous.taskIdentities) || [];
+      const priorTasks = uniqueTeamsAnalysisTasks(identityTasks, state.taskChecks) || [];
+      const priorPrimary = identityTasks.find(task => task.id === source.id);
+      const primaryIdentity = previous && previous.primaryTaskIdentity || priorPrimary && { title: priorPrimary.title, evidence: priorPrimary.evidence };
+      if (primaryIdentity) row.primaryTaskIdentity = primaryIdentity;
       if (!['ready', 'failed'].includes(row.status) || !['actionable', 'notice', 'uncertain'].includes(row.classification)) fail('Teams 分析状态无效');
       if (row.status === 'failed') row.classification = 'uncertain';
       else if (row.classification === 'actionable') {
-        const candidates = array(result.tasks, 'Teams 分析待办', 8), used = new Set();
+        const candidates = array(result.tasks, 'Teams 分析待办', 8), unique = new Map();
         let valid = candidates.length > 0;
         for (const candidate of candidates) {
           if (!candidate || !['homework', 'activity'].includes(candidate.category) || !analysisWhitespace(candidate.evidence)) { valid = false; break; }
           const task = analysisTask(candidate), quote = analysisWhitespace(task.evidence), deadline = analysisWhitespace(task.deadlineText);
           if (!source.evidenceText.includes(quote) || (deadline && !source.deadlineEvidenceText.includes(deadline))) { valid = false; break; }
-          const prior = (analysis[source.id] && analysis[source.id].tasks || []).find(old => old.category === task.category &&
-            (analysisWhitespace(old.evidence) === quote || analysisWhitespace(old.title) === analysisWhitespace(task.title)) && !used.has(old.id));
-          task.id = prior ? prior.id : !used.has(source.id) ? source.id : 'teams:action:' + teamsAnalysisDigest(JSON.stringify([source.accountId, source.id, task.category, task.title, quote])).slice(0, 40);
-          if (used.has(task.id)) continue;
-          used.add(task.id); row.tasks.push(task);
+          const key = JSON.stringify([analysisWhitespace(task.title), quote]);
+          const duplicate = unique.get(key);
+          if (duplicate && (duplicate.category !== task.category || analysisWhitespace(duplicate.deadlineText) !== deadline)) { valid = false; break; }
+          if (!duplicate) unique.set(key, task);
         }
-        if (!valid) { row.classification = 'uncertain'; row.tasks = []; }
+        if (valid) {
+          const tasks = [...unique.values()], used = new Set();
+          const quote = task => analysisWhitespace(task.evidence), title = task => analysisWhitespace(task.title);
+          // Match old actions before assigning any new IDs. New first items must
+          // never inherit another task's completion or user-corrected deadline.
+          const matched = tasks.map(task => {
+            const exact = priorTasks.find(old => !used.has(old.id) && quote(old) === quote(task) && title(old) === title(task));
+            const sameQuote = tasks.filter(item => quote(item) === quote(task)).length === 1 && priorTasks.filter(old => quote(old) === quote(task)).length === 1
+              ? priorTasks.find(old => !used.has(old.id) && quote(old) === quote(task)) : null;
+            const old = exact || sameQuote;
+            if (old) { used.add(old.id); return old.id; }
+            return null;
+          });
+          for (let i = 0; i < tasks.length; i++) {
+            const task = tasks[i];
+            const ownsPrimary = primaryIdentity && quote(primaryIdentity) === quote(task) &&
+              (title(primaryIdentity) === title(task) || tasks.filter(item => quote(item) === quote(task)).length === 1);
+            task.id = matched[i] || (!used.has(source.id) && (ownsPrimary || (!previous && i === 0)) ? source.id :
+              'teams:action:' + teamsAnalysisDigest(JSON.stringify([source.accountId, source.id, title(task), quote(task)])).slice(0, 40));
+            used.add(task.id); row.tasks.push(task);
+            if (task.id === source.id) row.primaryTaskIdentity = { title: task.title, evidence: task.evidence };
+          }
+        } else { row.classification = 'uncertain'; row.tasks = []; }
       } else if (array(result.tasks, 'Teams 分析待办', 8).length) fail('Teams 非待办分析包含任务');
+      // A failed/uncertain pass hides tasks but retains identity evidence, so
+      // retrying cannot detach completion marks from secondary actions either.
+      if (!row.tasks.length && priorTasks.length) row.taskIdentities = priorTasks;
       analysis[source.id] = row; changed = true;
     }
     if (!changed) return state;
@@ -1887,7 +1977,9 @@
       if (analysisActive && validTeamsAnalysisOverride(state, teamsAnalysisIndex(state).byID.get(teamsID(task.id)))) return false;
       if (task.officialAssignment === true) return true;
       if (task.officialAssignment === false) return false;
-      return /^teams:graph:assignment:/.test(task.id) || !(s.posts || []).some(post => post.id === task.id && !post.officialAssignment);
+      // An absent post is not proof that a legacy keyword-derived row was a
+      // formal assignment. Preserve it for analysis instead of reviving it.
+      return /^teams:graph:assignment:/.test(task.id);
     }).map(task => Object.assign({}, task, { sourceURL: s.url, capturedAt: task.capturedAt || s.capturedAt })))
       .map((task, index) => ({ task, index, capturedAt: Date.parse(task.capturedAt) || 0 }))
       .sort((a, b) => b.capturedAt - a.capturedAt || a.index - b.index).map(row => row.task);
@@ -2411,6 +2503,6 @@
       changes: state.changeLog.slice().sort((a, b) => Date.parse(b.capturedAt) - Date.parse(a.capturedAt)) };
   }
   return Object.freeze({ VERSION, GPA_BANDS, GPA_BANDED_METHOD: METHOD, configureSchools, schoolHomes, normalizeSchoolHome, emptyState, defaultState: emptyState, effectiveColorTheme, validateState, normalizeState: validateState, validateAssistantConversations, assistantHistoryHasCapacity, exportBackup, importBackup,
-    mergeSnapshot, resetTeamsData, clearTeamsData: resetTeamsData, today, clock, getSchedule, getCourses, getTasks, teamsAnalysisModel, getTeamsAnalysisInputs, getTeamsAnalysisRecord, getTeamsAnalysisSummary, applyTeamsAnalysisResults, setTeamsAnalysisOverride, resolveTaskDeadline, parseManualDeadline, normalizePersonalEvent: personalEventRow, getFeedback, getGradeUpdates, markGradeUpdatesRead, getOfficialGPA, estimateGPA, estimateLinearGPA, semesterGPAForecast,
+    mergeSnapshot, resetTeamsData, clearTeamsData: resetTeamsData, today, clock, getSchedule, getCourses, getTasks, taskReviewInputFingerprint, taskReviewIsCurrent, teamsAnalysisModel, getTeamsAnalysisInputs, getTeamsAnalysisRecord, getTeamsAnalysisSummary, applyTeamsAnalysisResults, setTeamsAnalysisOverride, resolveTaskDeadline, parseManualDeadline, normalizePersonalEvent: personalEventRow, getFeedback, getGradeUpdates, markGradeUpdatesRead, getOfficialGPA, estimateGPA, estimateLinearGPA, semesterGPAForecast,
     getNextClass, getClassClock, createClassClockReader, scheduleInterval, getSchedulePeriods, getTeamsPosts, getTeamsEC, getTeamsGrades, getSourceStatus, buildView, getSchoolCalendarEvents, schoolCalendarScheduleRule, schoolCalendarScheduleConflict, parseSchoolCalendarICS, parseSchoolCalendarPDFText, safeURL, safeAttachmentURL, gradePoints: points, linearGradePoints: linearPoints });
 });

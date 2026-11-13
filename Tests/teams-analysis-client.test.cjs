@@ -144,3 +144,11 @@ test('Teams classifier cancels on account/model changes and resets safely', () =
   h.client.reconcile(); h.tick(); assert.equal(h.requests().length, 2); assert.equal(h.requests()[1].model, 'deepseek-pro');
   h.client.reset(); h.success(); h.tick(); assert.equal(h.writes.length, 0);
 });
+
+test('Teams classifier honors a long provider Retry-After instead of retrying after five minutes', () => {
+  const h = harness(); h.client.reconcile(); h.tick();
+  h.fail('rateLimited', { retryAfterSeconds: 3600 });
+  h.tick(300000); assert.equal(h.requests().length, 1);
+  h.client.reconcile(); h.tick(3299999); assert.equal(h.requests().length, 1);
+  h.tick(1); assert.equal(h.requests().length, 2);
+});

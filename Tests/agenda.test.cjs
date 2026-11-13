@@ -81,7 +81,7 @@ test('calendar combines source tasks without inventing unresolved deadlines, and
   state.manualTasks = [task('personal', '2026-10-09T16:00:00Z'), task('no-date', null)];
   state.taskChecks.personal = true;
   state.snapshots.managebac.test = { capturedAt: now, tasks: [task('mb', '2026-10-10T10:00:00Z'), task('ambiguous', null, { dueLabel: 'Jan 17 9:15 AM' })] };
-  state.snapshots.teams.test = { capturedAt: now, tasks: [task('teams:one', '2026-10-10T11:00:00Z')] };
+  state.snapshots.teams.test = { capturedAt: now, tasks: [task('teams:one', '2026-10-10T11:00:00Z', { officialAssignment: true })] };
   const rows = range(state);
   assert.equal(rows.length, 3);
   assert.deepEqual(rows.map(item => item.source), ['manual', 'managebac', 'teams']);
@@ -207,7 +207,7 @@ test('undated homework keeps an explicit unknown deadline and excludes every sou
   state.manualTasks = [task('personal-undated', null), task('personal-done', null, { status: 'completed' })];
   state.snapshots.managebac.test = { capturedAt: now, tasks: [task('mb-undated', null), task('mb-done', null)] };
   state.taskChecks['mb-done'] = true;
-  state.snapshots.teams.test = { capturedAt: now, tasks: [task('teams:undated', null), task('teams:done', null, { status: 'completed' })] };
+  state.snapshots.teams.test = { capturedAt: now, tasks: [task('teams:undated', null, { officialAssignment: true }), task('teams:done', null, { status: 'completed', officialAssignment: true })] };
   const snapshot = Agenda.widgetSnapshot(state, now);
   assert.equal(snapshot.items.length, 3);
   assert.equal(snapshot.counts.homework, 3);

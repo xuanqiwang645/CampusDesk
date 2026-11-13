@@ -92,7 +92,7 @@
       const retryable = TRANSIENT.has(code);
       const retryCount = Math.max(...batch.entries.map(entry => ++entry.job.failures));
       if (retryable && retryCount <= 2) {
-        const delay = Math.min(300000, Math.max(code === 'busy' ? 5000 : 15000 * retryCount, (Number(retryAfterSeconds) || 0) * 1000));
+        const delay = Math.min(86400000, Math.max(code === 'busy' ? 5000 : 15000 * retryCount, (Number(retryAfterSeconds) || 0) * 1000));
         deferUntil = now() + delay; schedule(delay);
       } else {
         const messages = { missingKey: '请先在学习助手中配置 DeepSeek API Key', unauthorized: 'DeepSeek API Key 无效，请更新后重试', insufficientBalance: 'DeepSeek 余额不足，请充值后重试', modelUnavailable: '当前 DeepSeek 模型不可用，请调整模型后重试', rateLimited: 'DeepSeek 请求过于频繁，请稍后重试', network: '网络连接失败，请稍后重试', serviceUnavailable: 'DeepSeek 暂时不可用，请稍后重试', timeout: '分析超时，请稍后重试', busy: '学习助手正在使用 AI，请稍后重试', cancelled: '分析已暂停，请重试', badResponse: 'AI 返回内容不完整，未生成待办，请重试' };

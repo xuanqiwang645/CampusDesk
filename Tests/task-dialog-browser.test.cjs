@@ -100,7 +100,7 @@ test('personal tasks retain optional deadlines across reload and stay above Team
     page.on('pageerror', error => errors.push(error.message));
     const seed = Core.emptyState();
     seed.settings.dashboardTheme = 'board';
-    seed.snapshots.teams = {'https://teams.microsoft.com/v2/': {source: 'teams', url: 'https://teams.microsoft.com/v2/', title: 'Test', capturedAt: '2026-09-29T00:00:00Z', coverage: 'visible', warnings: [], tasks: [{id: 'teams-task', title: 'Team task', course: 'Science', status: 'open', dueAt: null}], posts: []}};
+    seed.snapshots.teams = {'https://teams.microsoft.com/v2/': {source: 'teams', url: 'https://teams.microsoft.com/v2/', title: 'Test', capturedAt: '2026-09-29T00:00:00Z', coverage: 'visible', warnings: [], tasks: [{id: 'teams-task', officialAssignment: true, title: 'Team task', course: 'Science', status: 'open', dueAt: null}], posts: []}};
     Core.validateState(seed);
     await page.addInitScript(state => {
       if (!localStorage.getItem('campusdesk.browser.v1')) localStorage.setItem('campusdesk.browser.v1', JSON.stringify(state));

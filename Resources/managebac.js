@@ -27,6 +27,15 @@
       return url.href;
     } catch (_) { return null; }
   }
+  function courseListingURL(href, base) {
+    const safe = safeURL(href, base); if (!safe) return null;
+    const url = new URL(safe), match = url.pathname.match(/^\/student\/classes\/(\d+)(?:\/core_tasks)?\/?$/);
+    if (!match) return null;
+    // A class landing link identifies the same read-only task/overall page as
+    // the Tasks tab. Elective and Pre-AP classes use the same numeric identity.
+    url.pathname = '/student/classes/' + match[1] + '/core_tasks';
+    return url.href;
+  }
   function courseID(url) {
     try { return (new URL(url).pathname.match(/^\/student\/classes\/(\d+)(?:\/|$)/) || [])[1] || null; } catch (_) { return null; }
   }
@@ -158,12 +167,21 @@
       loginText: text(first(doc, 'main, #main-content, body')).slice(0, 1800),
       term: text(first(doc, 'select#term option:checked')),
       recognized: all(doc, 'main h2, #main-content h2').some(x => /^(?:All Tasks|Task Details|所有任务|任务详情)$/i.test(text(x))),
-      links: [], overallRows: [], tasks: [], feedback: [], gpaRows: [], gradeComponents: [], gradesCaptured: false
+      links: [], courseDirectory: [], overallRows: [], tasks: [], feedback: [], gpaRows: [], gradeComponents: [], gradesCaptured: false
     };
     for (const a of all(doc, 'a[href]')) {
-      if (!visible(a)) continue;
       const href = safeURL(a.getAttribute('href'), url);
-      if (href) page.links.push({url:href, title:text(a)});
+      if (!href) continue;
+      const listing = courseListingURL(href, url);
+      const navigation = a.closest('nav, aside, [role="navigation"], #sidebar, .sidebar');
+      // Collapsing the class menu only hides navigation, not the enrolled
+      // course identities already present in it. Hidden grades remain excluded.
+      if (!visible(a) && !(listing && navigation)) continue;
+      const title = text(a);
+      page.links.push({url:href, title});
+      if (listing && navigation && title && !/^(?:tasks?|all tasks|overview|home|课程|作业|所有任务|总览|首页)$/i.test(title)) {
+        if (!page.courseDirectory.some(row => courseID(row.url) === courseID(listing))) page.courseDirectory.push({url:listing,title});
+      }
     }
     // Only capture a grade component when the rendered table labels both its
     // assessment/category and an explicit weight column. Assignment marks alone
@@ -280,11 +298,11 @@
     if (/\/core_tasks(?:\/\d+)?\/?$/.test(path) && page.recognized === false && !(page.gradeComponents || []).length) {
       result.parseError = true;
       result.warnings.push('任务页面尚未完整加载或页面布局发生变化，保留上次同步结果。');
-      return result;
     }
     const currentID = courseID(page.url), currentTask = taskID(page.url);
     const term = clean(page.term) || null;
-    const currentTerm = term ? /\bcurrent\b|当前|本学期/i.test(term) : false;
+    const currentTerm = term && /\bcurrent\b|当前|本学期/i.test(term) ? true :
+      term && /\b(?:previous|past|historical|archived|last term)\b|上学期|历史学期|往期/i.test(term) ? false : undefined;
     result.gradesCaptured = page.gradesCaptured === true && page.recognized === true && Boolean(currentID)
       && /^\/student\/classes\/\d+\/core_tasks(?:\/\d+)?\/?$/.test(path);
     if (term && !currentTerm && !/\b(?:previous|past|historical|archived|last term)\b|上学期|历史学期|往期/i.test(term)) {
@@ -296,22 +314,37 @@
     for (const item of page.links || []) {
       const url = safeURL(item.url, page.url); if (!url) continue;
       const pathname = new URL(url).pathname;
-      if (/^\/student\/classes\/\d+\/core_tasks\/?$/.test(pathname)) {
-        addLink('course',url,item.title);
+      const listing = courseListingURL(url, page.url);
+      if (listing) {
+        addLink('course',listing,item.title);
       } else if (/^\/student\/classes\/\d+\/core_tasks\/\d+\/?$/.test(pathname)) {
         addLink('feedback',url,item.title);
       } else if (/^\/student\/(?:grades|reports|academics)\/?$/.test(pathname)) {
         addLink('grades',url,item.title);
       }
     }
+    if (/^\/student\/classes\/\d+\/?$/.test(path)) {
+      const listing = courseListingURL(page.url, page.url);
+      if (listing) addLink('course', listing, clean(page.heading));
+    }
+    // One class with an unsupported/loading task layout must not prevent safe
+    // navigation to the other discovered classes. Its own data remains failed.
+    if (result.parseError) return result;
     if (currentID && !currentTask && /\/core_tasks\/?$/.test(path)) {
       const values = (page.overallRows || []).map(x=>overallPercentage(x.label,x.value)).filter(x=>x!==null);
       const distinct = [...new Set(values)];
       const percentage = distinct.length === 1 ? distinct[0] : null;
       result.courses.push({id:currentID,name:clean(page.heading) || 'ManageBac 课程',percentage,term,
-        isCurrentTerm:currentTerm,isCourseGrade:percentage!==null,url:page.url,gradeComponents:parseGradeComponents(page.gradeComponents || [])});
+        ...(currentTerm === undefined ? {} : {isCurrentTerm:currentTerm}), gpaEligible:currentTerm === true,
+        isCourseGrade:percentage!==null,url:page.url,gradeComponents:parseGradeComponents(page.gradeComponents || [])});
       if (distinct.length > 1) result.warnings.push('发现不一致的课程总评，已跳过该课程的 GPA 估算。');
       if (!term) result.warnings.push('页面未显示学期，课程分数暂不用于 GPA 估算。');
+    }
+    for (const course of page.courseDirectory || []) {
+      const url = courseListingURL(course.url, page.url), name = clean(course.title), id = courseID(url);
+      if (!id || !name || result.courses.some(row => row.id === id)) continue;
+      result.courses.push({id,name,url,percentage:null,term:null,isCourseGrade:false,gpaEligible:false,gradeComponents:[]});
+      addLink('course',url,name);
     }
     const assignmentGrades = new Map(), conflictingGrades = new Set();
     for (const task of page.tasks || []) {

@@ -1,4 +1,5 @@
 import Foundation
+import JavaScriptCore
 
 // No default Keychain hooks and no real network requests are used in this fixture.
 final class SyntheticTaskReviewProtocol: URLProtocol {
@@ -138,6 +139,58 @@ final class SyntheticTaskReviewProtocol: URLProtocol {
         state["manualTasks"] = [["id": "manual-1", "title": "Current trusted title", "course": "个人待办", "status": "open", "createdAt": "2026-11-12T08:00:00Z"]]
         state = try validator.validate(state)
         check(try validator.unfinishedTasks(state, among: ["manual-1"]) == ["manual-1": "Current trusted title"], "Native recheck uses actual Core task list")
+        // Generate receipts with the real Core implementation rather than
+        // reproducing its hash contract in Swift.
+        let fixtureJS = JSContext()!
+        fixtureJS.setObject(true, forKeyedSubscript: "CampusDeskThemeEdition" as NSString)
+        fixtureJS.evaluateScript(try String(contentsOf: root.appendingPathComponent("Resources/core.js"), encoding: .utf8))
+        fixtureJS.evaluateScript("""
+        function makeReviewedFixture(encoded) {
+          const state = JSON.parse(encoded);
+          state.taskReview = {lastAttemptAt:'2026-11-12T08:00:00Z', lastCompletedAt:'2026-11-12T08:01:00Z',
+            summary:'Existing review must remain in the saved state.', error:'',
+            recommendations:[{id:'manual-1', reason:'Review the supplied assignment.'}],
+            inputFingerprint:CampusCore.taskReviewInputFingerprint(CampusCore.getTasks(state), CampusCore.teamsAnalysisModel(state))};
+          return JSON.stringify(state);
+        }
+        """)
+        func reviewedFixture(_ source: [String: Any]) throws -> [String: Any] {
+            let encoded = String(decoding: try CampusStateValidator.encode(source), as: UTF8.self)
+            guard let result = fixtureJS.objectForKeyedSubscript("makeReviewedFixture")?.call(withArguments: [encoded])?.toString(),
+                  fixtureJS.exception == nil,
+                  let object = try JSONSerialization.jsonObject(with: Data(result.utf8)) as? [String: Any] else {
+                throw CampusStateValidationError(message: "Review fixture could not be built")
+            }
+            return try validator.validate(object)
+        }
+        let reviewed = try reviewedFixture(state)
+        check(try validator.unfinishedTasks(reviewed, among: ["manual-1"], requireCurrentReview: true) == ["manual-1": "Current trusted title"], "Unchanged reviewed tasks may pass the delayed notification check")
+        for (field, replacement) in [("title", "Revised task"), ("dueAt", "2026-11-20T10:00:00Z"), ("course", "Different course")] {
+            var changed = reviewed, rows = changed["manualTasks"] as! [[String: Any]]
+            rows[0][field] = replacement; changed["manualTasks"] = rows
+            changed = try validator.validate(changed)
+            check(try validator.unfinishedTasks(changed, among: ["manual-1"], requireCurrentReview: true).isEmpty, "Same ID with changed \(field) invalidates a delayed review notification")
+        }
+        var added = reviewed, addedRows = reviewed["manualTasks"] as! [[String: Any]]
+        addedRows.append(["id": "manual-new", "title": "A new urgent assignment", "status": "open"]); added["manualTasks"] = addedRows
+        check(try validator.unfinishedTasks(validator.validate(added), among: ["manual-1"], requireCurrentReview: true).isEmpty, "A newly added task invalidates the previous priority ranking")
+        var legacy = reviewed, legacyReport = legacy["taskReview"] as! [String: Any]
+        legacyReport.removeValue(forKey: "inputFingerprint"); legacy["taskReview"] = legacyReport
+        legacy = try validator.validate(legacy)
+        check(try validator.unfinishedTasks(legacy, among: ["manual-1"], requireCurrentReview: true).isEmpty, "A legacy report without a fingerprint cannot authorize a new notification")
+        check((legacy["taskReview"] as? [String: Any])?["summary"] as? String == legacyReport["summary"] as? String, "Invalidating an old report preserves its stored summary")
+        let teamsURL = "https://teams.microsoft.com/v2/"
+        var withRequirements = state
+        let teamTask: [String: Any] = ["id": "teams:graph:assignment:fixture", "title": "Source assignment", "officialAssignment": true,
+            "requirements": "Read chapter one.", "status": "open"]
+        withRequirements["snapshots"] = ["seiue": [:], "managebac": [:], "teams": [teamsURL: ["source": "teams", "url": teamsURL,
+            "coverage": "graph", "accountId": "synthetic-account", "capturedAt": "2026-11-12T08:00:00Z", "tasks": [teamTask]]]]
+        withRequirements = try reviewedFixture(validator.validate(withRequirements))
+        check(try validator.unfinishedTasks(withRequirements, among: ["manual-1"], requireCurrentReview: true).count == 1, "A reviewed set including source requirements is current")
+        var snapshots = withRequirements["snapshots"] as! [String: Any], teams = snapshots["teams"] as! [String: [String: Any]], page = teams[teamsURL]!
+        var teamTasks = page["tasks"] as! [[String: Any]]; teamTasks[0]["requirements"] = "Read chapter two instead."
+        page["tasks"] = teamTasks; teams[teamsURL] = page; snapshots["teams"] = teams; withRequirements["snapshots"] = snapshots
+        check(try validator.unfinishedTasks(validator.validate(withRequirements), among: ["manual-1"], requireCurrentReview: true).isEmpty, "Changed source requirements invalidate the already completed review")
         state["taskChecks"] = ["manual-1": true]
         check(try validator.unfinishedTasks(state, among: ["manual-1"]).isEmpty, "Locally completed task cannot be notified")
         state["taskChecks"] = [String: Any]()

@@ -76,10 +76,12 @@ final class CampusStateValidator {
             return {encoded: JSON.stringify(value)};
           } catch (error) { return {error: String(error.message || error)}; }
         }
-        function __campusUnfinishedTasks(encoded, ids, schools) {
+        function __campusUnfinishedTasks(encoded, ids, schools, requireCurrentReview) {
           CampusCore.configureSchools(JSON.parse(schools));
+          const state = JSON.parse(encoded);
+          if (requireCurrentReview && !CampusCore.taskReviewIsCurrent(state)) return [];
           const wanted = new Set(ids);
-          return CampusCore.getTasks(JSON.parse(encoded)).filter(task => !task.completed && wanted.has(task.id))
+          return CampusCore.getTasks(state).filter(task => !task.completed && wanted.has(task.id))
             .map(task => ({id: task.id, title: task.title}));
         }
         """)
@@ -94,14 +96,14 @@ final class CampusStateValidator {
 
     /// Reuse the actual task gate so deleted, completed and reclassified tasks
     /// cannot leak into a delayed reminder. No school data leaves this process.
-    func unfinishedTasks(_ state: [String: Any], among ids: [String], schools: [String: String] = [:]) throws -> [String: String] {
+    func unfinishedTasks(_ state: [String: Any], among ids: [String], schools: [String: String] = [:], requireCurrentReview: Bool = false) throws -> [String: String] {
         guard (1...3).contains(ids.count), Set(ids).count == ids.count, ids.allSatisfy({ $0.utf16.count <= 1024 }) else {
             throw CampusStateValidationError(message: "待办提醒标识无效。")
         }
         let encoded = String(decoding: try Self.encode(state), as: UTF8.self)
         let schoolJSON = String(decoding: try JSONSerialization.data(withJSONObject: schools), as: UTF8.self)
         lock.lock(); defer { lock.unlock() }; context.exception = nil
-        guard let value = context.objectForKeyedSubscript("__campusUnfinishedTasks")?.call(withArguments: [encoded, ids, schoolJSON]),
+        guard let value = context.objectForKeyedSubscript("__campusUnfinishedTasks")?.call(withArguments: [encoded, ids, schoolJSON, requireCurrentReview]),
               context.exception == nil, let rows = value.toArray() as? [[String: String]] else {
             throw CampusStateValidationError(message: "无法核对当前待办，未发送提醒。")
         }

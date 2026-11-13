@@ -175,7 +175,7 @@ test('overview reminder panel controls scheduling beside the title and opens cur
     state.settings.taskReviewEnabled = false;
     state.settings.teamsAnalysisEnabled = false;
     state.manualTasks = [{ id: 'review-practice', title: 'Practice sheet', course: 'SYNTHETIC', status: 'open' }, { id: 'review-fair', title: 'Science fair', course: 'SYNTHETIC', category: 'activity', status: 'open' }];
-    state.taskReview = { lastCompletedAt: new Date().toISOString(), summary: 'Current priorities', recommendations: [{ id: 'review-practice', reason: 'Finish the practice first.' }, { id: 'review-fair', reason: 'Prepare for the fair.' }, { id: 'removed-task', reason: 'Stale item' }] };
+    state.taskReview = { lastCompletedAt: new Date().toISOString(), summary: 'Current priorities', inputFingerprint: Core.taskReviewInputFingerprint(Core.getTasks(Core.validateState(state)), Core.teamsAnalysisModel(state)), recommendations: [{ id: 'review-practice', reason: 'Finish the practice first.' }, { id: 'review-fair', reason: 'Prepare for the fair.' }, { id: 'removed-task', reason: 'Stale item' }] };
     const { page, errors } = await openFixture(browser, 'overview', state, true);
     const panel = page.locator('.overview-heading-controls .overview-task-review');
     assert.equal(await panel.count(), 1);
@@ -289,6 +289,35 @@ test('manual overview review runs after the current Teams batch before the remai
     await page.waitForFunction(() => uiMessages.filter(message => message.action === 'teamsAnalyze').length === 2);
     await page.waitForFunction(() => document.querySelector('.overview-task-review').textContent.includes('Prepare before class'));
     assert.match(await page.locator('.overview-task-review').innerText(), /Prepare before class/);
+    assert.deepEqual(errors, []);
+  } finally { await browser.close(); }
+});
+
+test('reminders expose their own DeepSeek setup and hide outdated advice without deleting history', optional, async () => {
+  const browser = await launchChromium();
+  try {
+    const state = Core.emptyState();
+    Object.assign(state.settings, { taskReviewEnabled: true, taskReviewEnabledAt: new Date().toISOString(), teamsAnalysisEnabled: false, aiProvider: 'off' });
+    state.manualTasks = [{ id: 'reminder-only', title: 'Prepare notes', course: 'Personal', dueAt: '2030-09-29T10:00:00Z', status: 'open' }];
+    state.taskReview = { lastCompletedAt: new Date().toISOString(), summary: 'Old deadline advice', recommendations: [{ id: 'reminder-only', reason: 'Due tomorrow' }], inputFingerprint: Core.taskReviewInputFingerprint(Core.getTasks(state), Core.teamsAnalysisModel(state)) };
+    const { page, errors } = await openFixture(browser, 'settings', state, true);
+    assert.equal(await page.locator('#assistant-deepseek-key').count(), 1, 'reminder-only mode can configure a key without enabling chat or Teams');
+    assert.equal(await page.locator('#assistant-model').count(), 1, 'reminder-only mode exposes the model');
+    assert.match(await page.locator('.task-review-summary').innerText(), /Old deadline advice/);
+    const edited = structuredClone(state); edited.manualTasks[0].dueAt = '2031-09-29T10:00:00Z';
+    await page.evaluate(state => CampusDesk.receive({ type: 'state', state, stateGeneration: 3, replaceState: true }), edited);
+    await page.evaluate(() => document.querySelectorAll('dialog[open]').forEach(dialog => dialog.close()));
+    assert.equal(await page.locator('.task-review-recommendations li').count(), 0);
+    assert.equal(await page.locator('.task-review-summary').count(), 0);
+    assert.match(await page.locator('#task-review-settings').innerText(), /待办或模型已变化|重新分析/);
+    await page.locator('[data-page="overview"]').first().click();
+    assert.equal(await page.locator('.overview-review-priority').count(), 0);
+    assert.match(await page.locator('.overview-task-review').innerText(), /重新分析/);
+    await page.locator('[data-action="toggle-overview-review"]').click();
+    const saved = await page.evaluate(() => uiMessages.filter(m => m.action === 'saveState').at(-1).state);
+    assert.equal(saved.taskReview.summary, 'Old deadline advice', 'history stays intact when stale');
+    assert.equal(saved.taskReview.recommendations[0].reason, 'Due tomorrow');
+    assert.equal(saved.settings.aiProvider, 'off'); assert.equal(saved.settings.teamsAnalysisEnabled, false);
     assert.deepEqual(errors, []);
   } finally { await browser.close(); }
 });

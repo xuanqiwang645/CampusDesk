@@ -34,7 +34,7 @@ test('analysis and scheduled review are opt-in, migrate older saves and validate
   delete value.settings.teamsAnalysisEnabled; delete value.teamsAnalysis; delete value.teamsAnalysisOverrides; delete value.taskReview;
   const restored = Core.validateState(value);
   assert.deepEqual(restored.teamsAnalysis, {}); assert.deepEqual(restored.teamsAnalysisOverrides, {});
-  assert.deepEqual(restored.taskReview, { lastAttemptAt: null, lastCompletedAt: null, summary: '', recommendations: [], error: '' });
+  assert.deepEqual(restored.taskReview, { lastAttemptAt: null, lastCompletedAt: null, summary: '', recommendations: [], error: '', inputFingerprint: '' });
   for (const [key, bad] of [['teamsAnalysisEnabled', 'true'], ['taskReviewEnabled', 1], ['taskReviewIntervalHours', 0], ['taskReviewIntervalHours', 11], ['taskReviewIntervalHours', 1.5], ['taskReviewEnabledAt', '2026-11-12T10:00:00']]) {
     const invalid = Core.emptyState(); invalid.settings[key] = bad; assert.throws(() => Core.validateState(invalid));
   }
@@ -231,4 +231,85 @@ test('scheduled review state round-trips and account reset clears prior suggesti
   for (const review of [{ ...value.taskReview, summary: 'x'.repeat(1201) }, { ...value.taskReview, recommendations: Array(4).fill({ id: 'x', reason: 'r' }) }, { ...value.taskReview, lastCompletedAt: '2026-11-12T10:00:00' }]) {
     assert.throws(() => Core.validateState({ ...value, taskReview: review }));
   }
+});
+
+test('new actions cannot steal an older action completion or manually corrected deadline when AI reorders them', () => {
+  let value = state([{ nativeID: 'read', text: 'Read chapter one.\nJoin the science fair.\nDeadline: 2026-11-13 17:00' }]);
+  value = analyze(value, [homework]);
+  const old = Core.getTasks(value)[0]; value.taskChecks[old.id] = true;
+  value.settings.teamsDueOverrides[old.id] = '2026-11-14T09:00:00.000Z';
+  value = analyze(value, [{ category: 'activity', title: 'Join fair', evidence: 'Join the science fair.', deadlineText: '' }, homework]);
+  const tasks = Core.getTasks(value), added = tasks.find(row => row.category === 'activity'), retained = tasks.find(row => row.category === 'homework');
+  assert.equal(retained.id, old.id); assert.equal(retained.completed, true); assert.equal(retained.dueOverride, true);
+  assert.notEqual(added.id, old.id); assert.equal(added.completed, false); assert.equal(added.dueOverride, false);
+});
+
+test('a changed instruction with the same generic title cannot inherit the previous instruction completion', () => {
+  let value = analyze(state(), [{ ...homework, title: 'Reading task' }]);
+  const old = Core.getTasks(value)[0]; value.taskChecks[old.id] = true;
+  value = Core.mergeSnapshot(value, capture([{ nativeID: 'read', text: 'Read chapter two.' }], later));
+  value = analyze(value, [{ ...homework, title: 'Reading task', evidence: 'Read chapter two.', deadlineText: '' }]);
+  assert.notEqual(Core.getTasks(value)[0].id, old.id); assert.equal(Core.getTasks(value)[0].completed, false);
+  assert.equal(value.taskChecks[old.id], true, 'the original saved completion is retained');
+});
+
+test('repeated AI actions are deduplicated and reclassification keeps the same action identity', () => {
+  const original = state(); let value = analyze(original, [homework, { ...homework }]);
+  assert.equal(Core.getTasks(value).length, 1);
+  const id = Core.getTasks(value)[0].id; value.taskChecks[id] = true;
+  value = analyze(value, [{ ...homework, category: 'activity' }]);
+  assert.equal(Core.getTasks(value)[0].id, id); assert.equal(Core.getTasks(value)[0].completed, true);
+});
+
+test('a transient failure and backup restore retain the primary action identity without reviving tasks', () => {
+  let value = analyze(state(), [homework]);const id = Core.getTasks(value)[0].id;value.taskChecks[id] = true;
+  value = analyze(value, [], { status: 'failed', classification: 'uncertain', error: 'network' });
+  assert.equal(Core.getTasks(value).length, 0);
+  value = Core.importBackup(Core.exportBackup(value)).state;
+  value = analyze(value, [{ ...homework, title: 'Read chapter one again' }]);
+  assert.equal(Core.getTasks(value)[0].id, id);assert.equal(Core.getTasks(value)[0].completed, true);
+});
+
+test('publication metadata cannot become a fabricated deadline, including an older cached result', () => {
+  const original = state([{ nativeID: 'read', text: 'Read chapter one.', postedAt: now, dateLabel: 'Published: 2026-11-12 08:00' }]);
+  const input = Core.getTeamsAnalysisInputs(original)[0];assert.match(input.text, /Published: 2026-11-12 08:00/);
+  const wrong = { ...homework, deadlineText: '2026-11-12 08:00' };
+  assert.equal(Core.getTasks(analyze(original, [wrong])).length, 0);
+  const cached = analyze(original, [{ ...homework, deadlineText: '' }]);
+  Object.values(cached.teamsAnalysis)[0].tasks[0].deadlineText = wrong.deadlineText;
+  assert.equal(Core.getTasks(Core.validateState(cached)).length, 0);
+  assert.equal(Core.getTasks(analyze(original, [{ ...homework, deadlineText: '' }])).length, 1);
+});
+
+test('orphaned legacy heuristic tasks stay available for analysis and cannot bypass it when their post is missing', () => {
+  const snapshot = capture([{ nativeID: 'notice', text: 'No homework this week.' }]);
+  snapshot.posts = []; delete snapshot.tasks[0].officialAssignment;
+  const value = Core.mergeSnapshot(Core.emptyState(), snapshot);
+  assert.equal(Core.getTasks(value).length, 0);
+  assert.equal(Core.getTeamsAnalysisInputs(value).length, 1);
+  assert.equal(Object.values(value.snapshots.teams)[0].tasks.length, 1, 'raw legacy data remains intact');
+});
+
+test('old cached duplicates collapse to their completed copy without deleting original data', () => {
+  const value = analyze(state(), [homework]); const record = Object.values(value.teamsAnalysis)[0];
+  record.tasks.push({ ...record.tasks[0], id: 'teams:duplicate-from-older-release' });
+  value.taskChecks['teams:duplicate-from-older-release'] = true;
+  const restored = Core.validateState(value), tasks = Core.getTasks(restored);
+  assert.equal(tasks.length, 1); assert.equal(tasks[0].completed, true);
+  assert.equal(Object.values(restored.teamsAnalysis)[0].tasks.length, 2, 'saved evidence is not deleted');
+  assert.equal(restored.taskChecks['teams:duplicate-from-older-release'], true);
+});
+
+test('retrying a failed multi-action analysis preserves secondary legacy IDs and completions', () => {
+  let value = state([{ nativeID: 'read', text: 'Read chapter one.\nJoin the science fair.\nDeadline: 2026-11-13 17:00' }]);
+  const fair = { category: 'activity', title: 'Join fair', evidence: 'Join the science fair.', deadlineText: '' };
+  value = analyze(value, [homework, fair]);
+  const row = Object.values(value.teamsAnalysis)[0], secondary = row.tasks.find(task => task.category === 'activity');
+  secondary.id = 'teams:action:legacy-v2-hash';value.taskChecks[secondary.id] = true;
+  value = analyze(value, [], { status: 'failed', classification: 'uncertain', error: 'network' });
+  assert.equal(Core.getTasks(value).length, 0);
+  value = Core.importBackup(Core.exportBackup(value)).state;
+  value = analyze(value, [{ ...fair, title: 'Attend science fair' }, homework]);
+  const restored = Core.getTasks(value).find(task => task.category === 'activity');
+  assert.equal(restored.id, secondary.id);assert.equal(restored.completed, true);
 });

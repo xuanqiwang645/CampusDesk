@@ -48,7 +48,7 @@ struct AgendaNativeSmoke {
         func teamsPage(_ account: String, _ title: String) -> [String: Any] {
             ["url": teamsURL, "source": "teams", "coverage": "graph", "accountId": account,
              "capturedAt": "2026-10-10T01:00:00Z", "tasks": [["id": "teams:same-id", "title": title,
-             "requirements": "Deadline: 2026-10-11 17:00", "status": "open"]]]
+             "requirements": "Deadline: 2026-10-11 17:00", "status": "open", "officialAssignment": true]]]
         }
         func diskItems() throws -> [[String: Any]] {
             let object = try JSONSerialization.jsonObject(with: Data(contentsOf: target)) as! [String: Any]

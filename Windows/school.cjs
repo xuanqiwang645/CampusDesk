@@ -56,7 +56,7 @@ function writeConfig(file, values, saveJSON) {
 }
 
 function isReadOnlyManageBacPath(pathname) {
-  return ['/student/home', '/student/grades', '/student/reports', '/student/academics'].includes(pathname)
+  return /^\/student\/(?:home|grades|reports|academics)\/?$/.test(pathname)
     || /^\/student\/classes\/[0-9]+(?:\/core_tasks(?:\/[0-9]+)?)?\/?$/.test(pathname);
 }
 
@@ -93,7 +93,7 @@ class SchoolWorker {
         await win.loadURL(raw);
         await delay(2000);
         if (generation !== this.generation) break;
-        let snapshot;
+        let snapshot, empty = true;
         for (let attempt = 0; attempt < 4; attempt += 1) {
           const current = schoolURL(win.webContents.getURL(), this.source, this.getHomes());
           if (!current) throw new Error('login_required');
@@ -102,13 +102,13 @@ class SchoolWorker {
           const result = await win.webContents.executeJavaScript(`(function(){if(location.origin!==${origin})throw Error('Unexpected origin');\n${script}\nreturn JSON.stringify(window.${symbol}.extract());})();`, true);
           snapshot = JSON.parse(result);
           const keys = this.source === 'seiue' ? ['schedule', 'calendarDates'] : ['courses', 'tasks', 'feedback', 'links'];
-          const empty = keys.every(key => !Array.isArray(snapshot[key]) || snapshot[key].length === 0) && !snapshot.officialGPA;
+          empty = keys.every(key => !Array.isArray(snapshot[key]) || snapshot[key].length === 0) && !snapshot.officialGPA;
           if ((!empty && !snapshot.categoryAveragesPending && !snapshot.parseError) || snapshot.loginRequired || attempt === 3) break;
           await delay(1800);
         }
         if (generation !== this.generation) break;
         if (snapshot.loginRequired) { stopReason = '登录已失效，请打开学校网页重新登录'; break; }
-        if (snapshot.parseError) failed += 1;
+        if (snapshot.parseError || empty) failed += 1;
         else readable += 1;
         this.emit(null, true, snapshot);
         if (this.source === 'managebac' && Array.isArray(snapshot.links)) {
@@ -129,7 +129,9 @@ class SchoolWorker {
     }
     if (generation !== this.generation) return;
     this.running = false;
-    this.emit(stopReason || (readable ? `本轮读取完成（${readable} 页；${failed} 页失败${truncated ? `；${truncated} 个链接超出队列上限` : ''}）` : '本轮未读取到可识别数据，保留缓存；请检查登录和原页面'), false);
+    const limited = queue.length > 0 && visited.size >= maxPages[this.source];
+    this.emit(stopReason || (limited ? `已检查 ${visited.size} 页；还有 ${queue.length} 页未读取，保留缓存，可打开原页继续读取${truncated ? `；另有 ${truncated} 个链接超出队列上限` : ''}` :
+      readable ? `本轮读取完成（${readable} 页；${failed} 页失败${truncated ? `；${truncated} 个链接超出队列上限` : ''}）` : '本轮未读取到可识别数据，保留缓存；请检查登录和原页面'), false);
   }
 }
 

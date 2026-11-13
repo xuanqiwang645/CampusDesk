@@ -77,6 +77,13 @@ final class SyntheticTeamsAnalysisProtocol: URLProtocol {
 
         let output = try batch.decode(envelope([row()]))
         check(output.count == 1 && output[0]["fingerprint"] as? String == fingerprint, "Fingerprint comes from native input, not the model")
+        var metadataOnly = item(text: "School announcements are now available.")
+        metadataOnly["channel"] = "Read chapter 2 by Friday."
+        let metadataBatch = try TeamsAnalysisBatch(request([metadataOnly]))
+        check((try? metadataBatch.decode(envelope([row()]))) == nil, "A channel name cannot be the only evidence for an assignment")
+        var publicationDeadline = task(); publicationDeadline["deadlineText"] = "2026-11-12"
+        var publicationRow = row(); publicationRow["tasks"] = [publicationDeadline]
+        check((try? batch.decode(envelope([publicationRow]))) == nil, "A publication timestamp cannot be reused as a deadline quote")
         let pair = try TeamsAnalysisBatch(request([item("one"), item("two")]))
         check(try pair.decode(envelope([row("two"), row("one")])).map { $0["id"] as! String } == ["one", "two"], "Exact ID sets may arrive reordered but return in input order")
         for phase in ["summarize", "classify"] { check((try TeamsAnalysisBatch(request(phase: phase)).decode(envelope([row()]))).count == 1, "Both phases share the same verified result schema") }

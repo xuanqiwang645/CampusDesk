@@ -42,6 +42,10 @@ campus_arch="$(uname -m)"
   -o "$campus_tests/school-config-smoke"
 "$campus_tests/school-config-smoke"
 /usr/bin/xcrun swiftc -swift-version 5 -O -target "$campus_arch-apple-macosx12.0" \
+  "$campus_root/Sources/SchoolCrawlPolicy.swift" "$campus_root/Tests/school-crawl-smoke.swift" \
+  -o "$campus_tests/school-crawl-smoke"
+"$campus_tests/school-crawl-smoke"
+/usr/bin/xcrun swiftc -swift-version 5 -O -target "$campus_arch-apple-macosx12.0" \
   -framework JavaScriptCore \
   "$campus_root/Sources/SecurityValidation.swift" "$campus_root/Sources/StateValidation.swift" \
   "$campus_root/Tests/state-validation-smoke.swift" -o "$campus_tests/state-validation-smoke"

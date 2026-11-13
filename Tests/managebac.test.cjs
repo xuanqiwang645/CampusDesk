@@ -158,17 +158,19 @@ test('login pages and password forms cannot expose stale academic data', () => {
   }
 });
 
-test('historical and unknown terms cannot claim to be current', () => {
+test('unmarked and unknown terms remain visible without claiming to be current', () => {
   for (const term of ['Practice Term 2031', null]) {
     const page = clone(); page.term = term;
-    assert.equal(mb.fromProjection(page, timestamp).courses[0].isCurrentTerm, false);
+    assert.equal(mb.fromProjection(page, timestamp).courses[0].isCurrentTerm, undefined);
+    assert.equal(mb.fromProjection(page, timestamp).courses[0].gpaEligible, false);
   }
 });
 
 test('unmarked term labels explain why the course is excluded from current-term GPA', () => {
   const page = clone(); page.term = 'Semester One';
   const result = mb.fromProjection(page, timestamp);
-  assert.equal(result.courses[0].isCurrentTerm, false);
+  assert.equal(result.courses[0].isCurrentTerm, undefined);
+  assert.equal(result.courses[0].gpaEligible, false);
   assert.ok(result.warnings.some(value=>value.includes('暂不计入当前 GPA')));
 });
 
@@ -290,4 +292,71 @@ test('rendered grade roster distinguishes pending, zero, hidden and loading mark
     assert.deepEqual(detail.tasks.map(row=>row.id),['8102'],'a detail title needs no link when the current URL identifies its task');
     assert.deepEqual(detail.grades.map(row=>[row.assignmentId,row.score,row.maxScore]),[['8102',17,20]]);
   } finally {await browser.close();}
+});
+
+test('course-root sidebar links enqueue all nine class task lists, including electives and Pre-AP', () => {
+  const page = clone(); page.tasks = []; page.links = Array.from({ length: 9 }, (_, index) => ({
+    url: '/student/classes/' + (7100 + index) + (index < 5 ? '/core_tasks' : ''),
+    title: ['Synthetic Language Arts', 'Synthetic Geography', 'Synthetic Art', 'Synthetic History', 'Synthetic Chinese',
+      'Synthetic AP Electives Psychology', 'Synthetic AP Electives Chemistry', 'Synthetic Pre-AP Biology', 'Synthetic Pre-AP Pre-Calculus'][index]
+  }));
+  page.links.push({ url: '/student/classes/7108/core_tasks', title: 'Same course task tab' });
+  page.links.push({ url: '/student/classes/7200/?term=901', title: 'Term-specific class' });
+  page.links.push({ url: '/student/classes/7300/edit', title: 'Edit' });
+  page.links.push({ url: '/student/classes/7301?token=private', title: 'Signed link' });
+  const links = mb.fromProjection(page, timestamp).links.filter(row => row.kind === 'course');
+  assert.equal(links.length, 10);
+  assert.deepEqual(links.slice(0,9).map(row => new URL(row.url).pathname), Array.from({length:9},(_,index)=>'/student/classes/'+(7100+index)+'/core_tasks'));
+  assert.ok(links.some(row=>row.url === HOME+'/student/classes/7200/core_tasks?term=901'));
+  assert.ok(links.every(row=>!row.url.includes('730')));
+});
+
+test('collapsed course navigation can be discovered without capturing hidden grades or arbitrary hidden links', {skip:!process.env.PLAYWRIGHT_MODULE}, async () => {
+  const fs = require('node:fs'), browser = await launchChromium();
+  try {
+    const page = await browser.newPage();
+    await page.setContent(`<nav aria-label="Classes"><div hidden>
+      <a href="/student/classes/7401">Synthetic AP Electives Psychology</a>
+      <a href="/student/classes/7402/core_tasks">Synthetic Pre-AP Biology</a>
+      <a href="/student/classes/7402/core_tasks/8401">Hidden task detail</a>
+      <a href="/student/logout">Logout</a></div></nav>
+      <main><h1>Synthetic course</h1><h2>All Tasks</h2><div hidden><a href="/student/classes/7999">Unrelated hidden template</a></div>
+      <aside hidden><div class="list-item"><strong>Overall</strong><span class="cell">Overall</span><span class="cell">99%</span></div></aside></main>`);
+    await page.evaluate(fs.readFileSync(require.resolve('../Resources/managebac.js'),'utf8'));
+    const result = await page.evaluate(url=>CampusManageBac.fromProjection(CampusManageBac.collect(document,url),'2032-04-08T01:00:00.000Z'), HOME+COURSE);
+    assert.deepEqual(result.links.map(row=>row.url), [HOME+'/student/classes/7401/core_tasks',HOME+'/student/classes/7402/core_tasks']);
+    assert.equal(result.courses[0].percentage,null);
+  } finally { await browser.close(); }
+});
+
+test('a failed course layout retains safe discovery links while excluding its academic content', () => {
+  const page = clone(); page.recognized = false;
+  page.links.push({ url: '/student/classes/7501', title: 'Synthetic missed elective' });
+  page.links.push({ url: '/student/logout', title: 'Logout' });
+  const result = mb.fromProjection(page, timestamp);
+  assert.equal(result.parseError,true);
+  assert.equal(result.courses.length,0);assert.equal(result.tasks.length,0);assert.equal(result.grades.length,0);
+  assert.ok(result.links.some(row=>row.kind==='course' && row.url===HOME+'/student/classes/7501/core_tasks'));
+  assert.ok(result.links.every(row=>!row.url.includes('logout')));
+  const login = mb.fromProjection({ ...page, hasPassword:true },timestamp);
+  assert.equal(login.links.length,0,'login pages must still stop discovery');
+});
+
+test('a direct class landing page discovers its own task list without requiring a visible Tasks tab', () => {
+  const result = mb.fromProjection({url:HOME+'/student/classes/7502/?term=901',heading:'Synthetic AP Elective',links:[],recognized:false},timestamp);
+  assert.equal(result.parseError,false);
+  assert.deepEqual(result.links,[{kind:'course',url:HOME+'/student/classes/7502/core_tasks?term=901',title:'Synthetic AP Elective'}]);
+  assert.equal(result.courses.length,0,'a landing page does not manufacture a grade');
+});
+
+test('navigation directory adds missing courses without copying another class grade or claiming GPA eligibility', () => {
+  const page = clone();page.courseDirectory=Array.from({length:9},(_,i)=>({url:'/student/classes/'+(7001+i),title:'Synthetic course '+(i+1)}));
+  const result=mb.fromProjection(page,timestamp);
+  assert.equal(result.courses.length,9);
+  assert.equal(result.courses[0].name,fixture.heading);assert.equal(result.courses[0].percentage,84.5);
+  for (const course of result.courses.slice(1)) {
+    assert.equal(course.percentage,null);assert.equal(course.isCourseGrade,false);assert.equal(course.gpaEligible,false);assert.equal(course.isCurrentTerm,undefined);
+  }
+  const historical=mb.fromProjection({...page,term:'Practice Term 2031 (previous)'},timestamp);
+  assert.equal(historical.courses[0].isCurrentTerm,false);assert.equal(historical.courses[0].gpaEligible,false);
 });

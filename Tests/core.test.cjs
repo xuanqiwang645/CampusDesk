@@ -455,13 +455,15 @@ test('export/import round trip preserves data but returns an independent object'
 });
 
 function teams(overrides = {}) {
-  return Object.assign({ source: 'teams', url: 'https://teams.microsoft.com/v2/', title: 'English',
+  const snapshot = Object.assign({ source: 'teams', url: 'https://teams.microsoft.com/v2/', title: 'English',
     capturedAt: '2026-09-18T00:00:00Z', loginRequired: false, parseError: false, coverage: 'visible', warnings: [],
     tasks: [{ id: 'essay', title: 'Essay', course: 'English', dueAt: null, dueLabel: 'Friday',
       requirements: 'Use two examples.\nBring a printed copy.', status: 'open', url: 'https://teams.microsoft.com/l/message/english/essay',
       attachments: [{ title: 'Rubric.docx', url: 'https://school.sharepoint.com/sites/English/Rubric.docx' }] }],
     posts: [{ id: 'ec-one', title: 'English corner', text: 'Group A\nStudent Example', author: 'Teacher Example', channel: 'English',
       date: '2026-09-18', kind: 'ec', url: 'https://teams.microsoft.com/l/message/english/ec', attachments: [] }] }, overrides);
+  snapshot.tasks = snapshot.tasks.map(task => ({ officialAssignment: true, ...task }));
+  return snapshot;
 }
 
 test('legacy v1 imports add Teams defaults while retaining personal data and grade history', () => {
@@ -788,4 +790,73 @@ test('25 MiB state limit counts UTF-8 bytes for Chinese and supplementary charac
   incoming.posts.forEach((post, i) => { post.id = 'teams:graph:fixture:new:' + i; });
   assert.throws(() => Core.mergeSnapshot(below, incoming), /超过 25 MB/);
   assert.equal(Object.values(below.snapshots.teams)[0].posts.length, 280);
+});
+
+test('all discovered courses remain visible while only confirmed current totals enter GPA', () => {
+  const directory = Array.from({ length: 9 }, (_, i) => ({ id: 'class-' + i, name: 'Course ' + i,
+    percentage: null, isCourseGrade: false, gpaEligible: false }));
+  let state = Core.mergeSnapshot(Core.emptyState(), managebac({ capturedAt: '2026-11-13T00:00:00Z', courses: directory }));
+  for (let i = 0; i < 5; i++) {
+    state = Core.mergeSnapshot(state, managebac({ url: 'https://example-school.managebac.cn/student/classes/' + (7000 + i) + '/core_tasks',
+      capturedAt: '2026-11-13T00:01:00Z', courses: [{ id: 'class-' + i, name: 'Confirmed Course ' + i, percentage: 90,
+        term: 'First Semester (current)', isCurrentTerm: true, isCourseGrade: true }] }));
+  }
+  const courses = Core.getCourses(state);
+  assert.equal(courses.length, 9);
+  assert.equal(Core.estimateGPA(courses).count, 5);
+  assert.equal(Core.estimateGPA(courses).value, 3.7);
+  for (let i = 0; i < 5; i++) assert.equal(courses.find(course => course.id === 'class-' + i).name, 'Confirmed Course ' + i);
+  for (let i = 5; i < 9; i++) {
+    const course = courses.find(course => course.id === 'class-' + i);
+    assert.equal(course.percentage, null); assert.equal(course.gpaEligible, false);
+  }
+  assert.equal(Core.getCourses(Core.importBackup(JSON.stringify(Core.exportBackup(state))).state).length, 9);
+});
+
+test('a new current term with ungraded courses replaces the older graded term', () => {
+  let state = Core.mergeSnapshot(Core.emptyState(), managebac());
+  state = Core.mergeSnapshot(state, managebac({ url: 'https://example-school.managebac.cn/student/classes/8100/core_tasks',
+    capturedAt: '2027-02-01T00:00:00Z', courses: [{ id: 'english-new', name: 'New-term English', percentage: null,
+      term: 'Second Semester (current)', isCurrentTerm: true, isCourseGrade: false }] }));
+  const courses = Core.getCourses(state);
+  assert.deepEqual(courses.map(course => course.name), ['New-term English']);
+  assert.equal(Core.estimateGPA(courses).count, 0);
+  assert.equal(Core.estimateGPA(courses).value, null);
+});
+
+test('older duplicate course metadata cannot overwrite a newer observed course or its GPA eligibility', () => {
+  let state = Core.mergeSnapshot(Core.emptyState(), managebac({ courses: [{ id: 'math', name: 'Old label', percentage: 86,
+    term: 'First Semester (current)', isCurrentTerm: true, isCourseGrade: true, gpaEligible: false }] }));
+  state = Core.mergeSnapshot(state, managebac({ url: 'https://example-school.managebac.cn/student/classes/7001/core_tasks',
+    capturedAt: '2026-09-18T01:00:00Z', courses: [{ id: 'math', name: 'Current label', percentage: 93,
+      term: 'First Semester (current)', isCurrentTerm: true, isCourseGrade: true }] }));
+  const course = Core.getCourses(state)[0];
+  assert.equal(course.name, 'Current label'); assert.equal(course.percentage, 93);
+  assert.equal(course.gpaEligible, true); assert.equal(Core.estimateGPA([course]).value, 4);
+});
+
+test('a newer directory listing cannot shadow a confirmed course or lend certainty to unconfirmed scores', () => {
+  let state = Core.mergeSnapshot(Core.emptyState(), managebac({ courses: [{ id: 'math', name: 'Confirmed Math', percentage: 86,
+    term: 'First Semester (current)', isCurrentTerm: true, isCourseGrade: true }] }));
+  state = Core.mergeSnapshot(state, managebac({ url: 'https://example-school.managebac.cn/student/classes/7001/core_tasks',
+    capturedAt: '2026-09-18T01:00:00Z', courses: [{ id: 'math', name: 'Unconfirmed Math', percentage: 99,
+      isCourseGrade: true, gpaEligible: false }] }));
+  state = Core.mergeSnapshot(state, managebac({ url: 'https://example-school.managebac.cn/student/classes',
+    capturedAt: '2026-09-18T02:00:00Z', courses: [{ id: 'math', name: 'Directory Math', percentage: null,
+      isCourseGrade: false, gpaEligible: false }, { id: 'ungraded', name: 'Awaiting grades', percentage: null,
+      isCourseGrade: false, gpaEligible: false }] }));
+  const courses = Core.getCourses(state), math = courses.find(course => course.id === 'math');
+  assert.equal(courses.length, 2); assert.equal(math.name, 'Confirmed Math'); assert.equal(math.percentage, 86);
+  assert.equal(Core.estimateGPA(courses).count, 1);
+});
+
+test('an unconfirmed course page retains its name and visible mark over a later directory capture without entering GPA', () => {
+  let state = Core.mergeSnapshot(Core.emptyState(), managebac({ courses: [{ id: 'science', name: 'Observed Science',
+    percentage: 88, isCourseGrade: true, gpaEligible: false }] }));
+  state = Core.mergeSnapshot(state, managebac({ url: 'https://example-school.managebac.cn/student/classes',
+    capturedAt: '2026-09-18T02:00:00Z', courses: [{ id: 'science', name: 'Directory Science', percentage: null,
+      isCourseGrade: false, gpaEligible: false }] }));
+  const courses = Core.getCourses(state);
+  assert.equal(courses.length, 1); assert.equal(courses[0].name, 'Observed Science');
+  assert.equal(courses[0].percentage, 88); assert.equal(Core.estimateGPA(courses).count, 0);
 });
