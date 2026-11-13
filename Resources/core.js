@@ -1681,6 +1681,7 @@
     if (!['homework', 'activity'].includes(value.category)) fail('Teams 分析分类无效');
     const task = { category: value.category, title: str(value.title, 180), summary: str(value.summary, 500),
       evidence: str(value.evidence, 600), deadlineText: str(value.deadlineText, 400) };
+    if (value.participationEvidence !== undefined) task.participationEvidence = str(value.participationEvidence, 600);
     if (!task.title || !analysisWhitespace(task.evidence)) fail('Teams 分析缺少待办证据');
     if (value.id !== undefined) task.id = teamsID(value.id);
     return task;
@@ -1725,6 +1726,7 @@
       } else {
         if (!['ready', 'failed'].includes(raw.status) || !['actionable', 'notice', 'uncertain'].includes(raw.classification)) fail('Teams 分析状态无效');
         row.status = raw.status; row.classification = raw.classification;
+        if (raw.retryRequested !== undefined) row.retryRequested = bool(raw.retryRequested);
         row.model = str(raw.model, 100); if (teamsAnalysisModel({ settings: { aiModel: row.model } }) !== row.model) fail('Teams 分析模型无效');
         row.summary = str(raw.summary, 1200); row.error = str(raw.error, 500);
         if (raw.primaryTaskIdentity !== undefined) {
@@ -1823,23 +1825,93 @@
     }
     return rows;
   }
-  function validTeamsAnalysisRecord(state, source) {
+  function analysisDay(value) { return new Date(new Date(value).valueOf() + 8 * 3600000).toISOString().slice(0, 10); }
+  function teamsPublicationDay(source) {
+    if (source.input.publishedAt) return analysisDay(source.input.publishedAt);
+    // Old DOM captures sometimes retain a full school-local date only in the
+    // original publication label. Never substitute a capture/sync timestamp.
+    const label = String(source.post && source.post.dateLabel || '');
+    const match = label.match(/^\s*(20\d{2})[年/.-](\d{1,2})[月/.-](\d{1,2})日?(?:\s+\d{1,2}[:：]\d{2}(?::\d{2})?)?\s*$/);
+    if (!match) return null;
+    const day = match[1] + '-' + match[2].padStart(2, '0') + '-' + match[3].padStart(2, '0');
+    try { return dayKey(day); } catch (_) { return null; }
+  }
+  function analyzedTaskDeadline(task, source) {
+    const label = String(task.deadlineText || ''), direct = resolveTaskDeadline({ dueLabel: label });
+    if (direct.dueAt) return Object.assign({}, direct, { referenceDay: analysisDay(direct.dueAt) });
+    const publication = teamsPublicationDay(source);
+    const relatives = [...label.matchAll(/\b(?:today|tomorrow|tonight)\b|今天|今日|今晚|明天|明日|后天/gi)];
+    if (relatives.length === 1 && publication) {
+      const word = relatives[0][0], days = /tomorrow|明天|明日/i.test(word) ? 1 : word === '后天' ? 2 : 0;
+      const day = addDays(publication, days), absolute = label.replace(word, day);
+      const timed = resolveTaskDeadline({ dueLabel: absolute });
+      return Object.assign({}, timed, { referenceDay: day, relative: true, dueLabel: day + ' · ' + label });
+    }
+    // A complete date without a clock is valid day evidence, but must never
+    // become a fabricated midnight deadline or a system countdown.
+    if (/\b20\d{2}\b/.test(label) && !/\d[:：]\d/.test(label)) {
+      const dateOnly = resolveTaskDeadline({ dueLabel: label + ' 00:00' });
+      if (dateOnly.dueAt) return { dueAt: null, referenceDay: analysisDay(dateOnly.dueAt), dueLabel: label, dueResolution: 'date-only' };
+    }
+    return direct;
+  }
+  function automaticTaskRestriction(state, task, source, now) {
+    // A user's explicit correction remains authoritative. This gate only
+    // controls automatically generated tasks; it never completes a task.
+    if ((state.settings.teamsDueOverrides || {})[task.id]) return '';
+    const quote = analysisWhitespace(task.evidence), today = analysisDay(now === undefined ? Date.now() : now);
+    const due = analyzedTaskDeadline(task, source), publication = teamsPublicationDay(source);
+    const age = publication ? (Date.parse(today) - Date.parse(publication)) / 86400000 : Infinity;
+    if (/\b(?:(?:do not|don't|must not)\s+(?:submit|complete|attend|bring|write)|no need to|already (?:completed|submitted)|cancelled)\b|无需|不必|已取消|已完成|已提交/.test(quote.toLowerCase())) return 'cancelledAction';
+    if (task.category === 'homework') {
+      if (source.input.officialAssignment) return '';
+      if (/\b(?:optional|if you (?:want|wish|are interested)|feel free)\b|自愿|有兴趣|感兴趣|如有需要|如果.*(?:想|希望)/i.test(quote)) return 'optionalAction';
+      const preparation = /\b(?:bring|take.*to class)\b.{0,100}\b(?:binder|textbook|book|notebook|calculator|materials?)\b|带.*(?:文件夹|教材|课本|笔记本|计算器|材料)/i.test(quote);
+      const academic = /\b(?:submit|complete|finish|write|read|annotate|revise|correct|solve|answer|study|review|practice|prepare|memorize|learn|make|take)\b|提交|完成|写|阅读|批注|订正|解答|复习|练习|背诵|预习|笔记|回答|学习|整理|做|读/i.test(quote) &&
+        /\b(?:assignments?|homework|reports?|essays?|worksheets?|workbooks?|practice sheets?|chapters?|quizzes?|tests?|exams?|notes?|vocab(?:ulary)?|lessons?|exercises?|problems?|readings?|annotations?|labs?|study guides?|questions?|reflections?|projects?|presentations?|portfolios?|journals?|experiments?|diagrams?|calculations?)\b|作业|报告|作文|论文|练习|试卷|章节|测验|考试|笔记|词汇|单词|课文|阅读|批注|订正|习题|题目|背诵|学探诊|第[一二三四五六七八九十0-9]{1,5}[章课题节]/i.test(quote);
+      if (!preparation && !academic) return 'nonAcademicHomework';
+      if (preparation) return !due.referenceDay ? 'taskDate' : due.referenceDay < today ? 'pastPreparation' : '';
+      if (due.relative && age > 14) return 'staleRelativeTask';
+      if (!due.referenceDay && task.deadlineText) return 'taskDate';
+      if (!due.referenceDay && (age < 0 || age > 14)) return 'staleUndatedTask';
+      // An actual assignment with an explicit absolute past deadline remains
+      // unfinished; mere age must not mark genuine overdue homework completed.
+      return '';
+    }
+    if (!due.referenceDay) return 'activityDate';
+    if (due.referenceDay < today) return 'pastActivity';
+    const proof = analysisWhitespace(task.participationEvidence);
+    // Invitations are not a commitment. A quoted obligation or confirmed
+    // participation is required in addition to an exact event/deadline date.
+    if (!proof || !source.evidenceText.includes(proof) ||
+        /\b(?:optional|welcome to|invited to|feel free|if you (?:want|wish|are interested))\b|自愿|有兴趣|感兴趣|欢迎.*(?:报名|参加)|诚邀/i.test(proof) ||
+        !/\b(?:must|mandatory|required|compulsory|assigned|confirmed|registered|signed up)\b|必须|务必|须参加|需参加|全体.*参加|已报名|报名成功|已确认|被安排/i.test(proof)) return 'activityParticipation';
+    return '';
+  }
+  function validTeamsAnalysisRecord(state, source, now) {
     const row = (state.teamsAnalysis || {})[source.id];
-    if (!row || row.accountId !== source.accountId || row.fingerprint !== source.input.fingerprint || row.model !== teamsAnalysisModel(state)) return undefined;
+    if (!row || row.retryRequested || row.accountId !== source.accountId || row.fingerprint !== source.input.fingerprint || row.model !== teamsAnalysisModel(state)) return undefined;
     if (row.classification === 'actionable' && row.tasks.some(task => !analysisWhitespace(task.evidence) || !source.evidenceText.includes(analysisWhitespace(task.evidence)) ||
         (task.deadlineText && !source.deadlineEvidenceText.includes(analysisWhitespace(task.deadlineText))))) return Object.assign({}, row, { classification: 'uncertain', tasks: [] });
     const tasks = uniqueTeamsAnalysisTasks(row.tasks, state.taskChecks);
-    return tasks ? (tasks.length === row.tasks.length ? row : Object.assign({}, row, { tasks })) : Object.assign({}, row, { classification: 'uncertain', tasks: [] });
+    if (!tasks) return Object.assign({}, row, { classification: 'uncertain', tasks: [] });
+    const checked = tasks.map(task => ({ task, reason: automaticTaskRestriction(state, task, source, now) }));
+    const restricted = checked.map(row => row.reason).filter(Boolean);
+    const admitted = checked.filter(row => !row.reason).map(row => row.task);
+    if (restricted.length) return Object.assign({}, row, { tasks: admitted,
+      classification: admitted.length ? 'actionable' : restricted.every(reason => ['pastActivity', 'pastPreparation', 'nonAcademicHomework', 'optionalAction', 'cancelledAction'].includes(reason)) ? 'notice' : 'uncertain',
+      restrictionReason: restricted.includes('pastActivity') ? 'pastActivity' : restricted[0] });
+    return tasks.length === row.tasks.length ? row : Object.assign({}, row, { tasks });
   }
   function validTeamsAnalysisOverride(state, source) {
     if (!source) return undefined;
     const row = (state.teamsAnalysisOverrides || {})[source.id];
     return row && row.accountId === source.accountId && row.fingerprint === source.input.sourceFingerprint ? row : undefined;
   }
-  function getTeamsAnalysisRecord(state, value) {
+  function getTeamsAnalysisRecord(state, value, now) {
     const source = teamsAnalysisIndex(state).byID.get(teamsID(value));
     if (!source) return undefined;
-    const row = validTeamsAnalysisRecord(state, source), manualOverride = validTeamsAnalysisOverride(state, source);
+    const row = validTeamsAnalysisRecord(state, source, now), manualOverride = validTeamsAnalysisOverride(state, source);
     if (!manualOverride) return row;
     return Object.assign({}, row || { status: 'ready', classification: manualOverride.category === 'notice' ? 'notice' : 'actionable', summary: '', tasks: [] }, { manualOverride });
   }
@@ -1938,29 +2010,39 @@
     if (Object.keys(overrides).length > 10000) fail('Teams 人工分类过多');
     const next = Object.assign({}, state, { teamsAnalysisOverrides: overrides }); checkSize(next); return next;
   }
-  function analyzedTeamsTasks(state) {
+  function analyzedTeamsTasks(state, now) {
     const rows = [];
     for (const source of teamsAnalysisIndex(state).byID.values()) {
-      const manual = validTeamsAnalysisOverride(state, source), record = validTeamsAnalysisRecord(state, source);
+      const manual = validTeamsAnalysisOverride(state, source), record = validTeamsAnalysisRecord(state, source, now);
       if (manual && manual.category === 'notice') continue;
       const original = source.task || source.post || {}, input = source.input;
       const tasks = manual ? [{ id: source.id, category: manual.category, title: original.title || input.title, summary: '', evidence: '', deadlineText: '' }] :
         state.settings.teamsAnalysisEnabled && record && record.status === 'ready' && record.classification === 'actionable' ? record.tasks : [];
       for (const task of tasks) {
-        const due = manual ? resolveTaskDeadline(source.task || { requirements: original.text }) : task.deadlineText ? resolveTaskDeadline({ dueLabel: task.deadlineText }) :
+        const due = manual ? resolveTaskDeadline(source.task || { requirements: original.text }) : task.deadlineText ? analyzedTaskDeadline(task, source) :
           source.task && source.task.dueAt && tasks.length === 1 && task.category === 'homework' ? { dueAt: source.task.dueAt, dueResolution: 'source' } : { dueAt: null };
         const override = (state.settings.teamsDueOverrides || {})[task.id];
+        let body = String(original.text || original.requirements || '').trim();
+        // DOM extraction may append the alt title of a trailing image. Only
+        // remove a literal known attachment title, never arbitrary source text.
+        for (const file of original.attachments || []) {
+          const suffix = String(file.title || '').trim();
+          if (suffix && body.endsWith('\n' + suffix)) body = body.slice(0, -suffix.length).trim();
+        }
+        const duplicateKey = !manual && !override && !source.input.officialAssignment && source.accountId && body.length >= 80 ?
+          teamsAnalysisDigest(JSON.stringify([source.accountId, analysisWhitespace(body), task.category, due.dueAt || due.referenceDay || teamsPublicationDay(source), analysisWhitespace(task.evidence)])) : '';
         rows.push({ id: task.id, title: task.title, category: task.category, course: input.channel, source: 'teams', manual: false,
+          ...(duplicateKey ? { analysisDuplicateKey: duplicateKey } : {}),
           analysisSourceId: source.id, analysisSummary: task.summary || record && record.summary || '', analysisEvidence: task.evidence,
           requirements: original.requirements || original.text || '', attachments: [...new Map(Object.values(source.rows).flatMap(item => item.row.attachments || []).map(file => [file.id || file.url || file.title, file])).values()],
           sourceURL: input.sourceURL, url: input.url, capturedAt: original.capturedAt || source.page.capturedAt,
-          status: source.task && source.task.status || 'unknown', dueAt: override || due.dueAt, originalDueAt: due.dueAt, dueLabel: task.deadlineText || original.dueLabel || '', dueResolution: override ? 'manual' : due.dueResolution || 'unknown', dueOverride: !!override,
+          status: source.task && source.task.status || 'unknown', dueAt: override || due.dueAt, originalDueAt: due.dueAt, dueLabel: due.dueLabel || task.deadlineText || original.dueLabel || '', dueResolution: override ? 'manual' : due.dueResolution || 'unknown', dueOverride: !!override,
           completed: Object.prototype.hasOwnProperty.call(state.taskChecks, task.id) ? state.taskChecks[task.id] : done(source.task && source.task.status) });
       }
     }
     return rows;
   }
-  function getTasks(state) {
+  function getTasks(state, now) {
     const rows = [], seenIds = new Set(), seenKeys = new Set();
     const mbCourses = entries(state, 'managebac').flatMap(s => s.courses || []);
     for (const s of entries(state, 'managebac')) for (const task of s.tasks || []) {
@@ -1972,7 +2054,17 @@
         completed: Object.prototype.hasOwnProperty.call(state.taskChecks, task.id) ? state.taskChecks[task.id] : done(task.status) }));
     }
     const analysisActive = state.settings.teamsAnalysisEnabled || Object.keys(state.teamsAnalysisOverrides || {}).length > 0;
-    if (analysisActive) rows.push(...analyzedTeamsTasks(state));
+    if (analysisActive) {
+      const positions = new Map(), analyzed = [];
+      for (const task of analyzedTeamsTasks(state, now)) {
+        const key = task.analysisDuplicateKey;
+        if (!key || !positions.has(key)) { if (key) positions.set(key, analyzed.length); analyzed.push(task); continue; }
+        const old = analyzed[positions.get(key)];
+        old.duplicateTaskIds = [...new Set([...(old.duplicateTaskIds || [old.id]), task.id])];
+        old.completed = old.completed || task.completed;
+      }
+      rows.push(...analyzed);
+    }
     const teamRows = state.settings.teamsAnalysisEnabled ? [] : entries(state, 'teams').flatMap(s => (s.tasks || []).filter(task => {
       if (analysisActive && validTeamsAnalysisOverride(state, teamsAnalysisIndex(state).byID.get(teamsID(task.id)))) return false;
       if (task.officialAssignment === true) return true;
@@ -2004,6 +2096,13 @@
     }).map((task, index) => ({ task, index, dueAt: Date.parse(task.dueAt) || Infinity }))
       .sort((a, b) => Number(a.task.completed) - Number(b.task.completed) || a.dueAt - b.dueAt || a.task.title.localeCompare(b.task.title) || a.index - b.index)
       .map(row => row.task);
+  }
+  function setTaskCompleted(state, taskID, completed) {
+    const task = getTasks(state).find(row => row.id === taskID);
+    if (!task || typeof completed !== 'boolean') return state;
+    const checks = Object.assign({}, state.taskChecks);
+    for (const id of task.duplicateTaskIds || [task.id]) checks[id] = completed;
+    return Object.assign({}, state, { taskChecks: checks });
   }
   function getTeamsPosts(state, kind) {
     const rows = entries(state, 'teams').flatMap(s => (s.posts || []).map(post => Object.assign({}, post,
@@ -2503,6 +2602,6 @@
       changes: state.changeLog.slice().sort((a, b) => Date.parse(b.capturedAt) - Date.parse(a.capturedAt)) };
   }
   return Object.freeze({ VERSION, GPA_BANDS, GPA_BANDED_METHOD: METHOD, configureSchools, schoolHomes, normalizeSchoolHome, emptyState, defaultState: emptyState, effectiveColorTheme, validateState, normalizeState: validateState, validateAssistantConversations, assistantHistoryHasCapacity, exportBackup, importBackup,
-    mergeSnapshot, resetTeamsData, clearTeamsData: resetTeamsData, today, clock, getSchedule, getCourses, getTasks, taskReviewInputFingerprint, taskReviewIsCurrent, teamsAnalysisModel, getTeamsAnalysisInputs, getTeamsAnalysisRecord, getTeamsAnalysisSummary, applyTeamsAnalysisResults, setTeamsAnalysisOverride, resolveTaskDeadline, parseManualDeadline, normalizePersonalEvent: personalEventRow, getFeedback, getGradeUpdates, markGradeUpdatesRead, getOfficialGPA, estimateGPA, estimateLinearGPA, semesterGPAForecast,
+    mergeSnapshot, resetTeamsData, clearTeamsData: resetTeamsData, today, clock, getSchedule, getCourses, getTasks, setTaskCompleted, taskReviewInputFingerprint, taskReviewIsCurrent, teamsAnalysisModel, getTeamsAnalysisInputs, getTeamsAnalysisRecord, getTeamsAnalysisSummary, applyTeamsAnalysisResults, setTeamsAnalysisOverride, resolveTaskDeadline, parseManualDeadline, normalizePersonalEvent: personalEventRow, getFeedback, getGradeUpdates, markGradeUpdatesRead, getOfficialGPA, estimateGPA, estimateLinearGPA, semesterGPAForecast,
     getNextClass, getClassClock, createClassClockReader, scheduleInterval, getSchedulePeriods, getTeamsPosts, getTeamsEC, getTeamsGrades, getSourceStatus, buildView, getSchoolCalendarEvents, schoolCalendarScheduleRule, schoolCalendarScheduleConflict, parseSchoolCalendarICS, parseSchoolCalendarPDFText, safeURL, safeAttachmentURL, gradePoints: points, linearGradePoints: linearPoints });
 });

@@ -12,21 +12,21 @@ function fixture() {
   const url = 'https://teams.microsoft.com/v2/#/channels/synthetic-class';
   const rows = [
     ['homework', 'Practice sheet', 'Complete the practice sheet.', 'assignment'],
-    ['activity', 'Science fair', 'Attend the science fair.', 'ec'],
+    ['activity', 'Science fair', 'All students must attend the science fair. Fair date: 2032-11-13 17:00', 'ec'],
     ['notice', 'Lunch menu', 'The lunch menu changed. No homework is required.', 'assignment'],
     ['pending', 'New message', 'A new school message.', 'general'],
     ['failed', 'Unreadable announcement', 'Please check the original announcement.', 'general'],
     ['uncertain', 'Unclear meeting', 'Maybe meet later.', 'general']
   ];
   let state = Core.mergeSnapshot(Core.emptyState(), { source: 'teams', url, accountId: 'synthetic-account', capturedAt: '2026-09-19T00:00:00Z', coverage: 'visible', warnings: [],
-    posts: rows.map(([id, title, text, kind]) => ({ id, title, text, kind, channel: 'SYNTHETIC', author: 'Teacher', url, date: '2026-09-18T00:00:00Z' })),
+    posts: rows.map(([id, title, text, kind]) => ({ id, title, text, kind, channel: 'SYNTHETIC', author: 'Teacher', url, date: new Date().toISOString() })),
     tasks: rows.slice(0, 3).map(([id, title, text]) => ({ id, title, requirements: text, course: 'SYNTHETIC', dueAt: '2030-09-29T10:00:00Z', status: 'open', officialAssignment: false, url }))
   });
   Object.assign(state.settings, { teamsAnalysisEnabled: true, aiProvider: 'off', dashboardTheme: 'board', colorTheme: 'midnight' });
   const results = Core.getTeamsAnalysisInputs(state).filter(input => !input.id.endsWith(':pending')).map(input => {
     const name = input.id.split(':').at(-1), kind = ['homework', 'activity'].includes(name) ? name : null;
     return { id: input.id, fingerprint: input.fingerprint, status: name === 'failed' ? 'failed' : 'ready', error: name === 'failed' ? 'Network unavailable' : '', summary: 'Summary: ' + input.title,
-      classification: kind ? 'actionable' : name === 'notice' ? 'notice' : 'uncertain', tasks: kind ? [{ category: kind, title: input.title, summary: 'Action: ' + input.title, evidence: rows.find(row => row[0] === name)[2], deadlineText: '' }] : [] };
+      classification: kind ? 'actionable' : name === 'notice' ? 'notice' : 'uncertain', tasks: kind ? [{ category: kind, title: input.title, summary: 'Action: ' + input.title, evidence: rows.find(row => row[0] === name)[2], deadlineText: kind === 'activity' ? '2032-11-13 17:00' : '', ...(kind === 'activity' ? { participationEvidence: 'All students must attend the science fair.' } : {}) }] : [] };
   });
   return Core.applyTeamsAnalysisResults(state, { model: Core.teamsAnalysisModel(state), results });
 }
@@ -45,6 +45,55 @@ async function openFixture(browser, hash = 'tasks', state = fixture(), native = 
   return { page, errors };
 }
 
+test('API restrictions explain blocked cached activities and retain the original record', optional, async () => {
+  const browser = await launchChromium();
+  try {
+    const state = fixture();
+    state.teamsAnalysis['teams:activity'].tasks[0].participationEvidence = '';
+    const { page, errors } = await openFixture(browser, 'teams', state);
+    const activity = page.locator('.teams-post').filter({ has: page.locator('h3', { hasText: 'Science fair' }) });
+    assert.match(await activity.locator('.teams-analysis-restriction').innerText(), /缺少明确参加义务/);
+    assert.match(await activity.innerText(), /待核对/);
+    await page.locator('[data-page="tasks"]').first().click();
+    await page.locator('[data-action="task-category-filter"][data-category="activity"]').click();
+    assert.doesNotMatch(await page.locator('.todo-page-content').innerText(), /Science fair/);
+    await page.locator('[data-page="settings"]').first().click();
+    assert.match(await page.locator('.teams-analysis-rules').innerText(), /API 归纳限制/);
+    assert.match(await page.locator('.teams-analysis-rules').innerText(), /真正未完成的逾期作业继续保留/);
+    const saved = await page.evaluate(() => JSON.parse(localStorage.getItem('campusdesk.browser.v1')));
+    assert.equal(saved.teamsAnalysis['teams:activity'].tasks.length, 1, 'restriction does not delete analysis history');
+    assert.deepEqual(errors, []);
+  } finally { await browser.close(); }
+});
+test('old notifications mislabeled as homework cannot survive in current tasks or lose their originals', optional, async () => {
+  const browser = await launchChromium();
+  try {
+    const url = 'https://teams.microsoft.com/v2/#/channels/synthetic-old-notices';
+    const examples = [
+      ['bad-attendance', 'Attend all three screenings for extra credit.', ''],
+      ['bad-binder', 'Bring binder with required contents.', 'tomorrow'],
+      ['bad-registration', 'Check course registration for errors.', '']
+    ];
+    let state = Core.mergeSnapshot(fixture(), { source: 'teams', url, accountId: 'synthetic-account', capturedAt: new Date().toISOString(),
+      posts: examples.map(([id, text, deadline]) => ({ id, title: 'Regression ' + id, text: text + '\n' + deadline,
+        date: '2023-09-05T08:00:00Z', kind: 'general', channel: 'Synthetic old notices', url })) });
+    state = Core.applyTeamsAnalysisResults(state, { model: Core.teamsAnalysisModel(state), results: Core.getTeamsAnalysisInputs(state).filter(input => input.title.startsWith('Regression ')).map(input => {
+      const example = examples.find(([id]) => input.id.endsWith(id));
+      return { id: input.id, fingerprint: input.fingerprint, status: 'ready', classification: 'actionable', summary: 'Old cached homework label',
+        tasks: [{ category: 'homework', title: example[1], evidence: example[1], deadlineText: example[2] }] };
+    }) });
+    const { page, errors } = await openFixture(browser, 'tasks', state);
+    assert.doesNotMatch(await page.locator('.todo-page-content').innerText(), /Attend all three|Bring binder|Check course registration/);
+    assert.match(await page.locator('.todo-page-content').innerText(), /Practice sheet/);
+    await page.locator('[data-page="teams"]').first().click();
+    assert.equal(await page.locator('.teams-post').filter({ hasText: 'Regression bad-' }).count(), 3);
+    assert.match(await page.locator('.teams-analysis-restriction').allTextContents().then(rows => rows.join('\n')), /原帖日期已过|缺少明确学业作业/);
+    const saved = await page.evaluate(() => JSON.parse(localStorage.getItem('campusdesk.browser.v1')));
+    for (const [id] of examples) assert.equal(saved.teamsAnalysis['teams:' + id].tasks.length, 1);
+    assert.deepEqual(errors, []);
+  } finally { await browser.close(); }
+});
+
 test('Teams analysis keeps notices out of both to-do tabs, preserves originals and respects manual correction', optional, async () => {
   const browser = await launchChromium();
   try {
@@ -56,7 +105,7 @@ test('Teams analysis keeps notices out of both to-do tabs, preserves originals a
     assert.doesNotMatch(await page.locator('.todo-page-content').innerText(), /Practice sheet/);
     await page.locator('.todo-card-hit').click();
     assert.match(await page.locator('#detail-content').innerText(), /活动原文与安排|原文依据/);
-    assert.match(await page.locator('.teams-analysis-evidence').innerText(), /Attend the science fair/);
+    assert.match(await page.locator('.teams-analysis-evidence').innerText(), /attend the science fair/i);
     assert.equal(await page.locator('#detail-content [data-action="open-source"]').count(), 1);
     await page.locator('[data-action="close-detail"]').click();
     await page.locator('.todo-complete-button').click();
@@ -65,7 +114,7 @@ test('Teams analysis keeps notices out of both to-do tabs, preserves originals a
     await activity.locator('.teams-analysis-correction summary').click();
     await activity.locator('[data-category="notice"]').click();
     assert.match(await activity.innerText(), /人工分类 · 普通通知/);
-    assert.match(await activity.locator('.post-original').innerText(), /Attend the science fair/);
+    assert.match(await activity.locator('.post-original').innerText(), /attend the science fair/i);
     if (!await activity.locator('[data-category="activity"]').isVisible()) await activity.locator('.teams-analysis-correction summary').click();
     await activity.locator('[data-category="activity"]').click();
     const saved = await page.evaluate(() => JSON.parse(localStorage.getItem('campusdesk.browser.v1')));
@@ -74,7 +123,7 @@ test('Teams analysis keeps notices out of both to-do tabs, preserves originals a
     const text = await page.locator('.teams-groups-card').innerText();
     assert.match(text, /已分析 · 普通通知/); assert.match(text, /待分析/); assert.match(text, /分析失败/); assert.match(text, /已分析 · 待核对/);
     await page.locator('[data-page="ec"]').first().click();
-    assert.match(await page.locator('#ec-results').innerText(), /Attend the science fair/);
+    assert.match(await page.locator('#ec-results').innerText(), /attend the science fair/i);
     assert.match(await page.locator('#content').innerText(), /未匹配到姓名不代表不在名单中/);
     assert.deepEqual(errors, []);
   } finally { await browser.close(); }

@@ -12,7 +12,8 @@ const Agenda = require('../Resources/agenda.js');
 const url = 'https://teams.microsoft.com/v2/';
 const now = '2026-11-12T08:00:00Z', later = '2026-11-12T09:00:00Z';
 const scope = { type: 'channel', id: 'synthetic-channel', label: 'Synthetic class > HOMEWORK', accountId: 'synthetic-account' };
-function capture(records, stamp = now, changes = {}) { return Auto.normalizeRecords(records, { ...scope, ...changes }, url, stamp, 'Synthetic'); }
+const freshPublication = new Date().toISOString();
+function capture(records, stamp = now, changes = {}) { return Auto.normalizeRecords(records.map(record => ({ postedAt: freshPublication, ...record })), { ...scope, ...changes }, url, stamp, 'Synthetic'); }
 function state(records = [{ nativeID: 'read', text: 'Read chapter one.\nDeadline: 2026-11-13 17:00' }]) {
   const value = Core.mergeSnapshot(Core.emptyState(), capture(records));
   value.settings.teamsAnalysisEnabled = true;
@@ -88,10 +89,10 @@ test('pending, failed, notice and uncertain records never become tasks or widget
 });
 
 test('verified analysis produces homework and activities while retaining source evidence and completed IDs', () => {
-  const original = state([{ nativeID: 'read', text: 'Read chapter one.\nJoin the science fair.\nDeadline: 2026-11-13 17:00' }]);
+  const original = state([{ nativeID: 'read', text: 'Read chapter one.\nAll students must attend the science fair. Fair date: 2032-11-13 17:00\nDeadline: 2026-11-13 17:00' }]);
   const sourceID = Core.getTeamsAnalysisInputs(original)[0].id;
   original.taskChecks[sourceID] = true;
-  const activity = { category: 'activity', title: 'Join fair', evidence: 'Join the science fair.', deadlineText: '' };
+  const activity = { category: 'activity', title: 'Join fair', evidence: 'All students must attend the science fair.', participationEvidence: 'All students must attend the science fair.', deadlineText: '2032-11-13 17:00' };
   const value = analyze(original, [homework, activity]);
   assert.strictEqual(value.snapshots, original.snapshots, 'analysis does not clone or mutate raw snapshots');
   assert.equal(original.teamsAnalysis[sourceID], undefined);
@@ -99,7 +100,7 @@ test('verified analysis produces homework and activities while retaining source 
   assert.equal(rows.find(row => row.category === 'homework').completed, true);
   assert.equal(rows.find(row => row.category === 'homework').id, sourceID);
   assert.equal(rows.find(row => row.category === 'homework').dueAt, '2026-11-13T09:00:00.000Z');
-  assert.equal(rows.find(row => row.category === 'activity').dueAt, null, 'do not copy an unrelated inferred deadline onto another action');
+  assert.equal(rows.find(row => row.category === 'activity').dueAt, '2032-11-13T09:00:00.000Z', 'activity uses its own explicit date, not the homework deadline');
   assert.ok(rows.every(row => row.analysisSourceId === sourceID && row.sourceURL === url && row.url === url));
   const repeated = analyze(value, [activity, homework]);
   assert.deepEqual(Core.getTasks(repeated).map(row => [row.title, row.id, row.completed]).sort(), rows.map(row => [row.title, row.id, row.completed]).sort());
@@ -190,9 +191,9 @@ test('an unrelated manual correction cannot hide official assignments when analy
 test('analysis evidence normalizes whitespace while ambiguous dates stay unresolved', () => {
   const value = state([{ nativeID: 'read', text: 'Read\n chapter one.\nDeadline: Friday 17:00' }]);
   const analyzed = analyze(value, [{ ...homework, deadlineText: 'Deadline: Friday 17:00' }]);
-  assert.equal(Core.getTasks(analyzed).length, 1);
-  assert.equal(Core.getTasks(analyzed)[0].dueAt, null);
-  assert.equal(Core.getTeamsAnalysisInputs(analyzed)[0].publishedAt, null);
+  assert.equal(Core.getTasks(analyzed).length, 0);
+  assert.equal(Core.getTeamsAnalysisRecord(analyzed, Core.getTeamsAnalysisInputs(analyzed)[0].id).restrictionReason, 'taskDate');
+  assert.equal(Core.getTeamsAnalysisInputs(analyzed)[0].publishedAt, freshPublication);
   const invalid = structuredClone(analyzed), row = Object.values(invalid.teamsAnalysis)[0];
   row.tasks[0].category = 'notice'; assert.throws(() => Core.validateState(invalid), /分类/);
 });
@@ -234,11 +235,11 @@ test('scheduled review state round-trips and account reset clears prior suggesti
 });
 
 test('new actions cannot steal an older action completion or manually corrected deadline when AI reorders them', () => {
-  let value = state([{ nativeID: 'read', text: 'Read chapter one.\nJoin the science fair.\nDeadline: 2026-11-13 17:00' }]);
+  let value = state([{ nativeID: 'read', text: 'Read chapter one.\nAll students must attend the science fair. Fair date: 2032-11-13 17:00\nDeadline: 2026-11-13 17:00' }]);
   value = analyze(value, [homework]);
   const old = Core.getTasks(value)[0]; value.taskChecks[old.id] = true;
   value.settings.teamsDueOverrides[old.id] = '2026-11-14T09:00:00.000Z';
-  value = analyze(value, [{ category: 'activity', title: 'Join fair', evidence: 'Join the science fair.', deadlineText: '' }, homework]);
+  value = analyze(value, [{ category: 'activity', title: 'Join fair', evidence: 'All students must attend the science fair.', participationEvidence: 'All students must attend the science fair.', deadlineText: '2032-11-13 17:00' }, homework]);
   const tasks = Core.getTasks(value), added = tasks.find(row => row.category === 'activity'), retained = tasks.find(row => row.category === 'homework');
   assert.equal(retained.id, old.id); assert.equal(retained.completed, true); assert.equal(retained.dueOverride, true);
   assert.notEqual(added.id, old.id); assert.equal(added.completed, false); assert.equal(added.dueOverride, false);
@@ -258,7 +259,8 @@ test('repeated AI actions are deduplicated and reclassification keeps the same a
   assert.equal(Core.getTasks(value).length, 1);
   const id = Core.getTasks(value)[0].id; value.taskChecks[id] = true;
   value = analyze(value, [{ ...homework, category: 'activity' }]);
-  assert.equal(Core.getTasks(value)[0].id, id); assert.equal(Core.getTasks(value)[0].completed, true);
+  assert.equal(Object.values(value.teamsAnalysis)[0].tasks[0].id, id); assert.equal(value.taskChecks[id], true);
+  assert.equal(Core.getTasks(value).length, 0, 'an academic task relabeled as activity lacks participation proof');
 });
 
 test('a transient failure and backup restore retain the primary action identity without reviving tasks', () => {
@@ -301,8 +303,8 @@ test('old cached duplicates collapse to their completed copy without deleting or
 });
 
 test('retrying a failed multi-action analysis preserves secondary legacy IDs and completions', () => {
-  let value = state([{ nativeID: 'read', text: 'Read chapter one.\nJoin the science fair.\nDeadline: 2026-11-13 17:00' }]);
-  const fair = { category: 'activity', title: 'Join fair', evidence: 'Join the science fair.', deadlineText: '' };
+  let value = state([{ nativeID: 'read', text: 'Read chapter one.\nAll students must attend the science fair. Fair date: 2032-11-13 17:00\nDeadline: 2026-11-13 17:00' }]);
+  const fair = { category: 'activity', title: 'Join fair', evidence: 'All students must attend the science fair.', participationEvidence: 'All students must attend the science fair.', deadlineText: '2032-11-13 17:00' };
   value = analyze(value, [homework, fair]);
   const row = Object.values(value.teamsAnalysis)[0], secondary = row.tasks.find(task => task.category === 'activity');
   secondary.id = 'teams:action:legacy-v2-hash';value.taskChecks[secondary.id] = true;

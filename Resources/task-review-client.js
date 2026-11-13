@@ -14,7 +14,7 @@
     let status = { running: false, pending: false, message: '', nextRunAt: null, errorCode: '' };
     function iso() { return new Date(now()).toISOString(); }
     function candidates() {
-      return Core.getTasks(getState()).filter(task => !task.completed).map(task => ({ id: task.id,
+      return Core.getTasks(getState(), now()).filter(task => !task.completed).map(task => ({ id: task.id,
         title: String(task.title || '').slice(0, 500), category: task.category === 'activity' ? 'activity' : 'homework',
         dueAt: task.dueAt || '', course: String(task.course || '').slice(0, 300),
         summary: String(task.analysisSummary || task.summary || task.requirements || '').slice(0, 800) }));

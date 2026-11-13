@@ -26,7 +26,8 @@
     return item.tasks.every(task => task && ['homework', 'activity'].includes(task.category) &&
       ['title', 'summary', 'evidence', 'deadlineText'].every(key => typeof task[key] === 'string') &&
       task.title.trim() && task.title.length <= 180 && task.summary.length <= 500 &&
-      task.evidence.trim() && task.evidence.length <= 600 && task.deadlineText.length <= 400);
+      task.evidence.trim() && task.evidence.length <= 600 && task.deadlineText.length <= 400 &&
+      (task.participationEvidence === undefined || typeof task.participationEvidence === 'string' && task.participationEvidence.length <= 600));
   }
   function create(options) {
     const { getState, onState, send } = options;
@@ -117,7 +118,7 @@
           // Keep quotations as literal text. JSON escaping would turn quoted
           // newlines/backslashes into different evidence at the next level.
           return '分段 ' + (i + 1) + '\n归纳：' + result.summary + '\n分类：' + result.classification + '\n' +
-            result.tasks.map(task => ['类别：' + task.category, '标题：' + task.title, '说明：' + task.summary, '原文证据：' + task.evidence, '截止原文：' + task.deadlineText].join('\n')).join('\n');
+            result.tasks.map(task => ['类别：' + task.category, '标题：' + task.title, '说明：' + task.summary, '原文证据：' + task.evidence, '截止原文：' + task.deadlineText, '参加义务原文：' + (task.participationEvidence || '')].join('\n')).join('\n');
         }).join('\n\n');
       if (++job.level > 8) {
         writeFailures([{ job }], '消息内容过长，无法可靠归纳，未生成待办'); return;
@@ -201,15 +202,20 @@
       for (const job of summarized) advance(job);
       publish(); schedule(); return true;
     }
-    function retry(id) {
+    function retry(id, restrictedOnly = false) {
       cancelActive(); clearTimer(); blocked = null; deferUntil = 0; malformedStreak = 0;
       const state = getState(), cache = Object.assign({}, state.teamsAnalysis || {});
-      for (const key of Object.keys(cache)) if ((!id || key === id) && cache[key].status === 'failed') delete cache[key];
+      for (const key of Object.keys(cache)) {
+        const selected = id ? key === id : cache[key].status === 'failed' || restrictedOnly && Core.getTeamsAnalysisRecord(state, key)?.restrictionReason;
+        // Preserve IDs and old quotations while rechecking; deleting a ready
+        // record would detach its completion marks from the replacement result.
+        if (selected) cache[key] = Object.assign({}, cache[key], { retryRequested: true });
+      }
       if (id) jobs.delete(id); else jobs.clear();
       onState(Object.assign({}, state, { teamsAnalysis: cache })); schedule();
     }
     function reset() { cancelActive(); clearTimer(); jobs.clear(); scope = ''; blocked = null; deferUntil = 0; malformedStreak = 0; publish(); }
-    return Object.freeze({ reconcile: () => schedule(), receive, retry, reset, getStatus: () => Object.assign({}, status, { activeIds: status.activeIds.slice() }) });
+    return Object.freeze({ reconcile: () => schedule(), receive, retry, recheckRestricted: () => retry(undefined, true), reset, getStatus: () => Object.assign({}, status, { activeIds: status.activeIds.slice() }) });
   }
   return Object.freeze({ create, split });
 });

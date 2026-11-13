@@ -136,7 +136,7 @@
    * all useful candidates before the 100-item cap (including unresolved work).
    */
   function widgetCandidates(state, day) {
-    const tasks = Core.getTasks(state);
+    const tasks = Core.getTasks(state, at(day));
     const inRange = collect(state, { start: day, end: addDays(day, 7) }, tasks).filter(item => !item.completed);
     const homework = tasks.filter(task => !task.completed).map(task => taskItem(task) || {
       id: 'task:' + task.source + ':' + task.id, title: task.title, kind: 'task', source: task.source,

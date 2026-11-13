@@ -11,7 +11,7 @@ function harness(inputs = [fixture()]) {
   const core = {
     teamsAnalysisModel: state => state.settings.aiModel,
     getTeamsAnalysisInputs: state => state.inputs,
-    getTeamsAnalysisRecord: (state, id) => state.teamsAnalysis[id]?.fingerprint === state.inputs.find(input => input.id === id)?.fingerprint ? state.teamsAnalysis[id] : undefined,
+    getTeamsAnalysisRecord: (state, id) => !state.teamsAnalysis[id]?.retryRequested && state.teamsAnalysis[id]?.fingerprint === state.inputs.find(input => input.id === id)?.fingerprint ? state.teamsAnalysis[id] : undefined,
     getTeamsAnalysisSummary: state => ({ pending: state.inputs.filter(input => !core.getTeamsAnalysisRecord(state, input.id)).length }),
     applyTeamsAnalysisResults: (state, data) => {
       const cache = { ...state.teamsAnalysis };
@@ -52,6 +52,32 @@ test('Teams classifier sends each captured message once and reuses persisted res
   h.success(); h.tick(); assert.equal(h.requests().length, 2); assert.equal(h.requests()[1].items.length, 4);
   h.success(); h.tick(); h.client.reconcile(); h.tick(); assert.equal(h.requests().length, 2);
   assert.equal(Object.keys(h.state.teamsAnalysis).length, 12);
+});
+test('explicit recheck resends ready restricted results without deleting old records', () => {
+  const h = harness();
+  h.state.teamsAnalysis['teams:one'] = { fingerprint: 'a'.repeat(64), model: 'deepseek-flash', status: 'ready', classification: 'uncertain',
+    restrictionReason: 'nonAcademicHomework', tasks: [{ id: 'saved-action', title: 'Old label' }] };
+  h.client.recheckRestricted();
+  assert.equal(h.state.teamsAnalysis['teams:one'].tasks[0].id, 'saved-action');
+  assert.equal(h.state.teamsAnalysis['teams:one'].retryRequested, true);
+  h.tick(); assert.equal(h.requests().length, 1);
+  h.success(); assert.equal(h.state.teamsAnalysis['teams:one'].retryRequested, undefined);
+});
+test('participation proof survives long-message reduction and oversized proof is rejected', () => {
+  const proof = 'All registered students must attend.';
+  const h = harness([fixture('x'.repeat(33000) + '\n' + proof)]);
+  h.client.reconcile(); h.tick();
+  const request = h.requests().at(-1);
+  h.success(request, result => request.items.find(item => item.id === result.id).text.includes(proof) ? {
+    ...result, classification: 'actionable', tasks: [{ category: 'activity', title: 'Attend workshop', summary: '',
+      evidence: proof, deadlineText: '', participationEvidence: proof }]
+  } : result);
+  h.tick();
+  assert.equal(h.requests().at(-1).phase, 'classify');
+  assert.ok(h.requests().at(-1).items[0].text.includes('参加义务原文：' + proof));
+  h.success(undefined, result => ({ ...result, classification: 'actionable', tasks: [{ category: 'activity', title: 'Attend', summary: '',
+    evidence: proof, deadlineText: '', participationEvidence: 'x'.repeat(601) }] }));
+  assert.equal(h.state.teamsAnalysis['teams:one'].status, 'failed');
 });
 test('Teams classifier reads all long attachment text before publishing one final classification', () => {
   const text = 'start:' + '😀'.repeat(51000) + ':important final page';

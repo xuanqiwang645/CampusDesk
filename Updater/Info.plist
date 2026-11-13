@@ -6,7 +6,7 @@
   <key>CFBundleDisplayName</key><string>CampusDesk 更新补丁</string>
   <key>CFBundleExecutable</key><string>CampusDeskPatch</string>
   <key>CFBundlePackageType</key><string>APPL</string>
-  <key>CFBundleShortVersionString</key><string>2.0.1</string>
+  <key>CFBundleShortVersionString</key><string>2.0.2</string>
   <key>CFBundleVersion</key><string>1</string>
   <key>LSMinimumSystemVersion</key><string>12.0</string>
   <key>NSHighResolutionCapable</key><true/>

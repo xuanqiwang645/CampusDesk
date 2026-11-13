@@ -316,7 +316,8 @@ struct CampusWidgetView: View {
 
     private func deadlineDate(_ item: CampusWidgetItem) -> String {
         guard item.start != nil else { return "待确认" }
-        let date = String(item.date.suffix(5)).replacingOccurrences(of: "-", with: "/")
+        let sameYear = item.date.prefix(4) == CampusWidgetSnapshot.dayString(entry.date).prefix(4)
+        let date = (sameYear ? String(item.date.suffix(5)) : item.date).replacingOccurrences(of: "-", with: "/")
         return date + (item.start.map { " " + timeString($0) } ?? "")
     }
 

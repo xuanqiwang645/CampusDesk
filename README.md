@@ -1,11 +1,11 @@
-# CampusDesk · v2.0.1 Tarantula
+# CampusDesk · v2.0.2 Tarantula
 
 面向使用M系列 mac 的国际部学生打造的集中查看希悦课表、ManageBac课程总评和GPA估算、待办与可识别的教师反馈。同时，对北京101国际部特色活动English Corner（EC）有特别优化
 
 
-**最新版本：v2.0.1 Tarantula · Build 103。** 普通版与主题版均提供 Apple Silicon（M 系列）Mac 安装包，最低 macOS 12；主题版桌面小组件需要 macOS 14，原生玻璃工具栏需要 macOS 26 或更新版本。
+**最新版本：v2.0.2 Tarantula · Build 105。** 普通版与主题版均提供 Apple Silicon（M 系列）Mac 安装包，最低 macOS 12；主题版桌面小组件需要 macOS 14，原生玻璃工具栏需要 macOS 26 或更新版本。
 
-[通用升级补丁 DMG](https://github.com/xuanqiwang645/CampusDesk/releases/download/v2.0.1/CampusDesk-v2.0.1-Tarantula-build103-Update-Patch1-macOS-arm64.dmg) · [主题版完整安装包](https://github.com/xuanqiwang645/CampusDesk/releases/download/v2.0.1/CampusDesk-Theme-Edition-v2.0.1-build103-macOS-arm64.dmg) · [普通版完整安装包](https://github.com/xuanqiwang645/CampusDesk/releases/download/v2.0.1/CampusDesk-v2.0.1-build103-macOS-arm64.dmg) · [全部 ZIP、发布说明与下载](https://github.com/xuanqiwang645/CampusDesk/releases/tag/v2.0.1) · [SHA-256 校验文件](https://github.com/xuanqiwang645/CampusDesk/releases/download/v2.0.1/SHA256SUMS.txt)
+[通用升级补丁 DMG](https://github.com/xuanqiwang645/CampusDesk/releases/download/v2.0.2/CampusDesk-v2.0.2-Tarantula-build105-Update-Patch1-macOS-arm64.dmg) · [主题版完整安装包](https://github.com/xuanqiwang645/CampusDesk/releases/download/v2.0.2/CampusDesk-Theme-Edition-v2.0.2-build105-macOS-arm64.dmg) · [普通版完整安装包](https://github.com/xuanqiwang645/CampusDesk/releases/download/v2.0.2/CampusDesk-v2.0.2-build105-macOS-arm64.dmg) · [全部 ZIP、发布说明与下载](https://github.com/xuanqiwang645/CampusDesk/releases/tag/v2.0.2) · [SHA-256 校验文件](https://github.com/xuanqiwang645/CampusDesk/releases/download/v2.0.2/SHA256SUMS.txt)
 
 已安装任一旧普通版或主题版，请使用通用补丁：双击更新器，核对原应用后安装。它保持原应用标识和路径，先备份并逐文件核验本机资料与登录会话，再替换应用；成功后重新打开新版，更新器自动退出并移入废纸篓。两版可以并存，补丁一次更新所选版本，不合并资料。详见[补丁使用与兼容说明](Updater/README.md)。
 
@@ -15,16 +15,13 @@
 
 如发现任何值得改进的地方，欢迎联系我！邮箱：xuanqiwang645@gmail.com
 
-## v2.0.1 Tarantula 修复
+## v2.0.2 Tarantula · 全部 AI 待办核验
 
-- 修复 ManageBac 课程发现和成绩显示遗漏：课程根链接与折叠侧栏中的课程均可进入读取；单科读取失败后继续处理其他课程。目录中尚未读到总评的课程也保留显示，分别标明已发现课程数与计入 GPA 的课程数。
-- 按课程 ID 合并目录和实测成绩，旧页面不覆盖新课程资料；新学期尚未出分时不再显示上学期成绩。学期不明或没有总评的课程不计入 GPA，也不当作零分。
-- 修复 Teams 多动作排序变化后完成标记或人工截止时间串到另一任务的问题。频道名、发布时间和缺少原帖的旧启发式通知不能单独生成作业；证据不足的旧分析保留在消息页待核对。
-- 修复定时提醒重试期间任务已变化仍继续分析、长时间冷却结束后连续提醒的问题；尊重服务端完整冷却时间。任务完成或内容变更后，旧建议不再展示为当前建议，历史报告保留，系统通知在发送前再次核对。
-- 只开启定时提醒时，也可独立设置 DeepSeek 密钥与模型。继续保留总览右侧宽版提醒框、1～10 小时间隔、立即分析、关闭开关与小三角完整折叠。
-- 普通版和主题版继续提供完整安装包与通用原位补丁。升级先备份并核验资料和会话，保持原应用标识与数据目录；成功后清理更新器，保留主程序与备份。
+旧缓存也必须重新通过本地准入，不能只靠 AI 的“homework”标签进入作业。选课、注册检查、行政通知和活动邀请不能冒充学业任务；带文件夹等课堂准备必须有适用日期。tomorrow 以原帖日期为基准，不随抓取日滚动；缺少明确截止、发表日不明或超过 14 天的旧内容留在消息页核对。正式学校作业、个人任务及明确绝对截止的真正逾期作业保留。
 
-详见 [v2.0.1 发布说明](releases/v2.0.1.md)。本修复版取代 v2.0.0 的下载入口；[v2.0.0 说明](releases/v2.0.0.md)保留为历史记录。
+活动另需原文中的参加义务／已确认报名依据；结束的活动退出当前待办与小组件。相同原文、行动依据及日期的重复自动任务合并展示，完成操作关联全部重复编号。原文、旧分析和人工记录保留，提供“按新规则重审受限分析”入口并明确 API 计费。
+
+提供两版完整包、通用升级补丁，以及 [空白配置模板](https://github.com/xuanqiwang645/CampusDesk/releases/download/v2.0.2/CampusDesk-v2.0.2-Blank-Configuration.zip)。详见 [v2.0.2 发布说明](releases/v2.0.2.md)。
 
 延续此前的 Teams 先分析后分类流程：开启「Teams 自动整理」后，已抓取的消息正文和已读取的附件全文先交给 DeepSeek 归纳，确认需要行动后才进入作业或活动待办。普通通知、待分析、失败与待确认内容留在消息页，支持人工纠错、重试及原文变化后重新分析；首页、待办、行事历、小组件与提醒共用相同分类结果。
 
@@ -72,8 +69,9 @@ DeepSeek API 密钥通过原生组件保存在 macOS 钥匙串中。安装包不
 
 ## 版本记录
 
-提交链、托管工作树和实机验收范围见[开发历史与工作树交接](docs/development-history.md)。当前修复版使用标签 `v2.0.1`，历史版本说明保留。
+提交链、托管工作树和实机验收范围见[开发历史与工作树交接](docs/development-history.md)。当前修复版使用标签 `v2.0.2`，历史版本说明保留。
 
+- [v2.0.2 Tarantula · Build 105](releases/v2.0.2.md) — API 归纳限制、历史活动过滤、参加证据复核与重复活动合并。
 - [v2.0.1 Tarantula · Build 103](releases/v2.0.1.md) — 课程发现与成绩覆盖、Teams 任务匹配与通知过滤、提醒过期与限流修复。
 - [v2.0.0 Tarantula · Build 101](releases/v2.0.0.md) — 可完全折叠的宽版提醒、普通版与主题版通用升级、资料保留与更新器自动清理。
 
@@ -111,7 +109,7 @@ Teams 默认模式在 Teams 页面内使用当前账号会话访问内部服务�
 
 ## 主题版源码构建
 
-仓库包含两版完整源码。默认 `bash build.sh` 构建普通版 v2.0.1；构建主题版请使用：
+仓库包含两版完整源码。默认 `bash build.sh` 构建普通版 v2.0.2；构建主题版请使用：
 
 ```sh
 CAMPUSDESK_INFO_PLIST="$PWD/Info-ThemeEdition.plist" bash build.sh
@@ -135,7 +133,7 @@ CAMPUSDESK_INFO_PLIST="$PWD/Info-ThemeEdition.plist" bash scripts/package-macos.
 shasum -a 256 -c SHA256SUMS.txt
 ```
 
-当前源码版本为 **v2.0.1 Tarantula / Build 103**，安装包命名与校验清单见 [v2.0.1 发布说明](releases/v2.0.1.md)。继续保留学习助手本机历史、全文搜索、独立草稿、重启后续聊、成绩未读通知、双 GPA、行事历和三类桌面小组件；应用标识与数据目录不变。
+当前源码版本为 **v2.0.2 Tarantula / Build 105**，安装包命名与校验清单见 [v2.0.2 发布说明](releases/v2.0.2.md)。继续保留学习助手本机历史、全文搜索、独立草稿、重启后续聊、成绩未读通知、双 GPA、行事历和三类桌面小组件；应用标识与数据目录不变。
 
 Build 76 同时修复连续追问时“第一次点击发送无反应”的失焦重绘问题。输入框到发送按钮的指针交互期间保留原控件，后台同步不会吞掉点击；失败重试保留已成功对话和问题草稿。新增真实浏览器回归，并在已安装的 macOS 版完成三轮 DeepSeek 连续对话验收。
 

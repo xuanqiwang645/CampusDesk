@@ -76,7 +76,7 @@ struct AgendaNativeSmoke {
         state["snapshots"] = ["seiue": [:], "managebac": [:], "teams": [teamsURL: [
             "url": teamsURL, "source": "teams", "coverage": "visible", "accountId": "synthetic-analysis",
             "capturedAt": "2026-10-10T01:00:00Z", "tasks": [], "posts": [[
-                "id": "teams:analysis-fixture", "title": "Science fair", "text": "Join the science fair.\nDeadline: 2026-10-11 17:00",
+                "id": "teams:analysis-fixture", "title": "Science fair", "text": "All students must attend the science fair.\nDeadline: 2026-10-11 17:00",
                 "kind": "general", "url": teamsURL, "officialAssignment": false
             ]]
         ]]]
@@ -93,7 +93,7 @@ struct AgendaNativeSmoke {
         var fixtureInput = CampusCore.getTeamsAnalysisInputs(fixtureState)[0];
         fixtureState = CampusCore.applyTeamsAnalysisResults(fixtureState, {model: CampusCore.teamsAnalysisModel(fixtureState), results: [{
           id:fixtureInput.id, fingerprint:fixtureInput.fingerprint, classification:'actionable', status:'ready', summary:'Synthetic activity',
-          tasks:[{category:'activity',title:'Join science fair',evidence:'Join the science fair.',deadlineText:'Deadline: 2026-10-11 17:00'}]
+          tasks:[{category:'activity',title:'Join science fair',evidence:'All students must attend the science fair.',deadlineText:'Deadline: 2026-10-11 17:00',participationEvidence:'All students must attend the science fair.'}]
         }]});
         JSON.stringify(fixtureState);
         """)?.toString()

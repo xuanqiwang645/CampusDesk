@@ -1,4 +1,4 @@
-CampusDesk v2.0.1 Tarantula · 通用原位升级补丁
+CampusDesk v2.0.2 Tarantula · 通用原位升级补丁
 
 使用方法
 1. 打开“CampusDesk 更新补丁.app”。无需终端或开发工具。

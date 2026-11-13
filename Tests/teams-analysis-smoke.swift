@@ -63,6 +63,22 @@ final class SyntheticTeamsAnalysisProtocol: URLProtocol {
 
     static func main() throws {
         let batch = try TeamsAnalysisBatch(request())
+        let fixedClock = ISO8601DateFormatter().date(from: "2032-04-20T08:00:00Z")!
+        var spoofedClock = request(); spoofedClock["currentTime"] = "2099-01-01T00:00:00Z"
+        let clockBatch = try TeamsAnalysisBatch(spoofedClock, now: fixedClock)
+        check(clockBatch.source["currentTime"] as? String == "2032-04-20T08:00:00Z", "Analysis supplies the trusted clock rather than source/request claims")
+        check(clockBatch.source["timezone"] as? String == "Asia/Shanghai", "Activity days use the school timezone")
+        check(batch.instructions.contains("participationEvidence") && batch.instructions.contains("historical information") && batch.instructions.contains("Keep genuinely outstanding academic homework"), "Participation and ended-event constraints are sent with classification")
+        let activityText = "All registered students must attend. Event time: 2032-04-21 13:00"
+        let activityBatch = try TeamsAnalysisBatch(request([item(text: activityText)]), now: fixedClock)
+        var policyActivity = task(); policyActivity["category"] = "activity"; policyActivity["evidence"] = "All registered students must attend."
+        policyActivity["deadlineText"] = "2032-04-21 13:00"; policyActivity["participationEvidence"] = "All registered students must attend."
+        var activityRow = row(); activityRow["tasks"] = [policyActivity]
+        let admitted = try activityBatch.decode(envelope([activityRow]))
+        check((admitted[0]["tasks"] as? [[String: String]])?.first?["participationEvidence"] == "All registered students must attend.", "Exact participation evidence survives transport for local admission")
+        policyActivity["participationEvidence"] = "The user registered yesterday."
+        activityRow["tasks"] = [policyActivity]
+        check((try? activityBatch.decode(envelope([activityRow]))) == nil, "Invented participation evidence is rejected")
         check(TeamsAnalysisBatch.effectiveModel(settings: ["aiModel": "ollama-local"]) == "deepseek-flash", "Non-DeepSeek chat models cannot redirect classification")
         check(TeamsAnalysisBatch.effectiveModel(settings: ["aiModel": "deepseek-v4-pro"]) == "deepseek-v4-pro", "Valid selected DeepSeek model is reused")
         for field in ["requestId", "phase", "model", "items"] { var bad = request(); bad[field] = NSNull(); check(rejects(bad), "Missing request contract field rejected") }

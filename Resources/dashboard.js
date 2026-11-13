@@ -10,7 +10,7 @@
   const toolbarButtonIDs = ['grade-notifications-button', 'focus-button', 'sync-button'];
   let lastToolbarState = '';
   const themeEdition = window.CampusDeskThemeEdition === true;
-  const appVersionInfo = window.CampusDeskAppVersion || { version: themeEdition ? '2.0.1' : '0.5.13', name: themeEdition ? 'Tarantula' : '' };
+  const appVersionInfo = window.CampusDeskAppVersion || { version: themeEdition ? '2.0.2' : '0.5.13', name: themeEdition ? 'Tarantula' : '' };
   const setupWizardReleaseVersion = String(appVersionInfo.version || 'unversioned').slice(0, 40);
   const appVersionLabel = 'CampusDesk v' + String(appVersionInfo.version || '').slice(0, 40) + (appVersionInfo.name ? ' ' + String(appVersionInfo.name).slice(0, 60) : '');
   const storageKey = 'campusdesk.browser.v1';
@@ -66,6 +66,7 @@
   let pageSwitchAnimation = null;
   let gpaChartMountScheduled = false;
   let teamsPostsCache = new Map();
+  let teamsPostsCacheSource = null;
   let ecSearchIndex = null;
   let ecSearchBuildToken = 0;
   let ecSearchBuildProgress = 0;
@@ -482,9 +483,9 @@
     if (!delay) flushBackgroundRender();
     else if (!backgroundRenderTimer) backgroundRenderTimer = setTimeout(() => { backgroundRenderTimer = 0; flushBackgroundRender(); }, delay);
   }
-  function taskRowsForState() { return memoized('tasks', () => Core.getTasks(state)); }
+  function taskRowsForState() { return memoized('tasks:' + Core.today(), () => Core.getTasks(state)); }
   function openTasksForState(source) {
-    return memoized('open-tasks:' + (source || '*'), () => taskRowsForState().filter(task => !task.completed && (!source || task.source === source)));
+    return memoized('open-tasks:' + Core.today() + ':' + (source || '*'), () => taskRowsForState().filter(task => !task.completed && (!source || task.source === source)));
   }
   function openTaskCountForState() { return memoized('open-task-count', () => openTasksForState().length); }
   function taskCategory(task) { return task.category === 'activity' ? 'activity' : 'homework'; }
@@ -496,7 +497,7 @@
     }).join('');
   }
   function teamsAnalysisSummary() {
-    return memoized('teams-analysis-summary', () => Core.getTeamsAnalysisSummary ? Core.getTeamsAnalysisSummary(state) : { total: 0, ready: 0, pending: 0, failed: 0 });
+    return memoized('teams-analysis-summary:' + Core.today(), () => Core.getTeamsAnalysisSummary ? Core.getTeamsAnalysisSummary(state) : { total: 0, ready: 0, pending: 0, failed: 0 });
   }
   function teamsAnalysisStatus() { return teamsAnalysisClient?.getStatus() || { running: false, activeIds: [], message: '', blocked: false }; }
   function teamsAnalysisCategory(record) {
@@ -526,7 +527,11 @@
       : failed ? assistantCopy('分析失败', 'Analysis failed')
       : !state.settings.teamsAnalysisEnabled ? assistantCopy('自动整理未开启', 'Automatic organizing is off')
       : active ? assistantCopy('分析中', 'Analyzing') : assistantCopy('待分析', 'Pending analysis');
-    return '<section class="teams-analysis-card" data-analysis-state="' + (record?.status || (active ? 'analyzing' : 'pending')) + '"><div class="teams-analysis-heading"><span>' + esc(label) + '</span>' + (failed && state.settings.teamsAnalysisEnabled ? button(assistantCopy('重试', 'Retry'), 'teams-analysis-retry', 'data-id="' + esc(id) + '"' + (!native || !themeEdition ? ' disabled' : '')) : '') + '</div>' + (record?.summary ? '<p class="teams-analysis-summary">' + esc(record.summary) + '</p>' : '') + (failed ? '<p>' + (record.error ? esc(record.error) + ' · ' : '') + assistantCopy('本条未生成待办；可重试或核对原文后纠正分类。', 'No to-do was created. Retry or check the source and correct its category.') + '</p>' : '') + teamsAnalysisCorrection(id, record) + '</section>';
+    const restriction = !record?.manualOverride && record?.restrictionReason;
+    const restrictionCopy = { pastActivity: ['活动日期已结束，保留历史消息，不列入当前待办。', 'This activity date has passed. The original message is retained outside current to-dos.'], activityDate: ['活动日期或年份待确认，未自动生成待办；可核对原文后人工分类。', 'Activity date or year is unconfirmed. No automatic to-do was created; check the source before a manual correction.'], activityParticipation: ['缺少明确参加义务或已报名证据，作为通知待核对。', 'No confirmed obligation or registration evidence; retained as a notice for review.'] };
+    Object.assign(restrictionCopy, { nonAcademicHomework: ['通知、选课或行政事项缺少明确学业作业依据，未列入当前待办。', 'No academic assignment evidence: this notice or administrative action is not a current to-do.'], pastPreparation: ['这项上课准备对应的原帖日期已过，保留原文，不继续当作当前作业。', 'This class-preparation date has passed; the original remains available.'], staleRelativeTask: ['相对日期属于较早的原帖，不能当作现在的“明天”；需要重新核对。', 'The relative date belongs to an older post, not tomorrow from now; review is required.'], staleUndatedTask: ['原帖日期不明或已超过 14 天且没有明确截止日期，暂存消息页核对。', 'Original publication unknown or older than 14 days without a deadline; retained for review.'], taskDate: ['截止日期无法可靠核对，未自动列入当前待办。', 'The deadline cannot be reliably established; retained for review.'], optionalAction: ['这是自愿或条件尚未确认的行动，未自动当作你的作业。', 'Optional or conditional action; not automatically your homework.'], cancelledAction: ['原文已否定、取消或说明完成这项行动，未生成当前待办。', 'Negated, cancelled or completed action; no current to-do was created.'] });
+    const restrictionHTML = restrictionCopy[restriction] ? '<p class="teams-analysis-restriction">' + assistantCopy(...restrictionCopy[restriction]) + '</p>' : '';
+    return '<section class="teams-analysis-card" data-analysis-state="' + (record?.status || (active ? 'analyzing' : 'pending')) + '"><div class="teams-analysis-heading"><span>' + esc(label) + '</span>' + ((failed || restriction) && state.settings.teamsAnalysisEnabled ? button(assistantCopy('重试', 'Retry'), 'teams-analysis-retry', 'data-id="' + esc(id) + '"' + (!native || !themeEdition ? ' disabled' : '')) : '') + '</div>' + (record?.summary ? '<p class="teams-analysis-summary">' + esc(record.summary) + '</p>' : '') + (failed ? '<p>' + (record.error ? esc(record.error) + ' · ' : '') + assistantCopy('本条未生成待办；可重试或核对原文后纠正分类。', 'No to-do was created. Retry or check the source and correct its category.') + '</p>' : '') + restrictionHTML + teamsAnalysisCorrection(id, record) + '</section>';
   }
   function courseRowsForState() { return memoized('courses', () => Core.getCourses(state)); }
   function feedbackRowsForState() { return memoized('feedback', () => Core.getFeedback(state)); }
@@ -965,6 +970,10 @@
   function postRecipient(post) { return post.recipient || t('收件人未标明'); }
   function postChannel(post) { return post.channel || t('频道未标明'); }
   function teamsPosts(kind) {
+    if (teamsPostsCacheSource !== state.snapshots.teams) {
+      teamsPostsCacheSource = state.snapshots.teams;
+      teamsPostsCache.clear();
+    }
     const key = kind || '*';
     if (!teamsPostsCache.has(key)) teamsPostsCache.set(key, Core.getTeamsPosts(state, kind));
     return teamsPostsCache.get(key);
@@ -1993,8 +2002,11 @@
     return '<section id="teams-analysis-settings" class="card settings-section">' + cardHeader('teams', assistantCopy('Teams 自动整理', 'Teams automatic organizing')) +
       '<div class="settings-field"><div><label for="teams-analysis-enabled">' + assistantCopy('使用 DeepSeek 分析所有已读取的 Teams 内容', 'Analyze all captured Teams content with DeepSeek') + '</label><p>' + assistantCopy('先归纳，再区分作业、活动和普通通知。此设置独立于学习助手的聊天模式和提问资料范围。', 'Summarize first, then identify homework, activities and notices. This setting is separate from assistant chat mode and selected question sources.') + '</p></div><label class="toggle"><input id="teams-analysis-enabled" type="checkbox"' + (enabled ? ' checked' : '') + (!native || !themeEdition ? ' disabled' : '') + ' aria-label="' + assistantCopy('开启 Teams 自动整理', 'Enable Teams automatic organizing') + '"><span></span></label></div>' +
       '<p class="teams-analysis-privacy">' + assistantCopy('开启后，所有已读取的 Teams 消息正文、作业、成绩与反馈信息，以及已提取的附件文字会发送给 DeepSeek，按你的 API 账户计费。不会发送登录 Cookie、令牌或密码。长内容分段分析；未分析完、失败或待核对的内容不自动生成待办。', 'When enabled, all captured Teams message bodies, assignments, grades, feedback and extracted attachment text are sent to DeepSeek and billed to your API account. Login cookies, tokens and passwords are excluded. Long content is analyzed in sections. Incomplete, failed or uncertain analysis does not automatically create to-dos.') + '</p>' +
+      '<div class="info-note teams-analysis-rules"><strong>' + assistantCopy('API 归纳限制', 'API analysis rules') + '</strong><p>' + assistantCopy('以当前北京时间核对活动日期。已结束活动、普通邀请及缺少参加义务或已报名证据的内容，不自动进入当前待办；活动日期或年份不明时等待核对。', 'Activity dates are checked against the current Beijing date. Ended activities, general invitations and items without obligation or confirmed registration evidence do not become current to-dos. Unknown dates or years require review.') + '</p><p>' + assistantCopy('日期和参加依据必须引用原文。重复抓取的同一活动合并展示；真正未完成的逾期作业继续保留。原始消息、历史分析和人工记录不删除。', 'Dates and participation evidence must quote the source. Duplicate captures of the same activity are merged; genuinely unfinished overdue homework remains. Original messages, analysis history and manual records are retained.') + '</p></div>' +
+      '<p class="teams-analysis-rules-all">' + assistantCopy('所有 AI 待办均核对原文学业依据。通知、选课、行政事项不能冒充作业；上课准备必须有适用日期。tomorrow 按原帖日期计算。无明确截止、原帖不明或超过 14 天的内容暂存核对；明确绝对日期的真正逾期作业仍保留。', 'All AI to-dos need academic source evidence. Notices, enrollment and administration are not homework. Preparation needs an applicable date; tomorrow is relative to the original post. Undated work with unknown or over-14-day publication waits for review. Genuine work with an explicit absolute overdue deadline remains.') + '</p><p class="subtle">' + assistantCopy('按新规则重审会将受限分析对应的原文重新发送给 DeepSeek，按 API 账户计费；原文、分析历史及完成标记保留。', 'Reanalysis resends the restricted sources to DeepSeek and uses your API allowance. Source records and completion marks are retained.') + '</p>' +
       '<div class="teams-analysis-queue" role="status" aria-live="polite"><span>' + assistantCopy('已分析', 'Analyzed') + ' ' + counts.ready + ' / ' + counts.total + '</span><span>' + assistantCopy('待分析', 'Pending') + ' ' + counts.pending + '</span><span>' + assistantCopy('失败', 'Failed') + ' ' + counts.failed + '</span></div><p class="subtle">' + esc(status) + '</p><div class="source-actions">' +
       (enabled && native && themeEdition ? button(assistantCopy('重试待处理内容', 'Retry pending items'), 'teams-analysis-retry') : '') +
+      (enabled && native && themeEdition ? button(assistantCopy('按新规则重审受限分析', 'Reanalyze restricted results'), 'teams-analysis-recheck') : '') +
       (themeEdition ? button(assistantCopy('配置 DeepSeek 密钥', 'Configure DeepSeek key'), 'teams-analysis-key') : '') +
       goLink('teams', assistantCopy('查看消息与分析结果', 'View messages and analysis')) + '</div></section>';
   }
@@ -3361,6 +3373,10 @@
       taskReviewClient?.runNow(); requestBackgroundRender();
     }
     else if (action === 'task-review-permission') { if (native && themeEdition) send('requestNotifications'); }
+    else if (action === 'teams-analysis-recheck') {
+      if (!native || !themeEdition || !state.settings.teamsAnalysisEnabled || pendingImportRequestID) return;
+      teamsAnalysisClient?.recheckRestricted(); requestBackgroundRender();
+    }
     else if (action === 'teams-analysis-retry') {
       if (!native || !themeEdition || !state.settings.teamsAnalysisEnabled || pendingImportRequestID) return;
       teamsAnalysisClient?.retry(target.dataset.id || undefined); requestBackgroundRender();
@@ -3635,7 +3651,7 @@
     else if (action === 'close-detail') { detailTaskId = null; closeDialog('detail-dialog'); }
     else if (action === 'toggle-detail-task') {
       const item = taskRowsForState().find(task => task.id === target.dataset.id);
-      if (item) { state.taskChecks[item.id] = !item.completed; persist(); render(); openTaskDetail(item.id); }
+      if (item) { state = Core.setTaskCompleted(state, item.id, !item.completed); persist(); render(); openTaskDetail(item.id); }
     }
     else if (action === 'save-task-due') {
       const task = taskRowsForState().find(item => item.id === target.dataset.id && item.source === 'teams');
@@ -3708,7 +3724,7 @@
     }
     else if (action === 'toggle-task') {
       const item = taskRowsForState().find(t => t.id === target.dataset.id);
-      if (item) { state.taskChecks[item.id] = !item.completed; persist(); render(); }
+      if (item) { state = Core.setTaskCompleted(state, item.id, !item.completed); persist(); render(); }
     } else if (action === 'delete-task') {
       const id = target.dataset.id;
       if (!window.confirm('删除这条个人待办？')) return;
