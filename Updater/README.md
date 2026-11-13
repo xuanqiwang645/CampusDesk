@@ -1,6 +1,6 @@
-# v2.0.0 Tarantula 通用升级补丁
+# v2.0.1 Tarantula 通用升级补丁
 
-一个原生更新器匹配普通版和主题版的历史安装，内置两套 v2.0.0 应用文件。升级保持各自原来的应用标识、路径及资料目录，不要求先卸载旧版。
+一个原生更新器匹配普通版和主题版的历史安装，内置两套 v2.0.1 应用文件。升级保持各自原来的应用标识、路径及资料目录，不要求先卸载旧版。
 
 ## 安装与自动清理
 
@@ -28,12 +28,12 @@
 ## 构建
 
 ```sh
-CAMPUSDESK_BUILD_DIR="$PWD/build/Build101" CAMPUSDESK_INFO_PLIST="$PWD/Info-ThemeEdition.plist" bash build.sh
-CAMPUSDESK_BUILD_DIR="$PWD/build/Build101-Classic" CAMPUSDESK_INFO_PLIST="$PWD/Info.plist" bash build.sh
+CAMPUSDESK_BUILD_DIR="$PWD/build/v2.0.1-Theme" CAMPUSDESK_INFO_PLIST="$PWD/Info-ThemeEdition.plist" bash build.sh
+CAMPUSDESK_BUILD_DIR="$PWD/build/v2.0.1-Classic" CAMPUSDESK_INFO_PLIST="$PWD/Info.plist" bash build.sh
 bash scripts/package-patch-macos.sh
 ```
 
-默认产物目录 `build/releases/v2.0.0-Patch1`。可用 `CAMPUSDESK_PATCH_APP`、`CAMPUSDESK_PATCH_CLASSIC_APP` 指定两版构建，用 `CAMPUSDESK_PATCH_OUTPUT` 指定输出。已有同名产物会拒绝覆盖。
+默认产物目录 `build/releases/v2.0.1-Patch1`。可用 `CAMPUSDESK_PATCH_APP`、`CAMPUSDESK_PATCH_CLASSIC_APP` 指定两版构建，用 `CAMPUSDESK_PATCH_OUTPUT` 指定输出。已有同名产物会拒绝覆盖。
 
 ## 验证
 

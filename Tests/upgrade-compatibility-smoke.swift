@@ -49,7 +49,7 @@ enum UpgradeCompatibilitySmoke {
             let engine = try PatchEngine(manifest: manifest, archive: resources.appendingPathComponent(edition.archiveName), home: home)
             let result = try engine.install(target: target, hooks: PatchHooks(ensureStopped: { _ in }))
             try check(try PatchFiles.info(target)["CFBundleIdentifier"] as? String == edition.rawValue, "legacy app identity is retained")
-            try check(try PatchFiles.info(target)["CFBundleShortVersionString"] as? String == "2.0.0", "legacy app reaches Tarantula")
+            try check(try PatchFiles.info(target)["CFBundleShortVersionString"] as? String == manifest.version, "legacy app reaches the packaged Tarantula version")
             try check(try PatchFiles.snapshot(home: home, edition: edition) == before, "all original profile and login files remain identical")
             try check(try PatchFiles.treeDigest(other) == otherBefore, "other edition's profile is not touched")
             let compatibility = CampusUpgradeCompatibility.load(home: home, bundleID: edition.rawValue, build: manifest.build, application: target)

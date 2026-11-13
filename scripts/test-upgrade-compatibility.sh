@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 campus_root="$(cd "$(dirname "$0")/.." && pwd)"
-campus_output="${CAMPUSDESK_PATCH_OUTPUT:-$campus_root/build/releases/v2.0.0-Patch1}"
+campus_output="${CAMPUSDESK_PATCH_OUTPUT:-$campus_root/build/releases/v2.0.1-Patch1}"
 campus_test="$(mktemp -d /private/tmp/CampusDesk-legacy-test-runner.XXXXXX)"
 shopt -s nullglob
 campus_archives=("$campus_output"/*-Update-Patch1-macOS-arm64.zip)

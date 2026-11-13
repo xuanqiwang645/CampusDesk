@@ -17,7 +17,7 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>2.0.0</string>
+	<string>2.0.1</string>
 	<key>CFBundleVersion</key>
 	<string>103</string>
 	<key>LSMinimumSystemVersion</key>
@@ -43,6 +43,6 @@
 	</array>
 	<key>CampusDeskThemeInterface</key><true/>
 	<key>CampusDeskReleaseName</key><string>Tarantula</string>
-	<key>CFBundleGetInfoString</key><string>CampusDesk v2.0.0 Tarantula</string>
+	<key>CFBundleGetInfoString</key><string>CampusDesk v2.0.1 Tarantula</string>
 </dict>
 </plist>

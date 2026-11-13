@@ -10,7 +10,7 @@
   const toolbarButtonIDs = ['grade-notifications-button', 'focus-button', 'sync-button'];
   let lastToolbarState = '';
   const themeEdition = window.CampusDeskThemeEdition === true;
-  const appVersionInfo = window.CampusDeskAppVersion || { version: themeEdition ? '2.0.0' : '0.5.13', name: themeEdition ? 'Tarantula' : '' };
+  const appVersionInfo = window.CampusDeskAppVersion || { version: themeEdition ? '2.0.1' : '0.5.13', name: themeEdition ? 'Tarantula' : '' };
   const setupWizardReleaseVersion = String(appVersionInfo.version || 'unversioned').slice(0, 40);
   const appVersionLabel = 'CampusDesk v' + String(appVersionInfo.version || '').slice(0, 40) + (appVersionInfo.name ? ' ' + String(appVersionInfo.name).slice(0, 60) : '');
   const storageKey = 'campusdesk.browser.v1';

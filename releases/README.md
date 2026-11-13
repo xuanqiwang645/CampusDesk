@@ -2,6 +2,7 @@
 
 按最新版本优先排列：
 
+- [v2.0.1 Tarantula · Build 103](v2.0.1.md) — 课程发现与成绩覆盖、Teams 任务身份与通知过滤、定时提醒失效保护与限流修复；提供通用补丁和两版完整安装包。
 - [v2.0.0 Tarantula · Build 101](v2.0.0.md) — 提醒面板加宽与完整折叠、两版通用补丁、升级保留资料与自动清理。
 
 1. [v1.2.0 Lagoon · Build 99](v1.2.0-build99.md) — Teams 分析与作业／活动分类、总览 AI 任务提醒、深色界面修正。
@@ -21,4 +22,4 @@
 15. [v0.4.2](v0.4.2.md) — 待办与提醒可见性改进。
 16. [v0.4.1](v0.4.1.md) — 公开源码版的 Teams、EC 与附件读取改进。
 
-可下载的安装包与对应标签请前往 [GitHub Releases](https://github.com/xuanqiwang645/CampusDesk/releases)。
+当前下载入口为 [v2.0.1 Tarantula](https://github.com/xuanqiwang645/CampusDesk/releases/tag/v2.0.1)，包括六个 DMG／ZIP 文件和统一的 SHA-256 清单。v2.0.0 说明保留为历史记录，请使用 v2.0.1 修复版安装包。

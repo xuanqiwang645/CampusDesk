@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 campus_root="$(cd "$(dirname "$0")/.." && pwd)"
-campus_payload="${CAMPUSDESK_PATCH_CLASSIC_APP:-$campus_root/build/Build101-Classic/CampusDesk.app}"
+campus_payload="${CAMPUSDESK_PATCH_CLASSIC_APP:-$campus_root/build/v2.0.1-Classic/CampusDesk.app}"
 campus_identity="${CAMPUSDESK_SIGN_IDENTITY:-$(bash "$campus_root/scripts/local-signing-identity.sh")}"
 campus_test="$(mktemp -d /private/tmp/CampusDesk-classic-key-probe.XXXXXX)"
 /usr/bin/xcrun swiftc -swift-version 5 -O -j 1 -target arm64-apple-macosx12.0 -framework Security -framework CryptoKit \

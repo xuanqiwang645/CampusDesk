@@ -66,6 +66,27 @@ enum PatchInstallerSmoke {
         let repeatInstall = try engine.install(target: target, hooks: PatchHooks(ensureStopped: { _ in throw InjectedFailure.quitCancelled }))
         try check(repeatInstall.alreadyCurrent && repeatInstall.backup == nil, "same release is a no-op without quitting or creating new backups")
 
+        // A release version may advance without another build increment. In
+        // particular, the unpublished 2.0.0 Build 103 must upgrade to 2.0.1
+        // Build 103, while a byte-identical repeat remains the no-op above.
+        var earlierParts = PatchEngine.versionParts(manifest.version)!
+        guard let versionComponent = earlierParts.lastIndex(where: { $0 > 0 }) else { fatalError("Expected a positive release version") }
+        earlierParts[versionComponent] -= 1
+        for index in earlierParts.indices where index > versionComponent { earlierParts[index] = 0 }
+        let earlierVersion = earlierParts.map(String.init).joined(separator: ".")
+        let (sameBuildHome, sameBuildTarget, sameBuildEngine) = try fixture("same-build-new-version")
+        var sameBuildInfo = try PatchFiles.info(sameBuildTarget)
+        sameBuildInfo["CFBundleVersion"] = String(manifest.build)
+        sameBuildInfo["CFBundleShortVersionString"] = earlierVersion
+        try PropertyListSerialization.data(fromPropertyList: sameBuildInfo, format: .xml, options: 0).write(to: sameBuildTarget.appendingPathComponent("Contents/Info.plist"))
+        let sameBuildData = try PatchFiles.snapshot(home: sameBuildHome), sameBuildOldDigest = try PatchFiles.treeDigest(sameBuildTarget)
+        try check(try sameBuildEngine.validateTarget(sameBuildTarget) == manifest.build, "a newer semantic version accepts the same build number")
+        let sameBuildResult = try sameBuildEngine.install(target: sameBuildTarget, hooks: quiet)
+        try check(!sameBuildResult.alreadyCurrent && sameBuildResult.backup != nil, "same-build semantic upgrade executes a real transaction")
+        try check(try PatchFiles.info(sameBuildTarget)["CFBundleShortVersionString"] as? String == manifest.version, "same-build semantic upgrade installs the new version")
+        try check(try PatchFiles.snapshot(home: sameBuildHome) == sameBuildData, "same-build semantic upgrade preserves every data and session store")
+        try check(try PatchFiles.treeDigest(sameBuildResult.backup!.appendingPathComponent(PatchFiles.appName)) == sameBuildOldDigest, "same-build semantic upgrade retains the complete previous application")
+
         let (rollbackHome, rollbackTarget, rollbackEngine) = try fixture("rollback")
         let rollbackData = try PatchFiles.snapshot(home: rollbackHome)
         try expectFailure("post-swap failure") {

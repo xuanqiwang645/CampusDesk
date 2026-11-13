@@ -43,7 +43,7 @@ final class PatchAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate 
         content.edgeInsets = NSEdgeInsets(top: 28, left: 28, bottom: 28, right: 28)
         let title = NSTextField(labelWithString: "原位更新，保留数据与登录")
         title.font = .systemFont(ofSize: 24, weight: .semibold)
-        let detail = NSTextField(wrappingLabelWithString: "自动匹配普通版与主题版旧版本，原位更新至 v2.0.0 Tarantula。备份并核验资料与登录会话；升级成功后更新器自动退出并移入废纸篓。")
+        let detail = NSTextField(wrappingLabelWithString: "自动匹配普通版与主题版旧版本，原位更新至 v2.0.1 Tarantula。备份并核验资料与登录会话；升级成功后更新器自动退出并移入废纸篓。")
         detail.textColor = .secondaryLabelColor
         targetLabel.font = .monospacedSystemFont(ofSize: 12, weight: .regular); targetLabel.textColor = .secondaryLabelColor
         targetLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
@@ -77,12 +77,13 @@ final class PatchAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate 
     }
     private func setTarget(_ url: URL) {
         do {
-            guard let id = try PatchFiles.info(url)["CFBundleIdentifier"] as? String, let manifest = variants[id],
+            let info = try PatchFiles.info(url)
+            guard let id = info["CFBundleIdentifier"] as? String, let oldVersion = info["CFBundleShortVersionString"] as? String, let manifest = variants[id],
                   let edition = PatchEdition(rawValue: id), let resources else { throw PatchError.invalid("请选择 CampusDesk 普通版或主题版。") }
             let engine = try PatchEngine(manifest: manifest, archive: resources.appendingPathComponent(edition.archiveName)); self.engine = engine
             let oldBuild = try engine.validateTarget(url)
             target = url; targetLabel.stringValue = url.path
-            status.stringValue = "\(edition.label) Build \(oldBuild) → v\(engine.manifest.version) Tarantula · Build \(engine.manifest.build)"
+            status.stringValue = "\(edition.label) v\(oldVersion) · Build \(oldBuild) → v\(engine.manifest.version) Tarantula · Build \(engine.manifest.build)"
             installButton.isEnabled = true
         } catch { target = nil; targetLabel.stringValue = url.path; status.stringValue = error.localizedDescription; installButton.isEnabled = false }
     }
