@@ -22,16 +22,19 @@ if [[ -z "$campus_identity" ]]; then
     exit 1
   fi
   campus_signing_tmp="$(mktemp -d /private/tmp/CampusDesk-signing.XXXXXX)"
-  trap '/bin/rm -f "$campus_signing_tmp/signing.key" "$campus_signing_tmp/signing.pk8" "$campus_signing_tmp/signing.crt"; /bin/rmdir "$campus_signing_tmp"' EXIT
+  trap '/bin/rm -f "$campus_signing_tmp/signing.key" "$campus_signing_tmp/signing.p12" "$campus_signing_tmp/signing.crt"; /bin/rmdir "$campus_signing_tmp"' EXIT
   /usr/bin/openssl req -x509 -newkey rsa:3072 -nodes -days 3650 \
     -config "$campus_scripts/local-signing.cnf" \
     -keyout "$campus_signing_tmp/signing.key" -out "$campus_signing_tmp/signing.crt" 2>/dev/null
-  # security's explicit PKCS#8 importer requires the DER encoding. LibreSSL's
-  # default PEM output is rejected by clean macOS 26 keychains as unknown format.
-  /usr/bin/openssl pkcs8 -topk8 -nocrypt -in "$campus_signing_tmp/signing.key" \
-    -outform DER -out "$campus_signing_tmp/signing.pk8" 2>/dev/null
-  /usr/bin/security import "$campus_signing_tmp/signing.pk8" -k "$campus_keychain" -t priv -f pkcs8 -x -T /usr/bin/codesign >&2
-  /usr/bin/security import "$campus_signing_tmp/signing.crt" -k "$campus_keychain" -t cert -f pemseq >&2
+  # Import the key and certificate together using the supported PKCS#12 path.
+  # The encrypted staging container and plaintext generation key are private
+  # temporary files and are removed on every exit; the imported key cannot export.
+  campus_import_password="$(/usr/bin/openssl rand -hex 24)"
+  /usr/bin/openssl pkcs12 -export -in "$campus_signing_tmp/signing.crt" \
+    -inkey "$campus_signing_tmp/signing.key" -name "$campus_identity_name" \
+    -out "$campus_signing_tmp/signing.p12" -passout fd:3 3<<<"$campus_import_password" 2>/dev/null
+  /usr/bin/security import "$campus_signing_tmp/signing.p12" -k "$campus_keychain" -t agg -f pkcs12 \
+    -P "$campus_import_password" -x -T /usr/bin/codesign >&2
   campus_identity="$(campus_find_identity)"
 fi
 if [[ ! "$campus_identity" =~ ^[[:xdigit:]]{40}$ ]]; then
