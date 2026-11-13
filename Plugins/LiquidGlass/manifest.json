@@ -1,0 +1,10 @@
+{
+  "id": "campusdesk.liquid-glass",
+  "name": "Liquid Glass",
+  "version": "1.0.0",
+  "apiVersion": 1,
+  "capabilities": ["presentation.surfaces"],
+  "minimumHostVersion": "2.1.0",
+  "minimumMacOSVersion": "26.0",
+  "entryPoint": "CampusLiquidGlassPlugin"
+}

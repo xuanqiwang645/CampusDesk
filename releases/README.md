@@ -24,3 +24,5 @@
 16. [v0.4.1](v0.4.1.md) — 公开源码版的 Teams、EC 与附件读取改进。
 
 当前下载入口为 [v2.0.1 Tarantula](https://github.com/xuanqiwang645/CampusDesk/releases/tag/v2.0.1)，包括六个 DMG／ZIP 文件和统一的 SHA-256 清单。v2.0.0 说明保留为历史记录，请使用 v2.0.1 修复版安装包。
+
+- [v2.1.0 · Build 106](v2.1.0.md) — Liquid Glass 插件接口与 OpenAI API。

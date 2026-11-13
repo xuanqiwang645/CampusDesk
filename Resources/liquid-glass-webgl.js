@@ -421,7 +421,7 @@ if (!canvas) {
       // loop still costs CPU/GPU even when no pixels need to change.
       if (!staticMode() && milliseconds - lastInteraction < 2500) scheduleFrame(40);
     }
-    function hidden() { return document.hidden || root.dataset.windowVisible === 'false' || reducedTransparency.matches; }
+    function hidden() { return root.classList.contains('native-liquid-glass') || document.hidden || root.dataset.windowVisible === 'false' || reducedTransparency.matches; }
     function staticMode() { return reducedMotion.matches || root.dataset.graphicsMode === 'low-power'; }
     function scheduleFrame(delay = 0) {
       if (hidden() || frameID || frameTimer) return;

@@ -421,6 +421,7 @@ final class SyncWorker: NSObject, WKNavigationDelegate {
 final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavigationDelegate, WKUIDelegate {
     var window: NSWindow!
     var dashboard: WKWebView!
+    var pluginManager: CampusPluginManager?
     var dashboardToolbar: DashboardToolbar?
     var dashboardAppearance: CampusDashboardAppearance?
     var statusItem: NSStatusItem!
@@ -563,7 +564,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         config.userContentController.addUserScript(WKUserScript(source: bootstrap, injectionTime: .atDocumentStart, forMainFrameOnly: true))
         let appearanceSettings = CampusDashboardAppearanceSettings(state["settings"] as? [String: Any] ?? [:])
         CampusDashboardAppearance.installBootstrap(in: config.userContentController, settings: appearanceSettings)
-        dashboard = WKWebView(frame: .zero, configuration: config)
+        dashboard = CampusPresentationWebView(frame: .zero, configuration: config)
         dashboard.underPageBackgroundColor = CampusDashboardAppearance.paperColor(theme: appearanceSettings.resolvedTheme(systemDark: CampusDashboardAppearance.systemIsDark))
         dashboard.navigationDelegate = self
         dashboard.uiDelegate = self
@@ -575,7 +576,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
             self?.refreshAppearanceBootstrap()
             self?.emit(["type": "systemAppearance", "dark": dark])
         }
-        window.contentView = dashboard
+        let pluginRoot = CampusPluginHostView(frame: dashboard.frame)
+        let surfaceHost = CampusPluginHostView(frame: pluginRoot.bounds)
+        surfaceHost.autoresizingMask = [.width, .height]
+        surfaceHost.wantsLayer = true; surfaceHost.layer?.masksToBounds = true
+        pluginRoot.addSubview(surfaceHost)
+        dashboard.frame = pluginRoot.bounds; dashboard.autoresizingMask = [.width, .height]
+        pluginRoot.addSubview(dashboard)
+        window.contentView = pluginRoot
+        pluginManager = CampusPluginManager(webView: dashboard, host: surfaceHost)
+        config.userContentController.addUserScript(WKUserScript(source: "window.CampusDeskPluginHost = true; window.CampusDeskOpenAI = true;", injectionTime: .atDocumentStart, forMainFrameOnly: true))
+        dashboard.underPageBackgroundColor = .clear
         dashboardToolbar = DashboardToolbar(window: window) { [weak self] id in
             guard let self, self.ready, self.stateBridge.awaitingImportRequestID == nil else { return }
             if id == "grade-notifications-button" { self.window.makeFirstResponder(self.dashboard) }
@@ -1332,10 +1343,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         guard CampusStateBridgeBoundary.acceptsEnvelope(body, maximumBytes: CampusSecurity.maximumStateBytes + 4096,
                                                         currentState: state, onImportFailure: emit) else { return }
         // Presentation updates also run while an import has disabled the page.
+        if action == "plugin" { pluginManager?.receive(body); return }
         if action == "updateDashboardToolbar" { dashboardToolbar?.update(body); return }
         if action == "setAppearance" {
             if dashboardAppearance?.apply(message: body) == true, let theme = body["theme"] as? String {
-                dashboard.underPageBackgroundColor = CampusDashboardAppearance.paperColor(theme: theme)
+                dashboard.underPageBackgroundColor = .clear
             }
             return
         }
@@ -1363,7 +1375,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
             calendarImportRequest.cancel()
             stateBridge.dashboardReloaded()
             resumeAfterImportAcknowledgement = false
-            ready = true; emit(["type": "schoolConfiguration", "config": schoolEndpoints.frontend]); emit(["type": "state", "state": state]); emitGraphStatus(); emitTeamsAutoStatus()
+            ready = true; emit(CampusOpenAI.status()); emit(["type": "schoolConfiguration", "config": schoolEndpoints.frontend]); emit(["type": "state", "state": state]); emitGraphStatus(); emitTeamsAutoStatus()
             applyDashboardAppearanceFromState()
             dashboardAppearance?.refresh(force: true)
             emitWindowVisibility()
@@ -1435,14 +1447,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
             var event = CampusAssistantAI.status()
             if removed { event["notice"] = "keyDeleted" } else { event["errorCode"] = "keyStore" }
             emit(event)
+        case "assistantSaveOpenAIKey", "assistantDeleteOpenAIKey", "assistantRestoreOpenAIKey":
+            guard campusDeskUsesThemeInterface else { return }
+            // Explicit user actions may access Keychain. Restore can display a
+            // system authorization sheet, so keep that work off the main thread.
+            DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+                var event: [String: Any]
+                do {
+                    if action == "assistantSaveOpenAIKey" {
+                        guard let key = body["key"] as? String else { return }
+                        try CampusOpenAI.saveKey(key)
+                    } else if action == "assistantRestoreOpenAIKey" { try CampusOpenAI.restoreAccess() }
+                    else if !CampusOpenAI.deleteKey() { throw AssistantError.keyStore }
+                    event = CampusOpenAI.status(); event["notice"] = "updated"
+                } catch let error as AssistantError { event = CampusOpenAI.status(); event["errorCode"] = error.code }
+                catch { event = CampusOpenAI.status(); event["errorCode"] = "keyStore" }
+                DispatchQueue.main.async { self?.emit(event) }
+            }
         case "assistantListModels":
             guard campusDeskUsesThemeInterface,
-                  let provider = body["provider"] as? String, ["deepseek", "ollama"].contains(provider),
+                  let provider = body["provider"] as? String, ["deepseek", "ollama", "openai"].contains(provider),
                   let requestID = body["requestId"] as? String,
                   requestID.range(of: "^[A-Za-z0-9-]{1,100}$", options: .regularExpression) != nil else { return }
             let settings = state["settings"] as? [String: Any] ?? [:]
             let mode = settings["aiProvider"] as? String ?? "off"
-            guard mode == "hybrid" || mode == provider || (mode == "auto" && provider == "deepseek") else { return }
+            guard (mode == "hybrid" && ["deepseek", "ollama"].contains(provider)) || mode == provider || (mode == "auto" && provider == "deepseek") else { return }
             if provider == "deepseek" && assistantKeyRecoveryInFlight {
                 emit(["type": "assistantModels", "provider": provider, "requestId": requestID, "errorCode": "busy"]); return
             }
@@ -1450,7 +1479,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
                 emit(["type": "assistantModels", "provider": provider, "requestId": requestID, "errorCode": "busy"]); return
             }
             let key: String?
-            do { key = provider == "deepseek" ? try CampusAssistantAI.keyForModelCatalog() : nil }
+            do { key = provider == "openai" ? try CampusOpenAI.key() : provider == "deepseek" ? try CampusAssistantAI.keyForModelCatalog() : nil }
             catch let error as AssistantError {
                 emit(CampusAssistantAI.status())
                 emit(["type": "assistantModels", "provider": provider, "requestId": requestID, "errorCode": error.code]); return
@@ -1494,6 +1523,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
             let model: String
             let fallbackModel: String?
             switch provider {
+            case "openai": model = aiSettings["aiOpenAIModel"] as? String ?? "gpt-6-luna"; fallbackModel = nil
             case "ollama": model = localModel; fallbackModel = nil
             case "deepseek": model = remoteModel; fallbackModel = nil
             case "hybrid":
@@ -1509,7 +1539,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
             // Interactive chat gets priority over optional background jobs.
             cancelTeamsAnalysis(notify: true, temporary: true)
             cancelTaskReview(notify: true, temporary: true)
-            let handle = CampusAssistantAI.request(provider: provider, model: model, fallbackModel: fallbackModel, networkAvailable: networkAvailable, messages: messages, onChunk: { [weak self] chunk in
+            let handle = CampusOpenAI.request(provider: provider, model: model, fallbackModel: fallbackModel, networkAvailable: networkAvailable, messages: messages, onChunk: { [weak self] chunk in
                 DispatchQueue.main.async {
                     guard let self, self.assistantRequestsInFlight.contains(requestID) else { return }
                     var event: [String: Any] = ["type": "assistantChunk", "requestId": requestID, "text": chunk.text, "providerUsed": chunk.providerUsed]

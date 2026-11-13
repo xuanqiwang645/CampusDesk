@@ -1,0 +1,105 @@
+name: macOS release
+on:
+  push:
+    branches: [feature/liquid-glass-plugins-openai]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+concurrency:
+  group: campusdesk-release-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: macos-26
+    timeout-minutes: 45
+    env:
+      TZ: Asia/Shanghai
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Core and bridge tests
+        run: node --test Tests/*.test.cjs
+      - name: Native fixtures
+        run: bash test-native.sh
+      - name: Browser fixtures
+        run: |
+          npm install --prefix "$RUNNER_TEMP/campus-browser" --no-audit --no-fund playwright@1.58.2
+          "$RUNNER_TEMP/campus-browser/node_modules/.bin/playwright" install chromium --only-shell
+          PLAYWRIGHT_MODULE="$RUNNER_TEMP/campus-browser/node_modules/playwright" node Tests/run-macos.cjs
+
+  package:
+    needs: validate
+    runs-on: macos-26
+    timeout-minutes: 45
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Prepare local signing identity
+        run: |
+          keychain="$RUNNER_TEMP/campus-release.keychain-db"
+          password="$(openssl rand -hex 24)"
+          echo "::add-mask::$password"
+          security create-keychain -p "$password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$password" "$keychain"
+          security list-keychains -d user -s "$keychain" "$HOME/Library/Keychains/login.keychain-db"
+          identity="$(CAMPUSDESK_SIGNING_KEYCHAIN="$keychain" bash scripts/local-signing-identity.sh)"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$password" "$keychain"
+          echo "CAMPUSDESK_SIGN_IDENTITY=$identity" >> "$GITHUB_ENV"
+      - name: Build both editions
+        run: |
+          CAMPUSDESK_INFO_PLIST="$PWD/Info-ThemeEdition.plist" CAMPUSDESK_BUILD_DIR="$PWD/build/release-Theme" bash build.sh
+          CAMPUSDESK_INFO_PLIST="$PWD/Info.plist" CAMPUSDESK_BUILD_DIR="$PWD/build/release-Classic" bash build.sh
+      - name: Package full installers and patch
+        run: |
+          CAMPUSDESK_SKIP_BUILD=1 CAMPUSDESK_INFO_PLIST="$PWD/Info-ThemeEdition.plist" CAMPUSDESK_BUILD_DIR="$PWD/build/release-Theme" CAMPUSDESK_PACKAGE_DIR="$PWD/build/distribute/theme" bash scripts/package-macos.sh
+          CAMPUSDESK_SKIP_BUILD=1 CAMPUSDESK_INFO_PLIST="$PWD/Info.plist" CAMPUSDESK_BUILD_DIR="$PWD/build/release-Classic" CAMPUSDESK_PACKAGE_DIR="$PWD/build/distribute/classic" bash scripts/package-macos.sh
+          CAMPUSDESK_PATCH_OUTPUT="$PWD/build/distribute/patch" bash scripts/package-patch-macos.sh
+      - name: Verify patch installation and legacy compatibility
+        env:
+          CAMPUSDESK_PATCH_OUTPUT: ${{ github.workspace }}/build/distribute/patch
+          CAMPUSDESK_PATCH_APP: ${{ github.workspace }}/build/release-Theme/CampusDesk Theme Edition.app
+          CAMPUSDESK_PATCH_CLASSIC_APP: ${{ github.workspace }}/build/release-Classic/CampusDesk.app
+        run: |
+          bash scripts/test-patch-macos.sh
+          bash scripts/test-upgrade-compatibility.sh
+      - name: Assemble release assets
+        run: |
+          mkdir -p build/publish build/plugin/CampusDesk-Liquid-Glass
+          cp build/distribute/theme/*.dmg build/distribute/theme/*.zip build/publish/
+          cp build/distribute/classic/*.dmg build/distribute/classic/*.zip build/publish/
+          cp build/distribute/patch/*.dmg build/distribute/patch/*.zip build/publish/
+          cp Plugins/LiquidGlass/* build/plugin/CampusDesk-Liquid-Glass/
+          cp Sources/CampusPlugins.swift Resources/campus-plugins.js Resources/campus-plugins.css build/plugin/CampusDesk-Liquid-Glass/
+          (cd build/plugin && ditto -c -k --keepParent CampusDesk-Liquid-Glass ../publish/CampusDesk-Liquid-Glass-v1.0.0-Plugin-SDK.zip)
+          git diff f08bf70eb8bf6423564e0d88ad6784b5efde6ce7 "$GITHUB_SHA" --binary > build/publish/CampusDesk-v2.1.0-build106-source.patch
+          (cd build/publish && shasum -a 256 *.dmg *.zip *.patch > SHA256SUMS.txt && shasum -a 256 -c SHA256SUMS.txt)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: CampusDesk-v2.1.0-build106-macOS-arm64
+          path: build/publish/*
+          retention-days: 30
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag=v2.1.0
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo 'A release with this version already exists; refusing to overwrite it.' >&2
+            exit 1
+          fi
+          gh release create "$tag" build/publish/* --target "$GITHUB_SHA" --title 'CampusDesk v2.1.0 · Liquid Glass & OpenAI · Build 106' --notes-file releases/v2.1.0.md
+      - name: Remove temporary signing keychain
+        if: always()
+        run: security delete-keychain "$RUNNER_TEMP/campus-release.keychain-db" || true

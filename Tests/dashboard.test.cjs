@@ -235,7 +235,7 @@ test('learning assistant and setup wizard are isolated to CampusDesk Theme Editi
   theme.receive({ type: 'state', state: themeState });
   assert.equal(theme.node('setup-wizard-dialog').open, true);
   assert.match(theme.node('setup-wizard-content').innerHTML, /setup-ai-provider/);
-  assert.equal((theme.node('setup-wizard-content').innerHTML.match(/<option value=/g) || []).length, 4);
+  assert.equal((theme.node('setup-wizard-content').innerHTML.match(/<option value=/g) || []).length, 5);
 
   theme.node('setup-ai-provider').value = 'deepseek';
   theme.change('setup-ai-provider');
@@ -335,7 +335,7 @@ test('DeepSeek-only mode is disabled offline and never falls back to Ollama', ()
   assert.equal(online.last('assistantRequest').networkAvailable, true);
 });
 
-test('assistant settings expose exactly four modes, migrate the old online-only value, and keep local models separate', () => {
+test('assistant settings expose five modes including OpenAI, migrate the old online-only value, and keep local models separate', () => {
   const app = harness({ hash: '#settings', themeEdition: true });
   const state = app.ctx.CampusCore.emptyState();
   state.settings.setupWizardCompleted = true;
@@ -344,7 +344,7 @@ test('assistant settings expose exactly four modes, migrate the old online-only 
   app.receive({ type: 'state', state });
   let html = app.node('content').innerHTML;
   const providerSelect = /<select id="assistant-provider"[^>]*>(.*?)<\/select>/.exec(html)?.[1] || '';
-  assert.deepEqual([...providerSelect.matchAll(/<option value="([^"]+)"/g)].map(match => match[1]), ['off', 'ollama', 'deepseek', 'hybrid']);
+  assert.deepEqual([...providerSelect.matchAll(/<option value="([^"]+)"/g)].map(match => match[1]), ['off', 'openai', 'ollama', 'deepseek', 'hybrid']);
   assert.match(providerSelect, /value="deepseek" selected/);
   assert.doesNotMatch(providerSelect, /auto/);
 
@@ -2834,4 +2834,36 @@ test('native appearance bootstrap renders the saved theme before the first state
   assert.equal(app.node('app-shell').dataset.colorTheme, 'midnight', 'malformed events do not change appearance');
   app.receive({ type: 'systemAppearance', dark: false });
   assert.equal(app.node('app-shell').dataset.colorTheme, 'ocean');
+});
+
+
+test('OpenAI settings save through the native key bridge, stream replies and preserve provider history', () => {
+  const app = harness({ themeEdition: true, hash: '#settings' });
+  const state = app.ctx.CampusCore.emptyState();
+  Object.assign(state.settings, { setupWizardCompleted: true, setupWizardIntroVersion: '1.0.0', aiProvider: 'openai', aiContextCategories: [] });
+  app.receive({ type: 'state', state });
+  assert.match(app.node('content').innerHTML, /ChatGPT \/ OpenAI API/);
+  app.node('assistant-openai-key').value = 'synthetic-fixture-key';
+  app.click({ action: 'openai-save-key' });
+  assert.equal(app.last('assistantSaveOpenAIKey').key, 'synthetic-fixture-key');
+  assert.equal(app.node('assistant-openai-key').value, '');
+  app.receive({ type: 'openaiStatus', configured: true, keyState: 'stored', notice: 'updated' });
+  const catalog = app.sent.filter(row => row.action === 'assistantListModels' && row.provider === 'openai').at(-1);
+  assert.ok(catalog);
+  app.receive({ type: 'assistantModels', provider: 'openai', requestId: catalog.requestId, models: ['gpt-6-luna'] });
+  app.click({ page: 'assistant' });
+  app.node('assistant-question').focus();
+  app.input('assistant-question', 'Synthetic question');
+  app.click({ action: 'assistant-review' });
+  assert.match(app.node('assistant-confirm-content').innerHTML, /OpenAI/);
+  assert.doesNotMatch(app.node('assistant-confirm-content').innerHTML, /只会发送到本机 Ollama/);
+  app.click({ action: 'assistant-send' });
+  const request = app.last('assistantRequest');
+  assert.equal(request.provider, 'openai');
+  assert.equal(request.model, 'gpt-6-luna');
+  app.receive({ type: 'assistantChunk', requestId: request.requestId, text: 'Hello', providerUsed: 'openai' });
+  app.receive({ type: 'assistantResponse', requestId: request.requestId, answer: 'Hello', providerUsed: 'openai' });
+  assert.match(app.node('assistant-chat-log').innerHTML, /OpenAI/);
+  assert.doesNotMatch(JSON.stringify(app.last('saveState').state), /synthetic-fixture-key/);
+  assert.equal(app.last('saveState').state.assistantConversations[0].messages.at(-1).providerUsed, 'openai');
 });

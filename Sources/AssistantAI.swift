@@ -106,7 +106,7 @@ final class AssistantRequestOperation {
     func start() -> AssistantRequestHandle {
         let handle = AssistantRequestHandle { self.queue.async { self.finish(.failure(.cancelled)) } }
         queue.async {
-            guard ["deepseek", "ollama", "hybrid"].contains(self.provider),
+            guard ["deepseek", "ollama", "hybrid", "openai"].contains(self.provider),
                   CampusAssistantModels.validModelName(self.model),
                   self.provider != "hybrid" || CampusAssistantModels.validModelName(self.localModel),
                   !self.rawMessages.isEmpty, self.rawMessages.count <= 12 else {
@@ -126,7 +126,7 @@ final class AssistantRequestOperation {
                 self.verifyAndSendLocal(reason: self.provider == "hybrid" ? "offline" : nil)
             } else if !self.networkAvailable {
                 self.finish(.failure(.network))
-            } else { self.send(provider: "deepseek", model: self.model, reason: nil) }
+            } else { self.send(provider: self.provider == "openai" ? "openai" : "deepseek", model: self.model, reason: nil) }
         }
         return handle
     }
@@ -156,15 +156,15 @@ final class AssistantRequestOperation {
 
     private func send(provider: String, model: String, reason: String?) {
         guard !finished else { return }
-        var request = URLRequest(url: URL(string: provider == "deepseek" ? "https://api.deepseek.com/chat/completions" : "http://127.0.0.1:11434/api/chat")!)
+        var request = URLRequest(url: URL(string: provider == "openai" ? "https://api.openai.com/v1/responses" : provider == "deepseek" ? "https://api.deepseek.com/chat/completions" : "http://127.0.0.1:11434/api/chat")!)
         request.httpMethod = "POST"
         request.httpShouldHandleCookies = false
         request.cachePolicy = .reloadIgnoringLocalCacheData
         request.timeoutInterval = provider == "deepseek" && self.provider == "hybrid" ? 15 : 90
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue(provider == "deepseek" ? "text/event-stream" : "application/x-ndjson", forHTTPHeaderField: "Accept")
+        request.setValue(provider != "ollama" ? "text/event-stream" : "application/x-ndjson", forHTTPHeaderField: "Accept")
         var payload: [String: Any] = ["model": model, "messages": messages, "stream": true]
-        if provider == "deepseek" {
+        if provider != "ollama" {
             do {
                 let key = try keyProvider()
                 guard (8...512).contains(key.count), CampusSecurity.isSafeHTTPHeaderValue(key) else { finish(.failure(.invalidKey)); return }
@@ -176,6 +176,9 @@ final class AssistantRequestOperation {
             // ordinary chat budget for the visible answer rather than hidden
             // reasoning that can consume the whole limit before any reply.
             payload["thinking"] = ["type": "disabled"]
+        }
+        if provider == "openai" {
+            payload = ["model": model, "input": messages, "stream": true, "store": false, "max_output_tokens": 8192]
         }
         guard let data = try? JSONSerialization.data(withJSONObject: payload) else { finish(.failure(.invalidRequest)); return }
         request.httpBody = data
@@ -222,7 +225,7 @@ final class AssistantRequestOperation {
         case .network: return provider == "ollama" ? .localUnavailable : .network
         case .rejected(let code):
             if provider == "ollama" && code == 404 { return .localModelMissing }
-            guard provider == "deepseek" else { return .serviceRejected }
+            guard provider != "ollama" else { return .serviceRejected }
             switch code {
             case 400, 422: return .remoteInvalidRequest
             case 401, 403: return .unauthorized

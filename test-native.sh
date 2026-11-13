@@ -107,3 +107,7 @@ campus_arch="$(uname -m)"
   -o "$campus_tests/assistant-setup-smoke"
 "$campus_tests/assistant-setup-smoke"
 echo "测试产物：$campus_tests"
+/usr/bin/xcrun swiftc -swift-version 5 -O -target "$campus_arch-apple-macosx12.0" \
+  -framework AppKit -framework WebKit "$campus_root/Sources/CampusPlugins.swift" "$campus_root/Tests/plugins-smoke.swift" \
+  -o "$campus_tests/plugins-smoke"
+"$campus_tests/plugins-smoke"

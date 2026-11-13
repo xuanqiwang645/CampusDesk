@@ -506,7 +506,7 @@
       scheduleHolidays: [], scheduleWeekAnchor: '', scheduleOverrides: [], focusMode: false, graphicsMode: 'auto', planOrder: [], taskMinutes: {}, taskPriority: {}, gradeGoals: {}, gradePlans: {}, gpaTermDates: {}, ecIdentityNames: [] }, snapshots: { seiue: {}, managebac: {}, teams: {} },
       manualTasks: [], personalEvents: [], taskChecks: {}, teamsAnalysis: {}, teamsAnalysisOverrides: {}, taskReview: normalizeTaskReview(), feedbackRead: {}, gradeHistory: [], gradeUpdates: [], gradeUpdateRead: {}, gradeUpdateBaselines: [], gradeUpdateCaptures: [], changeLog: [], schoolCalendar: { fileName: '', importedAt: '', events: [] } };
     if (themeEdition) {
-      Object.assign(state.settings, { aiProvider: 'off', aiModel: '', aiOllamaModel: 'qwen3:8b', aiContextCategories: ['tasks', 'schedule'], setupWizardCompleted: false, setupWizardStep: 0, setupWizardIntroVersion: '' });
+      Object.assign(state.settings, { aiProvider: 'off', aiOpenAIModel: 'gpt-6-luna', aiModel: '', aiOllamaModel: 'qwen3:8b', aiContextCategories: ['tasks', 'schedule'], setupWizardCompleted: false, setupWizardStep: 0, setupWizardIntroVersion: '' });
       state.assistantConversations = [];
       state.assistantActiveConversationId = '';
     }
@@ -949,14 +949,14 @@
           if (message.display !== undefined) clean.display = assistantText(message.display, 102000);
           if (message.failed !== undefined) clean.failed = bool(message.failed);
           if (message.providerUsed !== undefined) {
-            if (!['deepseek', 'ollama'].includes(message.providerUsed)) fail('学习助手历史模型来源无效');
+            if (!['deepseek', 'ollama', 'openai'].includes(message.providerUsed)) fail('学习助手历史模型来源无效');
             clean.providerUsed = message.providerUsed;
           }
           if (message.createdAt !== undefined) clean.createdAt = zonedISO(message.createdAt, false);
           return clean;
         }) };
       if (row.provider !== undefined) {
-        if (!['off', 'ollama', 'deepseek', 'hybrid'].includes(row.provider)) fail('学习助手历史接入方式无效');
+        if (!['off', 'ollama', 'deepseek', 'hybrid', 'openai'].includes(row.provider)) fail('学习助手历史接入方式无效');
         conversation.provider = row.provider;
       }
       if (row.contextCategories !== undefined) {
@@ -1030,7 +1030,8 @@
       // completion flag and migrate the versioned welcome marker independently.
       s.settings.setupWizardIntroVersion = settings.setupWizardIntroVersion === undefined ? '' : str(settings.setupWizardIntroVersion, 40);
       s.settings.aiProvider = settings.aiProvider === 'auto' ? 'deepseek' : settings.aiProvider === undefined ? 'off' : settings.aiProvider;
-      if (!['off', 'ollama', 'deepseek', 'hybrid'].includes(s.settings.aiProvider)) fail('学习助手接入方式无效');
+      if (!['off', 'ollama', 'deepseek', 'hybrid', 'openai'].includes(s.settings.aiProvider)) fail('学习助手接入方式无效');
+      s.settings.aiOpenAIModel = settings.aiOpenAIModel === undefined ? 'gpt-6-luna' : str(settings.aiOpenAIModel, 100);
       s.settings.aiModel = settings.aiModel === undefined ? '' : str(settings.aiModel, 100);
       const legacyOllamaModel = settings.aiOllamaModel === undefined && settings.aiProvider === 'ollama' && settings.aiModel && !String(settings.aiModel).startsWith('deepseek') ? settings.aiModel : 'qwen3:8b';
       s.settings.aiOllamaModel = settings.aiOllamaModel === undefined ? str(legacyOllamaModel, 100) : str(settings.aiOllamaModel, 100);

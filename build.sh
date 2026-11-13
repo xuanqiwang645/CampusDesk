@@ -51,6 +51,9 @@ if [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$campus_info_pl
 else
   CAMPUSDESK_SIGN_IDENTITY="$campus_signing_identity" bash "$campus_root/scripts/build-credential-helper.sh" "$campus_build/Contents/Helpers/CampusDeskCredentials"
 fi
+campus_openai_variant=theme
+if [[ "$campus_bundle_id" == local.campusdesk.mac ]]; then campus_openai_variant=classic; fi
+CAMPUSDESK_OPENAI_VARIANT="$campus_openai_variant" CAMPUSDESK_SIGN_IDENTITY="$campus_signing_identity" bash "$campus_root/scripts/build-openai-credential-helper.sh" "$campus_build/Contents/Helpers/CampusDeskOpenAICredentials"
 /usr/bin/xattr -cr "$campus_build"
 # The helper is already signed and must stay byte-identical across releases.
 # --deep --force would re-sign nested code and undo that guarantee.

@@ -128,7 +128,7 @@ final class AssistantStreamDecoder {
             pending.removeAll()
             chunks += try consumeLine(text.hasSuffix("\r") ? String(text.dropLast()) : text)
         }
-        if provider == "deepseek" && !done && !eventData.isEmpty { chunks += try consumeEvent() }
+        if provider != "ollama" && !done && !eventData.isEmpty { chunks += try consumeEvent() }
         guard done, !answer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw AssistantStreamError.malformed }
         return chunks
     }
@@ -153,7 +153,10 @@ final class AssistantStreamDecoder {
         guard !eventData.isEmpty else { return [] }
         let value = eventData.joined(separator: "\n")
         eventData.removeAll(); eventBytes = 0
-        if value.trimmingCharacters(in: .whitespacesAndNewlines) == "[DONE]" { done = true; return [] }
+        if value.trimmingCharacters(in: .whitespacesAndNewlines) == "[DONE]" {
+            guard provider == "deepseek" else { throw AssistantStreamError.malformed }
+            done = true; return []
+        }
         return try consumeJSON(value)
     }
 
@@ -162,7 +165,19 @@ final class AssistantStreamDecoder {
             throw AssistantStreamError.malformed
         }
         let content: String?
-        if provider == "deepseek" {
+        if provider == "openai" {
+            guard let type = object["type"] as? String else { throw AssistantStreamError.malformed }
+            switch type {
+            case "response.output_text.delta", "response.refusal.delta":
+                guard let delta = object["delta"] as? String else { throw AssistantStreamError.malformed }
+                content = delta
+            case "response.completed":
+                guard let response = object["response"] as? [String: Any], response["status"] as? String == "completed" else { throw AssistantStreamError.malformed }
+                done = true; content = nil
+            case "error", "response.failed", "response.incomplete": throw AssistantStreamError.malformed
+            default: content = nil
+            }
+        } else if provider == "deepseek" {
             guard let choices = object["choices"] as? [[String: Any]] else { throw AssistantStreamError.malformed }
             // Usage-only and reasoning-only events contain no display text.
             content = (choices.first?["delta"] as? [String: Any])?["content"] as? String

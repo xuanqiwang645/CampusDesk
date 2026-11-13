@@ -110,6 +110,41 @@ struct AssistantStreamSmokeTests {
     }
 
     static func main() throws {
+        func openAIFrame(_ event: [String: Any]) -> String {
+            "data: " + String(data: try! JSONSerialization.data(withJSONObject: event), encoding: .utf8)! + "\n\n"
+        }
+        let openAIDelta = openAIFrame(["type": "response.output_text.delta", "delta": "你好🙂"])
+        let openAIDone = openAIFrame(["type": "response.completed", "response": ["status": "completed"]])
+        let openAI = run(provider: "openai", model: "gpt-6-luna") { connection in
+            connection.headers()
+            for byte in Data((openAIDelta + openAIDone).utf8) { connection.bytes(Data([byte])) }
+            connection.end()
+        }
+        if case .success(let reply) = openAI.0 { check(reply.answer == "你好🙂" && reply.providerUsed == "openai", "Responses API survives bytewise Unicode SSE") }
+        else { check(false, "OpenAI synthetic response succeeds") }
+        let openAIRequest = SyntheticAssistantProtocol.captured().first!
+        check(openAIRequest.url?.absoluteString == "https://api.openai.com/v1/responses", "OpenAI uses its fixed Responses endpoint")
+        let openAIPayload = try JSONSerialization.jsonObject(with: openAIRequest.httpBody!) as! [String: Any]
+        check(openAIPayload["store"] as? Bool == false && openAIPayload["stream"] as? Bool == true && openAIPayload["messages"] == nil && openAIPayload["input"] != nil, "Responses payload disables storage and uses input")
+        let openAITruncated = run(provider: "openai", model: "gpt-6-luna") { $0.send(openAIDelta, type: "text/event-stream") }
+        check(error(openAITruncated.0) == .badResponse, "OpenAI EOF cannot masquerade as completion")
+        for type in ["response.incomplete", "response.failed", "error"] {
+            let failed = run(provider: "openai", model: "gpt-6-luna") { $0.send(openAIDelta + openAIFrame(["type": type]), type: "text/event-stream") }
+            check(error(failed.0) == .badResponse, "OpenAI terminal failure is not a successful partial answer")
+        }
+        let openAIUnauthorized = run(provider: "openai", model: "gpt-6-luna") { $0.send("", status: 401) }
+        check(error(openAIUnauthorized.0) == .unauthorized && SyntheticAssistantProtocol.captured().count == 1, "OpenAI auth failure never falls back to a different provider")
+        let openAIQuota = run(provider: "openai", model: "gpt-6-luna") { $0.send("", status: 429) }
+        check(error(openAIQuota.0) == .rateLimited, "OpenAI rate or quota rejection is actionable")
+        let openAICancel = run(provider: "openai", model: "gpt-6-luna", cancelAfterChunk: true) { $0.send(openAIDelta, type: "text/event-stream", finish: false) }
+        check(error(openAICancel.0) == .cancelled, "OpenAI cancellation completes once")
+        let openAIOffline = run(provider: "openai", model: "gpt-6-luna", online: false) { _ in check(false, "Offline OpenAI must not connect") }
+        check(error(openAIOffline.0) == .network && SyntheticAssistantProtocol.captured().isEmpty, "Offline OpenAI never calls another service")
+        let catalogRequest = try CampusAssistantModels.makeRequest(provider: "openai", key: "synthetic-openai-key")
+        check(catalogRequest.url?.absoluteString == "https://api.openai.com/v1/models", "OpenAI model discovery uses the authenticated fixed endpoint")
+        let modelRows = ["gpt-6-luna", "gpt-6-luna", "text-embedding-3-small", "gpt-audio", "o3"].map { ["id": $0] }
+        let catalog = try CampusAssistantModels.parse(JSONSerialization.data(withJSONObject: ["data": modelRows]), provider: "openai")
+        check(catalog == ["gpt-6-luna", "o3"], "OpenAI model catalog excludes non-text models and duplicate IDs")
         let sse = AssistantStreamDecoder(provider: "deepseek")
         let stream = ": keepalive\r\n\r\n" + frame("你🙂") + "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"hidden\"}}]}\n\n" + frame("好") + "data: [DONE]\r\n\r\n"
         var pieces: [String] = []

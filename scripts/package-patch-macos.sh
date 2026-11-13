@@ -3,9 +3,9 @@
 set -euo pipefail
 umask 077
 campus_root="$(cd "$(dirname "$0")/.." && pwd)"
-campus_theme="${CAMPUSDESK_PATCH_APP:-$campus_root/build/v2.0.2-Theme/CampusDesk Theme Edition.app}"
-campus_classic="${CAMPUSDESK_PATCH_CLASSIC_APP:-$campus_root/build/v2.0.2-Classic/CampusDesk.app}"
-campus_output="${CAMPUSDESK_PATCH_OUTPUT:-$campus_root/build/releases/v2.0.2-Patch1}"
+campus_theme="${CAMPUSDESK_PATCH_APP:-$campus_root/build/release-Theme/CampusDesk Theme Edition.app}"
+campus_classic="${CAMPUSDESK_PATCH_CLASSIC_APP:-$campus_root/build/release-Classic/CampusDesk.app}"
+campus_output="${CAMPUSDESK_PATCH_OUTPUT:-$campus_root/build/releases/current-patch}"
 [[ "$(uname -s)" == Darwin && "$(uname -m)" == arm64 ]] || { echo '此补丁需要 Apple Silicon Mac。' >&2; exit 2; }
 [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$campus_theme/Contents/Info.plist")" == local.campusdesk.mac.themeedition ]]
 [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$campus_classic/Contents/Info.plist")" == local.campusdesk.mac ]]

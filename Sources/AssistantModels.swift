@@ -74,14 +74,14 @@ enum CampusAssistantModels {
     static func makeRequest(provider: String, key: String?) throws -> URLRequest {
         var request: URLRequest
         switch provider {
-        case "deepseek":
+        case "deepseek", "openai":
             guard let key = key?.trimmingCharacters(in: .whitespacesAndNewlines), !key.isEmpty else {
                 throw AssistantModelError.missingKey
             }
             guard (8...512).contains(key.utf8.count), key.unicodeScalars.allSatisfy({ (0x21...0x7e).contains(Int($0.value)) }) else {
                 throw AssistantModelError.unauthorized
             }
-            request = URLRequest(url: URL(string: "https://api.deepseek.com/models")!)
+            request = URLRequest(url: URL(string: provider == "openai" ? "https://api.openai.com/v1/models" : "https://api.deepseek.com/models")!)
             request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
             request.timeoutInterval = 10
         case "ollama":
@@ -104,7 +104,7 @@ enum CampusAssistantModels {
         }
         let rows: [[String: Any]]
         switch provider {
-        case "deepseek":
+        case "deepseek", "openai":
             guard let models = object["data"] as? [[String: Any]] else { throw AssistantModelError.badResponse }
             rows = models
         case "ollama":
@@ -113,15 +113,20 @@ enum CampusAssistantModels {
         default:
             throw AssistantModelError.badResponse
         }
-        guard rows.count <= maximumModelCount else { throw AssistantModelError.badResponse }
+        guard rows.count <= (provider == "openai" ? 2048 : maximumModelCount) else { throw AssistantModelError.badResponse }
         var seen = Set<String>()
         var models: [String] = []
         for row in rows {
-            let value = provider == "deepseek" ? row["id"] as? String : (row["name"] as? String ?? row["model"] as? String)
+            let value = provider != "ollama" ? row["id"] as? String : (row["name"] as? String ?? row["model"] as? String)
             guard let value, validModelName(value) else {
                 throw AssistantModelError.badResponse
             }
             if provider == "ollama" && (isCloudModelName(value) || hasRemoteMetadata(row)) { continue }
+            if provider == "openai" {
+                let name = value.lowercased()
+                guard name.hasPrefix("gpt-") || name.range(of: "^o[1-9]", options: .regularExpression) != nil else { continue }
+                if ["audio", "realtime", "transcribe", "tts", "image", "instruct", "search", "codex"].contains(where: { name.contains($0) }) { continue }
+            }
             if seen.insert(value).inserted { models.append(value) }
         }
         return models
@@ -130,7 +135,7 @@ enum CampusAssistantModels {
     static func responseError(provider: String, statusCode: Int) -> AssistantModelError? {
         if (200...299).contains(statusCode) { return nil }
         if (300...399).contains(statusCode) { return .badResponse }
-        guard provider == "deepseek" else { return .localUnavailable }
+        guard provider != "ollama" else { return .localUnavailable }
         switch statusCode {
         case 400, 422: return .remoteInvalidRequest
         case 401, 403: return .unauthorized

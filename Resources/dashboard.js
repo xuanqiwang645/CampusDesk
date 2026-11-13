@@ -10,7 +10,7 @@
   const toolbarButtonIDs = ['grade-notifications-button', 'focus-button', 'sync-button'];
   let lastToolbarState = '';
   const themeEdition = window.CampusDeskThemeEdition === true;
-  const appVersionInfo = window.CampusDeskAppVersion || { version: themeEdition ? '2.0.2' : '0.5.13', name: themeEdition ? 'Tarantula' : '' };
+  const appVersionInfo = window.CampusDeskAppVersion || { version: themeEdition ? '2.1.0' : '0.5.13', name: themeEdition ? 'Tarantula' : '' };
   const setupWizardReleaseVersion = String(appVersionInfo.version || 'unversioned').slice(0, 40);
   const appVersionLabel = 'CampusDesk v' + String(appVersionInfo.version || '').slice(0, 40) + (appVersionInfo.name ? ' ' + String(appVersionInfo.name).slice(0, 60) : '');
   const storageKey = 'campusdesk.browser.v1';
@@ -95,8 +95,11 @@
   let setupWizardNameDraft = '';
   let setupWizardMode = 'setup', setupWizardRequestSequence = 0, setupWizardHandledSequence = 0;
   let assistantStatus = { deepSeekKeyConfigured: false, deepSeekKeyState: 'missing' };
+  let openAIStatus = { configured: false, keyState: 'missing' };
+  let openAIKeyBusy = false;
   let assistantKeyEditing = false, assistantKeyRecoveryBusy = false;
   const assistantCatalogs = {
+    openai: { models: ['gpt-6-luna', 'gpt-6.1-sol', 'gpt-6-astra'], loaded: false, attempted: false, loading: false, error: '', requestId: '' },
     deepseek: { models: ['deepseek-flash', 'deepseek-v4-pro'], loaded: false, attempted: false, loading: false, error: '', requestId: '' },
     ollama: { models: [], loaded: false, attempted: false, loading: false, error: '', requestId: '' }
   };
@@ -2206,9 +2209,10 @@
     // `auto` was the earlier name for online-only DeepSeek. Keep old state safe
     // even if it reaches the UI before Core has normalized it.
     if (value === 'auto') return 'deepseek';
-    return ['off', 'ollama', 'deepseek', 'hybrid'].includes(value) ? value : 'off';
+    return ['off', 'ollama', 'deepseek', 'hybrid', 'openai'].includes(value) ? value : 'off';
   }
-  function assistantModel() {
+  function assistantModel(provider = assistantProvider()) {
+    if (provider === 'openai') return String(state.settings.aiOpenAIModel || 'gpt-6-luna').trim();
     const value = String(state.settings.aiModel || '').trim();
     return value && value.length <= 100 ? value : 'deepseek-flash';
   }
@@ -2227,6 +2231,7 @@
   function requestAssistantModels(provider, force = false) {
     const catalog = assistantCatalogs[provider];
     if (!native || !themeEdition || !catalog || catalog.loading || (provider === 'deepseek' && assistantKeyRecoveryBusy) || (!force && catalog.attempted)) return;
+    if (provider === 'openai' && (!assistantNetworkAvailable() || !openAIStatus.configured || ['locked', 'unavailable'].includes(openAIStatus.keyState))) return;
     if (provider === 'deepseek' && (!assistantNetworkAvailable() || !assistantKeyReady())) return;
     catalog.attempted = true; catalog.loading = true; catalog.error = '';
     catalog.requestId = 'models-' + provider + '-' + (++assistantCatalogSequence);
@@ -2235,19 +2240,20 @@
   function ensureAssistantModels() {
     if (!['settings', 'assistant'].includes(page)) return;
     const provider = assistantProvider();
+    if (provider === 'openai') requestAssistantModels('openai');
     if (provider === 'deepseek' || provider === 'hybrid') requestAssistantModels('deepseek');
     if (provider === 'ollama' || provider === 'hybrid') requestAssistantModels('ollama');
   }
   function renderAssistantModelSelect(provider, label) {
     const catalog = assistantCatalogs[provider], local = provider === 'ollama';
-    const selected = local ? assistantOllamaModel() : assistantModel();
-    const id = local ? 'assistant-ollama-model' : 'assistant-model';
+    const selected = local ? assistantOllamaModel() : assistantModel(provider);
+    const id = local ? 'assistant-ollama-model' : provider === 'openai' ? 'assistant-openai-model' : 'assistant-model';
     const options = catalog.models.map(model => '<option value="' + esc(model) + '"' + (model === selected ? ' selected' : '') + '>' + esc(assistantModelLabel(model)) + '</option>').join('');
     const placeholder = !catalog.models.length ? '<option value="">' + assistantCopy(local ? '未发现本机模型' : '暂无可用模型', local ? 'No installed models found' : 'No available models') + '</option>'
       : !catalog.models.includes(selected) ? '<option value="" selected disabled>' + assistantCopy('请选择模型', 'Choose a model') + '</option>' : '';
     let note = catalog.loading ? assistantCopy('正在读取模型列表…', 'Loading models…')
       : local ? assistantCopy('仅列出本机 Ollama 已安装的模型。', 'Only models installed in local Ollama are listed.')
-      : catalog.loaded ? assistantCopy('来自 DeepSeek 的可用模型列表。', 'Available models returned by DeepSeek.')
+      : catalog.loaded ? assistantCopy('来自 ' + (provider === 'openai' ? 'OpenAI' : 'DeepSeek') + ' 的可用模型列表。', 'Available models returned by ' + (provider === 'openai' ? 'OpenAI' : 'DeepSeek') + '.')
       : assistantCopy('预置官方模型；保存密钥后可刷新可用列表。', 'Official model presets; save a key to refresh availability.');
     if (catalog.error) note = !local || ['keyAccess', 'missingKey', 'unauthorized', 'keyStore'].includes(catalog.error) ? assistantErrorText(catalog.error)
       : assistantCopy('未能读取本机模型。请启动 Ollama 并安装模型后刷新。', 'Could not read local models. Start Ollama, install a model, then refresh.');
@@ -2258,6 +2264,7 @@
     const provider = assistantProvider(), model = assistantModel(provider), ollamaModel = assistantOllamaModel(), selected = assistantSelectedContext();
     const providerOptions = [
       ['off', '关闭', 'Off'],
+      ['openai', 'ChatGPT / OpenAI API', 'ChatGPT / OpenAI API'],
       ['ollama', '仅本机 Ollama', 'Ollama only · Local'],
       ['deepseek', '仅联网 DeepSeek（断网即停用，不回退到 Ollama）', 'DeepSeek online only (disabled offline; no Ollama fallback)'],
       ['hybrid', '联网 DeepSeek，离线 Ollama', 'DeepSeek online, Ollama offline']
@@ -2267,8 +2274,8 @@
       : assistantStatus.deepSeekKeyConfigured
       ? '<span class="assistant-key-state ready">' + assistantCopy('密钥已安全保存在此主题版的钥匙串中', 'Key is stored securely in this edition’s Keychain') + '</span>'
       : '<span class="assistant-key-state">' + assistantCopy('尚未设置 DeepSeek API 密钥', 'No DeepSeek API key saved') + '</span>';
-    const stateLabel = provider === 'off' ? ['已关闭', 'Off'] : provider === 'ollama' ? ['仅本机 Ollama', 'Ollama only · Local'] : provider === 'deepseek' ? ['仅联网 DeepSeek', 'DeepSeek online only'] : ['联网 DeepSeek · 离线 Ollama', 'DeepSeek online · Ollama offline'];
-    const modelFields = (provider === 'deepseek' || provider === 'hybrid' || state.settings.teamsAnalysisEnabled || state.settings.taskReviewEnabled ? renderAssistantModelSelect('deepseek', assistantCopy('DeepSeek 模型', 'DeepSeek model')) : '')
+    const stateLabel = provider === 'openai' ? ['ChatGPT / OpenAI API', 'ChatGPT / OpenAI API'] : provider === 'off' ? ['已关闭', 'Off'] : provider === 'ollama' ? ['仅本机 Ollama', 'Ollama only · Local'] : provider === 'deepseek' ? ['仅联网 DeepSeek', 'DeepSeek online only'] : ['联网 DeepSeek · 离线 Ollama', 'DeepSeek online · Ollama offline'];
+    const modelFields = (provider === 'openai' ? renderAssistantModelSelect('openai', 'OpenAI model') : '') + (provider === 'deepseek' || provider === 'hybrid' || state.settings.teamsAnalysisEnabled || state.settings.taskReviewEnabled ? renderAssistantModelSelect('deepseek', assistantCopy('DeepSeek 模型', 'DeepSeek model')) : '')
       + (provider === 'ollama' || provider === 'hybrid' ? renderAssistantModelSelect('ollama', assistantCopy('本机 Ollama 模型', 'Local Ollama model')) : '');
     const showKeyEditor = assistantKeyEditing || (!assistantStatus.deepSeekKeyConfigured && !assistantKeyBlocked());
     const keyActions = (assistantKeyBlocked() ? assistantKeyRecoveryButton() : '') + (showKeyEditor
@@ -2283,7 +2290,12 @@
         : provider === 'hybrid'
           ? '<div class="assistant-local-note">' + assistantCopy('联网时优先使用 DeepSeek；离线时使用本机 Ollama。若 DeepSeek 请求因网络不可达而失败，会将同一份内容改发给 Ollama；此时请求可能已到达 DeepSeek。', 'Uses DeepSeek while online and local Ollama while offline. If a DeepSeek request fails because the network is unreachable, the same submitted content is sent to Ollama; DeepSeek may already have received it.') + '</div>'
         : '';
-    return '<section id="assistant-settings" class="card settings-section assistant-settings"><div class="assistant-section-heading"><div><p class="setup-eyebrow">CAMPUSDESK · THEME EDITION</p><h2>' + assistantCopy('学习助手', 'Learning assistant') + '</h2><p>' + assistantCopy('明确选择关闭、仅本机 Ollama、仅联网 DeepSeek，或联网 DeepSeek／离线 Ollama。点击发送即可提问，也可按需查看发送内容。', 'Choose Off, Ollama only, DeepSeek online only, or DeepSeek online with Ollama offline. Send questions directly, or optionally view the request details.') + '</p></div><span class="assistant-state-pill">' + assistantCopy(stateLabel[0], stateLabel[1]) + '</span></div><div class="assistant-settings-grid"><label>' + assistantCopy('AI 接入方式', 'AI provider') + '<select id="assistant-provider" aria-label="' + assistantCopy('AI 接入方式', 'AI provider') + '">' + providerOptions.map(item => '<option value="' + item[0] + '"' + (provider === item[0] ? ' selected' : '') + '>' + assistantCopy(item[1], item[2]) + '</option>').join('') + '</select></label>' + modelFields + '</div>' + renderAssistantSetupGuides() + keyBox + modeNote + '<div class="assistant-context-picker"><div><h3>' + assistantCopy('允许本次提问使用哪些资料', 'Data available to questions') + '</h3><p>' + assistantCopy('点击发送时会附带勾选的资料。你可以随时调整范围，或取消全部勾选。', 'Checked data is included when you send. Adjust the scope or uncheck all sources at any time.') + '</p></div><div class="assistant-context-options">' + assistantContextOptions.map(item => '<label><input type="checkbox" data-ai-context="' + item[0] + '"' + (selected.has(item[0]) ? ' checked' : '') + '><span>' + assistantCopy(item[1], item[2]) + '</span></label>').join('') + '</div></div><div class="assistant-privacy-note"><strong>' + assistantCopy('可随时停用与清除', 'You stay in control') + '</strong><p>' + assistantCopy('问题、回答和草稿保存在这台 Mac，可在历史对话中查询和续问，并随数据备份保存。设置中的 API 密钥、学校密码、登录 Cookie 和浏览器会话不会写入聊天记录。', 'Questions, replies, and drafts are stored on this Mac for history and follow-ups, and included in data backups. API keys from Settings, school passwords, cookies, and browser sessions are not included in chat history.') + '</p></div></section>';
+    return '<section id="assistant-settings" class="card settings-section assistant-settings"><div class="assistant-section-heading"><div><p class="setup-eyebrow">CAMPUSDESK · THEME EDITION</p><h2>' + assistantCopy('学习助手', 'Learning assistant') + '</h2><p>' + assistantCopy('选择 ChatGPT / OpenAI API、仅本机 Ollama、DeepSeek，或关闭 AI。点击发送即可提问，也可按需查看发送内容。', 'Choose Off, ChatGPT / OpenAI API, Ollama only, DeepSeek, or DeepSeek with Ollama offline. Send questions directly, or optionally view the request details.') + '</p></div><span class="assistant-state-pill">' + assistantCopy(stateLabel[0], stateLabel[1]) + '</span></div><div class="assistant-settings-grid"><label>' + assistantCopy('AI 接入方式', 'AI provider') + '<select id="assistant-provider" aria-label="' + assistantCopy('AI 接入方式', 'AI provider') + '">' + providerOptions.map(item => '<option value="' + item[0] + '"' + (provider === item[0] ? ' selected' : '') + '>' + assistantCopy(item[1], item[2]) + '</option>').join('') + '</select></label>' + modelFields + '</div>' + renderAssistantSetupGuides() + renderOpenAISettings(provider) + keyBox + modeNote + '<div class="assistant-context-picker"><div><h3>' + assistantCopy('允许本次提问使用哪些资料', 'Data available to questions') + '</h3><p>' + assistantCopy('点击发送时会附带勾选的资料。你可以随时调整范围，或取消全部勾选。', 'Checked data is included when you send. Adjust the scope or uncheck all sources at any time.') + '</p></div><div class="assistant-context-options">' + assistantContextOptions.map(item => '<label><input type="checkbox" data-ai-context="' + item[0] + '"' + (selected.has(item[0]) ? ' checked' : '') + '><span>' + assistantCopy(item[1], item[2]) + '</span></label>').join('') + '</div></div><div class="assistant-privacy-note"><strong>' + assistantCopy('可随时停用与清除', 'You stay in control') + '</strong><p>' + assistantCopy('问题、回答和草稿保存在这台 Mac，可在历史对话中查询和续问，并随数据备份保存。设置中的 API 密钥、学校密码、登录 Cookie 和浏览器会话不会写入聊天记录。', 'Questions, replies, and drafts are stored on this Mac for history and follow-ups, and included in data backups. API keys from Settings, school passwords, cookies, and browser sessions are not included in chat history.') + '</p></div></section>';
+  }
+  function renderOpenAISettings(provider) {
+    if (provider !== 'openai') return '';
+    const blocked = ['locked', 'unavailable'].includes(openAIStatus.keyState);
+    return '<div class="assistant-key-box"><div><strong>ChatGPT / OpenAI API</strong><p>' + assistantCopy('使用 OpenAI API 密钥接入；ChatGPT 订阅与 API 额度分别计费。密钥保存在此 Mac 的钥匙串。发送时仅将问题、当前对话和勾选资料发送给 OpenAI。', 'Connect with an OpenAI API key. API usage is billed separately from ChatGPT subscriptions. The key stays in this Mac’s Keychain. Questions, conversation history, and selected data are sent to OpenAI when you send.') + '</p><span role="status">' + assistantCopy(openAIStatus.configured ? '密钥已保存' : '尚未设置密钥', openAIStatus.configured ? 'Key saved' : 'No key saved') + '</span></div><div class="assistant-key-actions"><input id="assistant-openai-key" type="password" maxlength="512" autocomplete="new-password" aria-label="OpenAI API key" placeholder="OpenAI API key"><button type="button" class="button button-light" data-action="openai-save-key"' + (openAIKeyBusy ? ' disabled' : '') + '>' + assistantCopy('安全保存密钥', 'Save key securely') + '</button>' + (blocked ? '<button type="button" class="button button-light" data-action="openai-restore-key">' + assistantCopy('恢复密钥访问', 'Restore key access') + '</button>' : '') + (openAIStatus.configured ? '<button type="button" class="button button-plain" data-action="openai-delete-key">' + assistantCopy('删除密钥', 'Delete key') + '</button>' : '') + '</div></div>';
   }
   function assistantPushReference(refs, source, rawURL, label) {
     if (!['seiue', 'managebac', 'teams'].includes(source)) return;
@@ -2349,7 +2361,7 @@
     const last = [...assistantTranscript].reverse().find(item => item.role === 'user');
     try {
       const route = JSON.parse(last?.contextKey || 'null');
-      if (Array.isArray(route) && ['off', 'ollama', 'deepseek', 'hybrid'].includes(route[0]) && Array.isArray(route[2]) && route[2].every(key => assistantContextOptions.some(item => item[0] === key))) return { provider: route[0], contextCategories: [...new Set(route[2])] };
+      if (Array.isArray(route) && ['off', 'ollama', 'deepseek', 'hybrid', 'openai'].includes(route[0]) && Array.isArray(route[2]) && route[2].every(key => assistantContextOptions.some(item => item[0] === key))) return { provider: route[0], contextCategories: [...new Set(route[2])] };
     } catch (_) {}
     return { provider: assistantProvider(), contextCategories: [...assistantSelectedContext()] };
   }
@@ -2494,7 +2506,7 @@
       badResponse: ['AI 服务返回的内容无法识别，请稍后重试。', 'The AI service returned an unreadable response. Try again later.']
     };
     const item = errors[code] || errors.badResponse;
-    return assistantCopy(item[0], item[1]);
+    return assistantCopy(item[0], item[1]).replaceAll('DeepSeek', assistantProvider() === 'openai' ? 'OpenAI' : 'DeepSeek');
   }
   function renderAssistantConversation() {
     if (!assistantTranscript.length && !assistantBusy) return '<div class="assistant-empty"><span>' + icon('search') + '</span><strong>' + assistantCopy('问一个关于今天学习的问题', 'Ask a question about your learning') + '</strong><p>' + assistantCopy('例如：今天最先该完成哪项作业？我还缺少哪些评分组成？', 'For example: Which assignment should I start first? Which grading components are still missing?') + '</p></div>';
@@ -2508,16 +2520,18 @@
   function assistantPresentation() {
     const provider = assistantProvider(), model = assistantModel(provider);
     const offline = !assistantNetworkAvailable();
-    const strictOffline = provider === 'deepseek' && offline;
-    const needsKey = provider === 'deepseek' || (provider === 'hybrid' && !offline);
+    const strictOffline = ['deepseek', 'openai'].includes(provider) && offline;
+    const needsKey = ['deepseek', 'openai'].includes(provider) || (provider === 'hybrid' && !offline);
     const localActive = provider === 'ollama' || (provider === 'hybrid' && offline);
-    const catalog = assistantCatalogs[localActive ? 'ollama' : 'deepseek'];
+    const remoteProvider = provider === 'openai' ? 'openai' : 'deepseek';
+    const keyReady = provider === 'openai' ? openAIStatus.configured && !['locked', 'unavailable'].includes(openAIStatus.keyState) : assistantKeyReady();
+    const catalog = assistantCatalogs[localActive ? 'ollama' : remoteProvider];
     const missingModel = provider !== 'off' && catalog.loaded && !catalog.models.includes(localActive ? assistantOllamaModel() : model);
-    const remoteModelUnverified = needsKey && assistantKeyReady() && !assistantCatalogs.deepseek.loaded;
-    const keyBlocked = needsKey && assistantKeyBlocked();
-    const sendDisabled = !native || provider === 'off' || assistantBusy || (needsKey && !assistantKeyReady()) || strictOffline || missingModel || remoteModelUnverified;
-    const providerLabel = provider === 'ollama' ? assistantCopy('仅本机 Ollama', 'Ollama only · Local') : provider === 'deepseek' ? assistantCopy('仅联网 DeepSeek', 'DeepSeek online only') : provider === 'hybrid' ? assistantCopy('联网 DeepSeek · 离线 Ollama', 'DeepSeek online · Ollama offline') : assistantCopy('已关闭', 'Off');
-    const disclosure = provider === 'deepseek'
+    const remoteModelUnverified = needsKey && keyReady && !assistantCatalogs[remoteProvider].loaded;
+    const keyBlocked = needsKey && (provider === 'openai' ? ['locked', 'unavailable'].includes(openAIStatus.keyState) : assistantKeyBlocked());
+    const sendDisabled = !native || provider === 'off' || assistantBusy || (needsKey && !keyReady) || strictOffline || missingModel || remoteModelUnverified;
+    const providerLabel = provider === 'openai' ? 'ChatGPT / OpenAI API' : provider === 'ollama' ? assistantCopy('仅本机 Ollama', 'Ollama only · Local') : provider === 'deepseek' ? assistantCopy('仅联网 DeepSeek', 'DeepSeek online only') : provider === 'hybrid' ? assistantCopy('联网 DeepSeek · 离线 Ollama', 'DeepSeek online · Ollama offline') : assistantCopy('已关闭', 'Off');
+    const disclosure = provider === 'openai' ? assistantCopy(offline ? '当前离线，OpenAI 已停用。' : '发送给 OpenAI · 包含问题、当前对话和所选资料。API 使用单独计费。', offline ? 'OpenAI is disabled offline.' : 'Sent to OpenAI · Includes the question, this conversation, and selected data. API usage is billed separately.') : provider === 'deepseek'
       ? strictOffline
         ? assistantCopy('当前无网络，学习助手已停用。本模式只使用 DeepSeek，断网不会改用 Ollama。', 'No internet connection. The assistant is disabled. This mode uses DeepSeek only and never switches to Ollama.')
         : assistantCopy('发送给 DeepSeek · 包含你的问题、当前对话和所选资料。断网时停用。', 'Sent to DeepSeek · Includes your question, this conversation, and selected data. Disabled offline.')
@@ -2527,13 +2541,14 @@
           ? assistantCopy('发送到本机 Ollama · 问题、当前对话和所选资料仅在这台 Mac 上处理。', 'Sent to local Ollama · Your question, this conversation, and selected data are processed on this Mac.')
           : assistantCopy('AI 已关闭。到连接与设置的“学习助手”卡片选择接入方式后即可使用。', 'AI is off. Choose a provider in the Learning Assistant section of Settings to enable it.');
     const activeModel = provider === 'ollama' || (provider === 'hybrid' && offline) ? assistantOllamaModel() : model;
-    const placeholder = strictOffline ? assistantCopy('联网后才能使用 DeepSeek', 'DeepSeek is unavailable offline') : assistantCopy('例如：根据当前截止时间，帮我安排今晚的学习顺序。', 'For example: Based on the due dates, help me plan tonight’s study order.');
+    const placeholder = strictOffline ? assistantCopy('联网后才能使用 AI', 'DeepSeek is unavailable offline') : assistantCopy('例如：根据当前截止时间，帮我安排今晚的学习顺序。', 'For example: Based on the due dates, help me plan tonight’s study order.');
     return { provider, strictOffline, sendDisabled, providerLabel, disclosure, activeModel, placeholder, keyBlocked, missingModel, remoteModelUnverified };
   }
   function renderAssistantProviderSwitch(view) {
-    return '<div class="assistant-provider-switch" role="group" aria-label="' + assistantCopy('选择回答方式', 'Choose response provider') + '"><span>' + assistantCopy('回答方式', 'Answer with') + '</span>' + [['ollama', '本机 Ollama', 'Local Ollama'], ['deepseek', '联网 DeepSeek', 'Online DeepSeek'], ['hybrid', '自动切换', 'Automatic']].map(item => '<button type="button" class="button button-light" data-action="assistant-switch-provider" data-provider="' + item[0] + '" aria-pressed="' + (view.provider === item[0]) + '"' + (assistantBusy ? ' disabled' : '') + '>' + assistantCopy(item[1], item[2]) + '</button>').join('') + '</div>';
+    return '<div class="assistant-provider-switch" role="group" aria-label="' + assistantCopy('选择回答方式', 'Choose response provider') + '"><span>' + assistantCopy('回答方式', 'Answer with') + '</span>' + [['openai', 'ChatGPT / OpenAI', 'ChatGPT / OpenAI'], ['ollama', '本机 Ollama', 'Local Ollama'], ['deepseek', '联网 DeepSeek', 'Online DeepSeek'], ['hybrid', '自动切换', 'Automatic']].map(item => '<button type="button" class="button button-light" data-action="assistant-switch-provider" data-provider="' + item[0] + '" aria-pressed="' + (view.provider === item[0]) + '"' + (assistantBusy ? ' disabled' : '') + '>' + assistantCopy(item[1], item[2]) + '</button>').join('') + '</div>';
   }
   function renderAssistantRecovery(view) {
+    if (view.provider === 'openai' && (view.keyBlocked || view.remoteModelUnverified || !openAIStatus.configured)) return '<p>' + assistantCopy('请在学习助手设置中保存 OpenAI 密钥并刷新模型。', 'Save your OpenAI key and refresh models in Assistant Settings.') + '</p><button type="button" class="button button-light" data-action="assistant-open-key-settings">' + assistantCopy('OpenAI 设置', 'OpenAI settings') + '</button>';
     if (view.keyBlocked) return '<p>' + esc(assistantErrorText(assistantStatus.deepSeekKeyState === 'unavailable' ? 'keyStore' : 'keyAccess')) + '</p>' + assistantKeyRecoveryButton();
     if (view.remoteModelUnverified && !view.strictOffline) {
       const catalog = assistantCatalogs.deepseek;
@@ -2625,7 +2640,8 @@
     }
     const view = assistantPresentation();
     if (view.keyBlocked) { toast(assistantErrorText('keyAccess')); return null; }
-    if (view.remoteModelUnverified) { requestAssistantModels('deepseek'); updateAssistantWorkspace(); toast(assistantCatalogs.deepseek.error ? assistantErrorText(assistantCatalogs.deepseek.error) : assistantCopy('正在确认 DeepSeek 可用模型，请稍候再发送。', 'Checking available DeepSeek models. Send your question once the check finishes.')); return null; }
+    if (view.remoteModelUnverified) { requestAssistantModels(provider === 'openai' ? 'openai' : 'deepseek'); updateAssistantWorkspace(); toast(assistantCopy('正在确认可用模型，请稍候再发送。', 'Checking available models. Send your question once the check finishes.')); return null; }
+    if (provider === 'openai' && (!openAIStatus.configured || !assistantNetworkAvailable())) { navigate('settings'); toast(assistantCopy('请先保存 OpenAI 密钥并连接网络。', 'Save your OpenAI key and connect to the internet first.')); return null; }
     if (view.missingModel) { toast(assistantCopy('请先在设置中选择可用模型。', 'Choose an available model in Settings first.')); return null; }
     if ((provider === 'deepseek' || (provider === 'hybrid' && assistantNetworkAvailable())) && !assistantKeyReady()) { navigate('settings'); toast(assistantCopy('联网使用 DeepSeek 前，请先在设置中安全保存 API 密钥。', 'Save a DeepSeek API key securely in Settings before using DeepSeek online.')); return null; }
     const built = assistantBuildContext(assistantSelectedContext());
@@ -2658,7 +2674,7 @@
     const body = document.getElementById('assistant-confirm-content');
     const onlineRequest = request.provider === 'deepseek' || (request.provider === 'hybrid' && request.networkAvailable);
     const sendLabel = assistantCopy('发送', 'Send');
-    const reviewWarning = request.provider === 'hybrid'
+    const reviewWarning = request.provider === 'openai' ? assistantCopy('以下消息只会发送给 OpenAI，包含当前对话与勾选资料。API 使用单独计费。', 'The messages below go to OpenAI, including this conversation and selected data. API usage is billed separately.') : request.provider === 'hybrid'
       ? assistantCopy((request.networkAvailable ? '当前联网：' : '当前离线：') + '接收方可能包括 DeepSeek 和本机 Ollama。联网时使用 DeepSeek，离线时使用 Ollama；网络请求失败时同一内容会改发给 Ollama，此时 DeepSeek 可能已经收到。', (request.networkAvailable ? 'Currently online: ' : 'Currently offline: ') + 'Recipients may include DeepSeek and local Ollama. DeepSeek is used online and Ollama offline. After a network failure, the same content is sent to Ollama and DeepSeek may already have received it.')
       : onlineRequest
         ? assistantCopy('内容只会发送到联网 DeepSeek。若断网，本次请求停用，不会转发给 Ollama。', 'Messages go only to online DeepSeek. If offline, this request is disabled and will not be sent to Ollama.')
@@ -2691,7 +2707,7 @@
       toast(assistantCopy('网络、接收方或资料范围已变化，尚未发送。请重新点击发送，使用当前选择。', 'The network, recipient, or data scope changed. Nothing was sent. Click Send again to use your current selection.'));
       return;
     }
-    if (request.provider === 'deepseek' && !assistantNetworkAvailable()) {
+    if (['deepseek', 'openai'].includes(request.provider) && !assistantNetworkAvailable()) {
       assistantPendingRequest = null; closeDialog('assistant-confirm-dialog');
       toast(assistantCopy('网络已断开；仅联网 DeepSeek 模式已停用，没有发送内容，也不会回退到 Ollama。', 'The connection was lost. DeepSeek-only mode is disabled; nothing was sent and there is no Ollama fallback.'));
       render(); return;
@@ -2755,7 +2771,7 @@
       const detail = source === 'managebac' ? setupCopy('同步课程成绩、作业与老师反馈。', 'Sync course grades, assignments, and teacher feedback.') : source === 'teams' ? setupCopy('读取你有权查看的课程频道、聊天和 EC 公告。', 'Read course channels, chats, and EC notices you are allowed to access.') : setupCopy('同步课表、节次时间与教室。', 'Sync your schedule, period times, and rooms.');
       return '<div class="setup-step-content"><p class="setup-eyebrow">0' + (index - 1) + ' · CONNECTION</p><h1 id="setup-wizard-title">' + setupCopy('连接', 'Connect') + ' ' + name + '</h1><p class="setup-lede">' + detail + '</p><div class="setup-connection-card"><span>' + icon(source === 'seiue' ? 'schedule' : source === 'managebac' ? 'grades' : 'teams') + '</span><div><strong>' + name + '</strong><p>' + setupCopy('在学校原页面完成登录；CampusDesk 不保存账号密码。', 'Sign in on the original school page. CampusDesk does not store school passwords.') + '</p></div></div><div class="setup-privacy-note"><strong>' + setupCopy('登录和授权可稍后完成', 'You can sign in later') + '</strong><p>' + setupCopy('连接按钮会打开 CampusDesk 已有的安全连接流程，不会覆盖已同步的课程、作业或账号。', 'The connection button opens CampusDesk’s existing sign-in flow and will not replace captured classes, assignments, or accounts.') + '</p></div><button class="button button-primary" type="button" data-action="setup-wizard-connect" data-source="' + source + '">' + setupCopy('现在连接', 'Connect now') + '</button></div>';
     }
-    if (index === 5) return '<div class="setup-step-content"><p class="setup-eyebrow">05 · AI ASSISTANT</p><h1 id="setup-wizard-title">' + setupCopy('学习助手', 'Learning assistant') + '</h1><p class="setup-lede">' + setupCopy('选择以下四种模式之一。输入区会显示接收方和资料范围，点击发送即可提问。', 'Choose one of four modes. The composer shows the recipient and data scope; click Send to ask.') + '</p><label class="setup-label" for="setup-ai-provider">' + setupCopy('接入方式', 'Provider') + '</label><select id="setup-ai-provider"><option value="off"' + (assistantProvider() === 'off' ? ' selected' : '') + '>' + setupCopy('关闭', 'Off') + '</option><option value="ollama"' + (assistantProvider() === 'ollama' ? ' selected' : '') + '>' + setupCopy('仅本机 Ollama', 'Ollama only · Local') + '</option><option value="deepseek"' + (assistantProvider() === 'deepseek' ? ' selected' : '') + '>' + setupCopy('仅联网 DeepSeek（断网即停用，不回退到 Ollama）', 'DeepSeek online only (disabled offline; no Ollama fallback)') + '</option><option value="hybrid"' + (assistantProvider() === 'hybrid' ? ' selected' : '') + '>' + setupCopy('联网 DeepSeek，离线 Ollama', 'DeepSeek online, Ollama offline') + '</option></select><div class="setup-ai-preview"><span>' + icon('search') + '</span><div><strong>' + setupCopy('发送前会明确标出接收方', 'Recipients are shown before sending') + '</strong><p>' + setupCopy('关闭：不调用模型。仅本机 Ollama：内容只发到本机。仅联网 DeepSeek：只发到 DeepSeek，断网停用。联网 DeepSeek、离线 Ollama：联网时发给 DeepSeek，离线时发给 Ollama；若网络请求失败，同一内容可能已到达 DeepSeek 后再发给 Ollama。', 'Off: no model is called. Ollama only: content stays on this Mac. DeepSeek only: DeepSeek receives it; disabled offline. Hybrid: DeepSeek online, Ollama offline; if a network request fails, DeepSeek may have received the content before it is retried locally.') + '</p></div></div><button type="button" class="button button-light" data-action="setup-ai-configure">' + setupCopy('打开学习助手设置', 'Open assistant settings') + '</button><div class="setup-ai-status">' + setupCopy('API 密钥、本机模型和可使用的资料类别可以稍后设置。', 'API keys, local models, and allowed data categories can be configured later.') + '</div></div>';
+    if (index === 5) return '<div class="setup-step-content"><p class="setup-eyebrow">05 · AI ASSISTANT</p><h1 id="setup-wizard-title">' + setupCopy('学习助手', 'Learning assistant') + '</h1><p class="setup-lede">' + setupCopy('选择以下四种模式之一。输入区会显示接收方和资料范围，点击发送即可提问。', 'Choose one of four modes. The composer shows the recipient and data scope; click Send to ask.') + '</p><label class="setup-label" for="setup-ai-provider">' + setupCopy('接入方式', 'Provider') + '</label><select id="setup-ai-provider"><option value="off"' + (assistantProvider() === 'off' ? ' selected' : '') + '>' + setupCopy('关闭', 'Off') + '</option><option value="openai"' + (assistantProvider() === 'openai' ? ' selected' : '') + '>ChatGPT / OpenAI API</option><option value="ollama"' + (assistantProvider() === 'ollama' ? ' selected' : '') + '>' + setupCopy('仅本机 Ollama', 'Ollama only · Local') + '</option><option value="deepseek"' + (assistantProvider() === 'deepseek' ? ' selected' : '') + '>' + setupCopy('仅联网 DeepSeek（断网即停用，不回退到 Ollama）', 'DeepSeek online only (disabled offline; no Ollama fallback)') + '</option><option value="hybrid"' + (assistantProvider() === 'hybrid' ? ' selected' : '') + '>' + setupCopy('联网 DeepSeek，离线 Ollama', 'DeepSeek online, Ollama offline') + '</option></select><div class="setup-ai-preview"><span>' + icon('search') + '</span><div><strong>' + setupCopy('发送前会明确标出接收方', 'Recipients are shown before sending') + '</strong><p>' + setupCopy('关闭：不调用模型。仅本机 Ollama：内容只发到本机。仅联网 DeepSeek：只发到 DeepSeek，断网停用。联网 DeepSeek、离线 Ollama：联网时发给 DeepSeek，离线时发给 Ollama；若网络请求失败，同一内容可能已到达 DeepSeek 后再发给 Ollama。', 'Off: no model is called. Ollama only: content stays on this Mac. DeepSeek only: DeepSeek receives it; disabled offline. Hybrid: DeepSeek online, Ollama offline; if a network request fails, DeepSeek may have received the content before it is retried locally.') + '</p></div></div><button type="button" class="button button-light" data-action="setup-ai-configure">' + setupCopy('打开学习助手设置', 'Open assistant settings') + '</button><div class="setup-ai-status">' + setupCopy('API 密钥、本机模型和可使用的资料类别可以稍后设置。', 'API keys, local models, and allowed data categories can be configured later.') + '</div></div>';
     if (index === 6) {
       const themes = [['sage', '自然绿', 'Soft green'], ['ocean', '海湾蓝', 'Ocean blue'], ['ember', '暖阳橙', 'Warm amber'], ['midnight', '深夜', 'Midnight']];
       return '<div class="setup-step-content"><p class="setup-eyebrow">06 · APPEARANCE</p><h1 id="setup-wizard-title">' + setupCopy('挑一个主题', 'Choose a theme') + '</h1><p class="setup-lede">' + setupCopy('主题只改变界面外观，不会影响 GPA、任务状态或学校数据。之后可在设置里随时切换。', 'Themes only change the interface. They do not affect GPA, task status, or school data, and can be changed later in Settings.') + '</p><div class="setup-theme-grid">' + themes.map(item => '<button type="button" class="setup-theme-choice ' + ((state.settings.colorTheme || 'sage') === item[0] ? 'selected' : '') + '" data-action="setup-wizard-theme" data-theme="' + item[0] + '"><span class="setup-theme-swatch ' + item[0] + '"></span><strong>' + setupCopy(item[1], item[2]) + '</strong>' + ((state.settings.colorTheme || 'sage') === item[0] ? '<small>' + setupCopy('当前主题', 'Current') + '</small>' : '') + '</button>').join('') + '</div></div>';
@@ -2821,7 +2837,7 @@
     }
     if (index === 5) {
       const provider = document.getElementById('setup-ai-provider')?.value;
-      if (['off', 'ollama', 'deepseek', 'hybrid'].includes(provider)) state.settings.aiProvider = provider;
+      if (['off', 'ollama', 'deepseek', 'hybrid', 'openai'].includes(provider)) state.settings.aiProvider = provider;
     }
     if (index === 8) {
       state.settings.setupWizardCompleted = true; state.settings.setupWizardIntroVersion = setupWizardReleaseVersion; delete state.settings.setupWizardStep;
@@ -3087,7 +3103,7 @@
     const retainedDateInputs = editingTerm ? ['gpa-term-start', 'gpa-term-end'].map(id => document.getElementById(id)).filter(Boolean) : [];
     const retainedPlanForm = renderedPage === page && page === 'grades' && gradePlanner ? gradePlanner.retain() : null;
     const retainedSchoolInputs = renderedPage === page && page === 'settings' && schoolConfigurationDraft ? ['seiue-url', 'managebac-url'].map(id => document.getElementById(id)).filter(Boolean) : [];
-    const retainedAssistantKey = renderedPage === page && page === 'settings' && document.activeElement?.id === 'assistant-deepseek-key' ? document.activeElement : null;
+    const retainedAssistantKey = renderedPage === page && page === 'settings' && ['assistant-deepseek-key', 'assistant-openai-key'].includes(document.activeElement?.id) ? document.activeElement : null;
     const retainedEasterEggInput = renderedPage === page && page === 'settings' && !settingsEasterEggUnlocked ? document.getElementById('settings-easter-egg-password') : null;
     const graphConfigOpen = page === 'settings' && document.getElementById('graph-configuration') && document.getElementById('graph-configuration').open;
     const shell = document.getElementById('app-shell');
@@ -3118,7 +3134,7 @@
     const contentHTML = localizedHTML(state.settings.focusMode ? renderFocusMode : pageRenderers[page]) + (page === 'settings' && !state.settings.focusMode ? renderGraphicsSettings() + renderSettingsEasterEgg() : '');
     if (window.CampusDOM && !pageChanged) window.CampusDOM.patch(content, contentHTML);
     else content.innerHTML = contentHTML;
-    if (retainedAssistantKey) document.getElementById('assistant-deepseek-key')?.replaceWith(retainedAssistantKey);
+    if (retainedAssistantKey) document.getElementById(retainedAssistantKey.id)?.replaceWith(retainedAssistantKey);
     if (retainedEasterEggInput) {
       retainedEasterEggInput.setAttribute('aria-invalid', String(settingsEasterEggError));
       document.getElementById('settings-easter-egg-password')?.replaceWith(retainedEasterEggInput);
@@ -3480,12 +3496,12 @@
     }
     else if (action === 'setup-ai-configure') {
       const provider = document.getElementById('setup-ai-provider')?.value;
-      if (['off', 'ollama', 'deepseek', 'hybrid'].includes(provider)) state.settings.aiProvider = provider;
+      if (['off', 'ollama', 'deepseek', 'hybrid', 'openai'].includes(provider)) state.settings.aiProvider = provider;
       state.settings.setupWizardStep = setupWizardIndex(); persist(); closeSetupWizard(); navigate('assistant');
     }
     else if (action === 'assistant-switch-provider') {
       const provider = target.dataset.provider;
-      if (!themeEdition || assistantBusy || !['ollama', 'deepseek', 'hybrid'].includes(provider)) return;
+      if (!themeEdition || assistantBusy || !['ollama', 'deepseek', 'hybrid', 'openai'].includes(provider)) return;
       state.settings.aiProvider = provider;
       assistantPendingRequest = null;
       persist();
@@ -3495,7 +3511,7 @@
     else if (action === 'assistant-send') sendAssistantQuestion();
     else if (action === 'assistant-open-key-settings') {
       navigate('settings');
-      const input = document.getElementById('assistant-deepseek-key') || document.getElementById('assistant-ollama-model');
+      const input = document.getElementById('assistant-openai-key') || document.getElementById('assistant-deepseek-key') || document.getElementById('assistant-ollama-model');
       if (input) { input.scrollIntoView({ block: 'center', behavior: 'smooth' }); input.focus(); }
     }
     else if (action === 'assistant-refresh-models') { requestAssistantModels(target.dataset.provider, true); render(); }
@@ -3509,6 +3525,16 @@
     else if (action === 'assistant-review') openAssistantReview();
     else if (action === 'assistant-confirm-send') confirmAssistantSend();
     else if (action === 'assistant-cancel-review') { assistantPendingRequest = null; closeDialog('assistant-confirm-dialog'); }
+    else if (['openai-save-key', 'openai-delete-key', 'openai-restore-key'].includes(action)) {
+      if (!themeEdition || !native || openAIKeyBusy) return;
+      const input = document.getElementById('assistant-openai-key');
+      const key = String(input?.value || '').trim();
+      if (action === 'openai-save-key' && !key) { input?.focus(); return; }
+      if (input) input.value = '';
+      openAIKeyBusy = true;
+      const operation = action === 'openai-save-key' ? 'assistantSaveOpenAIKey' : action === 'openai-delete-key' ? 'assistantDeleteOpenAIKey' : 'assistantRestoreOpenAIKey';
+      if (!send(operation, action === 'openai-save-key' ? { key } : {})) openAIKeyBusy = false;
+    }
     else if (action === 'assistant-edit-key') {
       if (assistantKeyRecoveryBusy) return;
       assistantKeyEditing = true; render();
@@ -3831,13 +3857,17 @@
     }
     else if (el.id === 'assistant-provider' || el.id === 'setup-ai-provider') {
       const provider = el.value;
-      if (!themeEdition || !['off', 'ollama', 'deepseek', 'hybrid'].includes(provider)) return;
+      if (!themeEdition || !['off', 'ollama', 'deepseek', 'hybrid', 'openai'].includes(provider)) return;
       const oldRemoteModel = String(state.settings.aiModel || '');
       const oldLocalModel = String(state.settings.aiOllamaModel || '');
       if (!oldRemoteModel || !oldRemoteModel.startsWith('deepseek')) state.settings.aiModel = 'deepseek-flash';
       if (!oldLocalModel) state.settings.aiOllamaModel = 'qwen3:8b';
       state.settings.aiProvider = provider; persist();
       if (el.id === 'setup-ai-provider') renderSetupWizard(); else render();
+    }
+    else if (el.id === 'assistant-openai-model') {
+      if (!themeEdition || !assistantCatalogs.openai.models.includes(el.value)) return;
+      state.settings.aiOpenAIModel = el.value; persist();
     }
     else if (el.id === 'assistant-model') {
       if (!themeEdition || !assistantCatalogs.deepseek.models.includes(el.value)) return;
@@ -4307,7 +4337,14 @@
         }
         if (event.type === 'taskReviewResult' || event.type === 'taskReviewTick') { taskReviewClient?.receive(event); return; }
         if (event.type === 'teamsAnalysisResult') { teamsAnalysisClient?.receive(event); return; }
-        if (event.type === 'assistantStatus') {
+        if (event.type === 'openaiStatus') {
+          openAIKeyBusy = false;
+          openAIStatus = { configured: event.configured === true, keyState: ['missing', 'stored', 'locked', 'unavailable'].includes(event.keyState) ? event.keyState : 'unavailable' };
+          Object.assign(assistantCatalogs.openai, { attempted: false, loaded: false, loading: false, requestId: '', error: '' });
+          if (event.errorCode) toast(assistantErrorText(event.errorCode));
+          if (themeEdition && ['settings', 'assistant'].includes(page)) { ensureAssistantModels(); render(); }
+        }
+        else if (event.type === 'assistantStatus') {
           const keyWasReady = assistantKeyReady();
           assistantStatus.deepSeekKeyConfigured = event.deepSeekKeyConfigured === true;
           assistantStatus.deepSeekKeyState = ['missing', 'stored', 'locked', 'unavailable'].includes(event.deepSeekKeyState) ? event.deepSeekKeyState : (assistantStatus.deepSeekKeyConfigured ? 'stored' : 'missing');
@@ -4334,8 +4371,8 @@
           if (!catalog.error && Array.isArray(event.models)) {
             catalog.models = [...new Set(event.models.filter(value => typeof value === 'string' && /^[A-Za-z0-9._:/-]{1,100}$/.test(value)))].slice(0, 100);
             catalog.loaded = true;
-            const setting = event.provider === 'ollama' ? 'aiOllamaModel' : 'aiModel';
-            const selected = event.provider === 'ollama' ? assistantOllamaModel() : assistantModel();
+            const setting = event.provider === 'ollama' ? 'aiOllamaModel' : event.provider === 'openai' ? 'aiOpenAIModel' : 'aiModel';
+            const selected = event.provider === 'ollama' ? assistantOllamaModel() : assistantModel(event.provider);
             // Model discovery may finish across an import. Always release its
             // loading state, but never let an old response edit the new state.
             if (!pendingImportRequestID && (nativeStateGeneration === null || event.stateGeneration === nativeStateGeneration) && catalog.models.length && !catalog.models.includes(selected)) { state.settings[setting] = catalog.models[0]; persist(); }
@@ -4361,7 +4398,8 @@
           if (event.requestId !== assistantActiveRequestID) return;
           assistantBusy = false; assistantActiveRequestID = '';
           if (['keyAccess', 'missingKey', 'keyStore'].includes(event.errorCode)) {
-            assistantStatus.deepSeekKeyState = event.errorCode === 'missingKey' ? 'missing' : event.errorCode === 'keyAccess' ? 'locked' : 'unavailable';
+            if (assistantProvider() === 'openai') openAIStatus.keyState = event.errorCode === 'missingKey' ? 'missing' : event.errorCode === 'keyAccess' ? 'locked' : 'unavailable';
+            else assistantStatus.deepSeekKeyState = event.errorCode === 'missingKey' ? 'missing' : event.errorCode === 'keyAccess' ? 'locked' : 'unavailable';
           }
           if (event.errorCode || typeof event.answer !== 'string' || !event.answer.trim()) {
             const editor = document.getElementById('assistant-question');
@@ -4373,10 +4411,10 @@
           }
           assistantSentQuestion = '';
           if (typeof event.answer === 'string' && event.answer.trim()) {
-            const providerName = event.providerUsed === 'ollama' ? 'Ollama' : 'DeepSeek';
+            const providerName = event.providerUsed === 'openai' ? 'OpenAI' : event.providerUsed === 'ollama' ? 'Ollama' : 'DeepSeek';
             const reason = event.fallbackReason === 'offline' ? assistantCopy('（当前离线）', ' (offline)') : event.fallbackReason === 'deepseekUnavailable' ? assistantCopy('（DeepSeek 网络不可达，已改用本机）', ' (DeepSeek unreachable; used local model)') : '';
             const attribution = assistantCopy('\n\n— 本次由 ' + providerName + ' 回复' + reason, '\n\n— Answered by ' + providerName + reason);
-            assistantTranscript.push({ role: 'assistant', content: event.answer.slice(0, 100_000), display: event.answer.slice(0, 100_000) + attribution, contextKey: assistantActiveContextKey, providerUsed: event.providerUsed === 'ollama' ? 'ollama' : 'deepseek', createdAt: new Date().toISOString() });
+            assistantTranscript.push({ role: 'assistant', content: event.answer.slice(0, 100_000), display: event.answer.slice(0, 100_000) + attribution, contextKey: assistantActiveContextKey, providerUsed: ['openai', 'ollama'].includes(event.providerUsed) ? event.providerUsed : 'deepseek', createdAt: new Date().toISOString() });
           }
           else assistantTranscript.push({ role: 'assistant', content: assistantPartialAnswer, display: (assistantPartialAnswer ? assistantPartialAnswer + '\n\n' : '') + assistantErrorText(event.errorCode), contextKey: assistantActiveContextKey, failed: true });
           assistantPartialAnswer = '';
