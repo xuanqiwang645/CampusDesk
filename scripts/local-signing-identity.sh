@@ -26,10 +26,10 @@ if [[ -z "$campus_identity" ]]; then
   /usr/bin/openssl req -x509 -newkey rsa:3072 -nodes -days 3650 \
     -config "$campus_scripts/local-signing.cnf" \
     -keyout "$campus_signing_tmp/signing.key" -out "$campus_signing_tmp/signing.crt" 2>/dev/null
-  # Import an explicitly encoded PKCS#8 private key; LibreSSL's req defaults
-  # vary, while security's pkcs8 importer accepts this format directly.
+  # security's explicit PKCS#8 importer requires the DER encoding. LibreSSL's
+  # default PEM output is rejected by clean macOS 26 keychains as unknown format.
   /usr/bin/openssl pkcs8 -topk8 -nocrypt -in "$campus_signing_tmp/signing.key" \
-    -out "$campus_signing_tmp/signing.pk8" 2>/dev/null
+    -outform DER -out "$campus_signing_tmp/signing.pk8" 2>/dev/null
   /usr/bin/security import "$campus_signing_tmp/signing.pk8" -k "$campus_keychain" -t priv -f pkcs8 -x -T /usr/bin/codesign >&2
   /usr/bin/security import "$campus_signing_tmp/signing.crt" -k "$campus_keychain" -t cert -f pemseq >&2
   campus_identity="$(campus_find_identity)"

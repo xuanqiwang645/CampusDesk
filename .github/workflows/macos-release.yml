@@ -36,11 +36,8 @@ jobs:
           PLAYWRIGHT_MODULE="$RUNNER_TEMP/campus-browser/node_modules/playwright" node Tests/run-macos.cjs
 
   package:
-    needs: validate
     runs-on: macos-26
     timeout-minutes: 45
-    permissions:
-      contents: write
     steps:
       - uses: actions/checkout@v4
         with:
@@ -90,16 +87,29 @@ jobs:
           name: CampusDesk-v2.1.0-build106-macOS-arm64
           path: build/publish/*
           retention-days: 30
-      - name: Publish GitHub release
+      - name: Remove temporary signing keychain
+        if: always()
+        run: security delete-keychain "$RUNNER_TEMP/campus-release.keychain-db" || true
+
+  publish:
+    needs: [validate, package]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: CampusDesk-v2.1.0-build106-macOS-arm64
+          path: build/publish
+      - name: Verify and publish GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          (cd build/publish && sha256sum -c SHA256SUMS.txt)
           tag=v2.1.0
           if gh release view "$tag" >/dev/null 2>&1; then
             echo 'A release with this version already exists; refusing to overwrite it.' >&2
             exit 1
           fi
           gh release create "$tag" build/publish/* --target "$GITHUB_SHA" --title 'CampusDesk v2.1.0 · Liquid Glass & OpenAI · Build 106' --notes-file releases/v2.1.0.md
-      - name: Remove temporary signing keychain
-        if: always()
-        run: security delete-keychain "$RUNNER_TEMP/campus-release.keychain-db" || true
