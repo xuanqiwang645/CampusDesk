@@ -143,8 +143,8 @@ struct AssistantStreamSmokeTests {
         let catalogRequest = try CampusAssistantModels.makeRequest(provider: "openai", key: "synthetic-openai-key")
         check(catalogRequest.url?.absoluteString == "https://api.openai.com/v1/models", "OpenAI model discovery uses the authenticated fixed endpoint")
         let modelRows = ["gpt-6-luna", "gpt-6-luna", "text-embedding-3-small", "gpt-audio", "o3"].map { ["id": $0] }
-        let catalog = try CampusAssistantModels.parse(JSONSerialization.data(withJSONObject: ["data": modelRows]), provider: "openai")
-        check(catalog == ["gpt-6-luna", "o3"], "OpenAI model catalog excludes non-text models and duplicate IDs")
+        let openAICatalog = try CampusAssistantModels.parse(JSONSerialization.data(withJSONObject: ["data": modelRows]), provider: "openai")
+        check(openAICatalog == ["gpt-6-luna", "o3"], "OpenAI model catalog excludes non-text models and duplicate IDs")
         let sse = AssistantStreamDecoder(provider: "deepseek")
         let stream = ": keepalive\r\n\r\n" + frame("你🙂") + "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"hidden\"}}]}\n\n" + frame("好") + "data: [DONE]\r\n\r\n"
         var pieces: [String] = []
