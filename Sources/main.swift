@@ -565,7 +565,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         let appearanceSettings = CampusDashboardAppearanceSettings(state["settings"] as? [String: Any] ?? [:])
         CampusDashboardAppearance.installBootstrap(in: config.userContentController, settings: appearanceSettings)
         dashboard = CampusPresentationWebView(frame: .zero, configuration: config)
-        dashboard.underPageBackgroundColor = CampusDashboardAppearance.paperColor(theme: appearanceSettings.resolvedTheme(systemDark: CampusDashboardAppearance.systemIsDark))
+        dashboard.underPageBackgroundColor = .clear
         dashboard.navigationDelegate = self
         dashboard.uiDelegate = self
         window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1220, height: 850), styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
@@ -1281,7 +1281,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         guard let dashboard else { return }
         let settings = CampusDashboardAppearanceSettings(state["settings"] as? [String: Any] ?? [:])
         CampusDashboardAppearance.installBootstrap(in: dashboard.configuration.userContentController, settings: settings)
-        dashboard.underPageBackgroundColor = CampusDashboardAppearance.paperColor(theme: settings.resolvedTheme(systemDark: CampusDashboardAppearance.systemIsDark))
+        dashboard.underPageBackgroundColor = .clear
     }
     func applyDashboardAppearanceFromState() {
         dashboardAppearance?.apply(settings: CampusDashboardAppearanceSettings(state["settings"] as? [String: Any] ?? [:]))
