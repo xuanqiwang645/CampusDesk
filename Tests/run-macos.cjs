@@ -20,7 +20,10 @@ const server = http.createServer((req, res) => {
 });
 server.listen(0, '127.0.0.1', () => {
   const files = fs.readdirSync(__dirname).filter(name => name.endsWith('.test.cjs') && !name.startsWith('windows-')).sort().map(name => path.join(__dirname, name));
-  const child = spawn(process.execPath, ['--test', '--test-concurrency=2', ...files], {
+  // Each browser fixture creates a real GPU context. Run fixtures serially so
+  // renderer contention cannot consume keyboard type-ahead or idle deadlines.
+  // Dedicated stress probes measure load separately from functional assertions.
+  const child = spawn(process.execPath, ['--test', '--test-concurrency=1', ...files], {
     stdio: 'inherit', env: { ...process.env, CAMPUSDESK_TEST_URL: 'http://127.0.0.1:' + server.address().port + '/index.html' }
   });
   child.on('error', error => { console.error(error.message); server.close(() => { process.exitCode = 1; }); });
