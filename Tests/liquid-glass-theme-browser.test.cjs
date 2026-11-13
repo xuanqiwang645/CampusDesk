@@ -3,12 +3,13 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
-const { launchChromium } = require('./launch-chromium.cjs');
+const { launchChromium, setMediaPreferences } = require('./launch-chromium.cjs');
 
 test('an idle glass frame adopts a new palette and defers hidden changes until visible', { skip: !process.env.PLAYWRIGHT_MODULE }, async () => {
   const browser = await launchChromium();
   try {
     const page = await browser.newPage({ viewport: { width: 1200, height: 850 }, colorScheme: 'light' });
+    await setMediaPreferences(page);
     const errors = [];
     page.on('pageerror', error => errors.push(error.message));
     await page.addInitScript(() => {

@@ -1,5 +1,5 @@
 'use strict';
-const { launchChromium } = require('./launch-chromium.cjs');
+const { launchChromium, setMediaPreferences } = require('./launch-chromium.cjs');
 // Exercise the rendered UI using an isolated browser and synthetic school data.
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -28,6 +28,7 @@ async function fixture(run) {
   const browser = await launchChromium();
   try {
     const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
+    await setMediaPreferences(page);
     const errors = [];
     page.on('pageerror', error => errors.push(error.message));
     await page.addInitScript(({ state, schools }) => {
@@ -246,15 +247,14 @@ test('toolbar and primary actions show press, focus and accessible solid states 
   assert.equal(await page.locator('#task-dialog').evaluate(node => node.open), true);
   await page.locator('#task-dialog [data-action="close-task"]').first().click();
 
-  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await setMediaPreferences(page, { 'prefers-reduced-motion': 'reduce' });
   await primary.hover();
   await page.mouse.down();
   assert.equal(await style(primary, 'transform'), 'none');
   await page.mouse.move(1, 1);
   await page.mouse.up();
-  const cdp = await page.context().newCDPSession(page);
   for (const feature of [{ name: 'prefers-reduced-transparency', value: 'reduce' }, { name: 'prefers-contrast', value: 'more' }]) {
-    await cdp.send('Emulation.setEmulatedMedia', { features: [feature] });
+    await setMediaPreferences(page, { [feature.name]: feature.value, 'prefers-reduced-motion': 'reduce' });
     assert.equal(await page.evaluate(({ name, value }) => matchMedia('(' + name + ':' + value + ')').matches, feature), true);
     for (const control of [primary, secondary, complete, sync]) {
       assert.equal(await style(control, 'backgroundImage'), 'none');
@@ -262,7 +262,7 @@ test('toolbar and primary actions show press, focus and accessible solid states 
       assert.equal(await style(control, 'backdropFilter'), 'none');
     }
   }
-  await cdp.send('Emulation.setEmulatedMedia', { features: [] });
+  await setMediaPreferences(page, { 'prefers-reduced-motion': 'reduce' });
   await page.evaluate(() => CampusDesk.receive({ type: 'status', source: 'managebac', message: 'Reading', busy: true }));
   assert.equal(await sync.isDisabled(), true);
   assert.equal(await style(sync, 'backgroundImage'), 'none');
@@ -280,7 +280,7 @@ test('toolbar and primary actions show press, focus and accessible solid states 
 
 test('reduced motion and low power keep hover feedback stationary without hiding Liquid Glass', optional, async () => fixture(async page => {
   for (const mode of ['reduced-motion', 'low-power']) {
-    await page.emulateMedia({ reducedMotion: mode === 'reduced-motion' ? 'reduce' : 'no-preference' });
+    await setMediaPreferences(page, { 'prefers-reduced-motion': mode === 'reduced-motion' ? 'reduce' : 'no-preference' });
     if (mode === 'low-power') {
       const state = stateFor(); state.settings.graphicsMode = 'low-power';
       await page.evaluate(state => CampusDesk.receive({ type: 'state', state }), state);

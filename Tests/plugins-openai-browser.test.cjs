@@ -13,6 +13,7 @@ test('plugin controls preserve sharp foreground text and route bounded geometry 
     const errors = []; page.on('pageerror', error => errors.push(error.message));
     await page.addInitScript(() => {
       window.CampusDeskThemeEdition = true; window.CampusDeskPluginHost = true; window.CampusDeskOpenAI = true;
+      window.CampusDeskAppVersion = { version: '2.1.0', name: 'Synthetic test' };
       window.bridgeMessages = [];
       window.glass = { id: 'campusdesk.liquid-glass', name: 'Liquid Glass', version: '1.0.0', apiVersion: 1, capabilities: ['presentation.surfaces'], supported: true, active: true, settings: { enabled: true, transparency: 20, radius: 24, style: 'regular' } };
       window.webkit = { messageHandlers: { campus: { postMessage(message) {
@@ -25,10 +26,11 @@ test('plugin controls preserve sharp foreground text and route bounded geometry 
     });
     await page.goto(pathToFileURL(path.resolve(__dirname, '../Resources/index.html')).href + '#settings');
     await page.evaluate(() => {
-      const state = CampusCore.emptyState(); Object.assign(state.settings, { setupWizardCompleted: true, setupWizardIntroVersion: '', aiProvider: 'openai' });
+      const state = CampusCore.emptyState(); Object.assign(state.settings, { setupWizardCompleted: true, setupWizardIntroVersion: CampusDeskAppVersion.version, aiProvider: 'openai' });
       CampusDesk.receive({ type: 'state', state });
     });
     await page.locator('#campus-plugin-settings').waitFor();
+    assert.equal(await page.locator('#setup-wizard-dialog').evaluate(dialog => dialog.open), false);
     await page.locator('[data-plugin-preset="50"]').click();
     assert.equal(await page.locator('[data-plugin-setting="transparency"]').inputValue(), '50');
     const layers = await page.locator('#assistant-settings h2').evaluate(element => ({ opacity: getComputedStyle(element).opacity, filter: getComputedStyle(element).filter }));

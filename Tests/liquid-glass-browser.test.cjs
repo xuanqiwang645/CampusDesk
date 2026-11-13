@@ -1,5 +1,5 @@
 'use strict';
-const { launchChromium } = require('./launch-chromium.cjs');
+const { launchChromium, setMediaPreferences } = require('./launch-chromium.cjs');
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
@@ -7,6 +7,7 @@ test('Liquid Glass renders beneath the selected opaque color theme and its trans
   const browser = await launchChromium();
   try {
     const page = await browser.newPage({ viewport: { width: 1400, height: 900 }, deviceScaleFactor: 1 });
+    await setMediaPreferences(page);
     const errors = [];
     page.on('pageerror', error => errors.push(error.message));
     await page.goto(process.env.CAMPUSDESK_TEST_URL, { waitUntil: 'networkidle' });
@@ -58,6 +59,7 @@ test('real WebGL drawing pauses for hidden windows and low-power mode, then resu
   const browser = await launchChromium();
   try {
     const page = await browser.newPage({viewport:{width:1400,height:900},deviceScaleFactor:2});
+    await setMediaPreferences(page);
     const errors=[]; page.on('pageerror',error=>errors.push(error.message));
     await page.addInitScript(()=>{
       window.glassTestDraws=0;
@@ -106,15 +108,14 @@ test('real WebGL drawing pauses for hidden windows and low-power mode, then resu
     await page.evaluate(()=>{delete document.hidden;document.dispatchEvent(new Event('visibilitychange'));});
     await page.waitForFunction(before=>glassTestDraws>before,before);
 
-    const session = await page.context().newCDPSession(page);
-    await session.send('Emulation.setEmulatedMedia', {features:[{name:'prefers-reduced-transparency',value:'reduce'}]});
+    await setMediaPreferences(page, {'prefers-reduced-transparency': 'reduce'});
     await page.waitForFunction(()=>matchMedia('(prefers-reduced-transparency: reduce)').matches);
     await assertPaused('reduced transparency suspends the hidden glass surface');
     before=await draws();
     await page.locator('#graphics-mode').dispatchEvent('pointerdown');
     await page.waitForTimeout(150);
     assert.equal(await draws(), before, 'button input does not draw the hidden glass canvas');
-    await session.send('Emulation.setEmulatedMedia', {features:[]});
+    await setMediaPreferences(page);
     await page.waitForFunction(before=>glassTestDraws>before,before);
 
     await page.locator('#graphics-mode').selectOption('low-power');
@@ -143,13 +144,13 @@ test('real WebGL drawing pauses for hidden windows and low-power mode, then resu
     before=await draws();
     await page.locator('#graphics-mode').dispatchEvent('pointerdown');
     await page.waitForFunction(before=>glassTestDraws>before,before);
-    await page.emulateMedia({reducedMotion:'reduce'});
+    await setMediaPreferences(page, {'prefers-reduced-motion': 'reduce'});
     // An already queued automatic frame may run before Chromium dispatches
     // the media-query change. Wait for the reduced-motion frame itself.
     await page.waitForFunction(()=>matchMedia('(prefers-reduced-motion: reduce)').matches && document.getElementById('liquid-glass-canvas').width===1400);
     await assertPaused('the reduced-motion preference also uses static drawing');
     before=await draws();
-    await page.emulateMedia({reducedMotion:'no-preference'});
+    await setMediaPreferences(page);
     await page.waitForFunction(before=>glassTestDraws>before,before);
     assert.deepEqual(errors,[]);
   } finally { await browser.close(); }
